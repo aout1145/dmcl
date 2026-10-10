@@ -14,3 +14,10 @@ serde_json.workspace = true
 reqwest.workspace = true
 path-clean.workspace = true
 anyhow.workspace = true
+
+# `--mirror <official|bmclapi>` 的候选值由 clap 生成；只有前端需要它。
+clap = { workspace = true, optional = true }
+
+[features]
+default = []
+clap = ["dep:clap"]

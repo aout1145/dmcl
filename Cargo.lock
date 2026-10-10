@@ -382,6 +382,7 @@ name = "dmcl-mcmeta"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "clap",
  "path-clean",
  "reqwest",
  "serde",
