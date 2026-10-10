@@ -321,18 +321,80 @@ dependencies = [
  "clap",
  "dialoguer",
  "dirs",
+ "dmcl-download",
+ "dmcl-install",
+ "dmcl-launch",
+ "dmcl-mcmeta",
+ "dmcl-task",
+ "path-clean",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dmcl-download"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "dmcl-task",
  "hex",
  "path-clean",
  "reqwest",
- "serde",
+ "sha1",
+ "tokio",
+]
+
+[[package]]
+name = "dmcl-install"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "dmcl-download",
+ "dmcl-mcmeta",
+ "dmcl-task",
+ "path-clean",
  "serde_json",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "dmcl-launch"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "dmcl-download",
+ "dmcl-mcmeta",
+ "dmcl-task",
+ "hex",
+ "serde",
  "sha1",
  "shell-words",
  "tokio",
  "uuid",
  "version-compare",
  "walkdir",
- "zip",
+]
+
+[[package]]
+name = "dmcl-mcmeta"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "path-clean",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dmcl-task"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "tokio",
 ]
 
 [[package]]

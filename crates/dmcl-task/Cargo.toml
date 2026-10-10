@@ -1,0 +1,12 @@
+[package]
+name = "dmcl-task"
+description = "Generic, cancellable, progress-reporting task chains (no Minecraft knowledge)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio.workspace = true
+anyhow.workspace = true

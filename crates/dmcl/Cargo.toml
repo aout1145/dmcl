@@ -1,0 +1,34 @@
+[package]
+name = "dmcl"
+description = "An unofficial Minecraft launcher written in Rust (migrated from the original D implementation)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+# The application is a library (so a future GUI / daemon can reuse the exact
+# same config + front-end plumbing) plus the CLI binary.
+[lib]
+name = "dmcl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dmcl"
+path = "src/main.rs"
+
+[dependencies]
+dmcl-task.workspace = true
+dmcl-mcmeta.workspace = true
+dmcl-download.workspace = true
+dmcl-install.workspace = true
+dmcl-launch.workspace = true
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+path-clean.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+dialoguer.workspace = true

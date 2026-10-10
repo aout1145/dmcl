@@ -1,0 +1,19 @@
+[package]
+name = "dmcl-install"
+description = "Install Minecraft versions (vanilla, Fabric, Forge, NeoForge) on disk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+dmcl-task.workspace = true
+dmcl-mcmeta.workspace = true
+dmcl-download.workspace = true
+
+tokio.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+path-clean.workspace = true
+anyhow.workspace = true
