@@ -203,7 +203,7 @@ where
     loop {
         match lines.next_line().await {
             Ok(Some(line)) => {
-                ctx.status(&line);
+                ctx.log(&line);
                 if let Ok(mut tail) = tail.lock() {
                     if tail.len() == TAIL_LINES {
                         tail.pop_front();
@@ -236,7 +236,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn captured_output_becomes_progress() {
+    async fn captured_output_becomes_logs() {
         let chain =
             TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("echo hello"), "echo");
         let mut rx = chain.subscribe();
@@ -244,8 +244,8 @@ mod tests {
 
         let mut messages = Vec::new();
         while let Ok(event) = rx.recv().await {
-            if let Some(progress) = event.progress() {
-                messages.push(progress.message.clone());
+            if let crate::event::TaskEvent::Log { message, .. } = event {
+                messages.push(message);
             }
         }
         handle.await.unwrap().unwrap();

@@ -19,7 +19,17 @@ pub enum TaskEvent {
         steps: usize,
         name: String,
     },
-    /// 第 `step` 个步骤的进度（同一步骤可以发很多次）。
+    /// 第 `step` 个步骤的一条**日志**：一次性的文字说明。
+    ///
+    /// 前端应把它当成"一行输出"逐条打印，**不要**像进度那样原地覆盖（例如命令行的
+    /// 每一行输出、缺件清单的每一条）。同一步骤可以发很多条。
+    Log {
+        step: usize,
+        steps: usize,
+        name: String,
+        message: String,
+    },
+    /// 第 `step` 个步骤的**进度**：带工作量的、可原地刷新的进度（同一个位置反复更新）。
     Progress {
         step: usize,
         steps: usize,
@@ -49,6 +59,7 @@ impl TaskEvent {
         match self {
             TaskEvent::Started { name, .. }
             | TaskEvent::StepStarted { name, .. }
+            | TaskEvent::Log { name, .. }
             | TaskEvent::Progress { name, .. }
             | TaskEvent::StepFinished { name, .. }
             | TaskEvent::Failed { name, .. }
@@ -61,6 +72,7 @@ impl TaskEvent {
         match self {
             TaskEvent::Started { .. } | TaskEvent::Finished { .. } => 0,
             TaskEvent::StepStarted { step, .. }
+            | TaskEvent::Log { step, .. }
             | TaskEvent::Progress { step, .. }
             | TaskEvent::StepFinished { step, .. }
             | TaskEvent::Failed { step, .. } => *step,
@@ -83,6 +95,12 @@ impl fmt::Display for TaskEvent {
             TaskEvent::StepStarted { step, steps, name } => {
                 write!(f, "[{}/{steps}] {name}", step + 1)
             }
+            TaskEvent::Log {
+                step,
+                steps,
+                name,
+                message,
+            } => write!(f, "[{}/{steps}] {name}: {message}", step + 1),
             TaskEvent::Progress {
                 step,
                 steps,

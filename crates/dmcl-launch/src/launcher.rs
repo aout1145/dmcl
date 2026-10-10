@@ -303,25 +303,44 @@ impl GameLauncher {
 
     /// 用**已经生成好的参数**启动游戏（参数可由 [`crate::PrepareLaunchTask`] 产出，
     /// 省得再选一次 java、重拼一遍命令行）。
+    ///
+    /// 命令行会先打印出来。放进任务链时改用 [`crate::LaunchTask`]：它走进度事件流
+    /// 展示命令行，避免与进度行抢同一个终端行。
     pub fn launch_with_args(&self, args: &[String]) -> Result<GameMonitor> {
         if args.is_empty() {
             return Err(anyhow!("命令为空"));
         }
-        println!(
-            "命令：{} && {} && {}",
-            escape_shell_command(&["cd".to_string(), drive_name(&self.version_path)]),
-            escape_shell_command(&[
-                "cd".to_string(),
-                self.version_path.to_string_lossy().into_owned()
-            ]),
-            escape_shell_command(args)
-        );
-
-        let mut command = tokio::process::Command::new(&args[0]);
-        command.args(&args[1..]).current_dir(&self.version_path);
-        let child = command.spawn()?;
-        Ok(GameMonitor::new(child))
+        println!("命令：{}", command_preview(&self.version_path, args));
+        spawn_game(&self.version_path, args)
     }
+}
+
+/// 展示用的命令行：`cd <盘符> && cd <版本目录> && <参数…>`。
+pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -> String {
+    format!(
+        "{} && {} && {}",
+        escape_shell_command(&["cd".to_string(), drive_name(version_path)]),
+        escape_shell_command(&[
+            "cd".to_string(),
+            version_path.to_string_lossy().into_owned()
+        ]),
+        escape_shell_command(args)
+    )
+}
+
+/// 用给定的工作目录与命令行参数启动游戏子进程，返回**未 wait** 的 [`GameMonitor`]。
+///
+/// 抽成自由函数是为了让 [`crate::LaunchTask`] 能直接用 [`crate::PreparedLaunch`]
+/// 里已有的参数启动，不必再建一个 [`GameLauncher`]、再选一次 java。这里**不打印**
+/// 任何东西：命令行由 [`crate::LaunchTask`] 通过进度事件流展示。
+pub(crate) fn spawn_game(version_path: &std::path::Path, args: &[String]) -> Result<GameMonitor> {
+    if args.is_empty() {
+        return Err(anyhow!("命令为空"));
+    }
+    let mut command = tokio::process::Command::new(&args[0]);
+    command.args(&args[1..]).current_dir(version_path);
+    let child = command.spawn()?;
+    Ok(GameMonitor::new(child))
 }
 
 #[cfg(test)]

@@ -25,15 +25,6 @@ impl Progress {
         }
     }
 
-    /// 只有一条文字说明的进度（总量未知）。
-    pub fn status(message: impl Into<String>) -> Self {
-        Self {
-            current: 0,
-            total: None,
-            message: message.into(),
-        }
-    }
-
     /// `current / total`，总量未知时为 `None`。
     pub fn fraction(&self) -> Option<f64> {
         match self.total {
@@ -102,7 +93,7 @@ mod tests {
         assert_eq!(Progress::new(9, Some(4), "").percent(), Some(100.0));
         assert_eq!(Progress::new(9, None, "").percent(), None);
         assert_eq!(Progress::new(9, Some(0), "").percent(), None);
-        assert_eq!(Progress::status("hi").fraction(), None);
+        assert_eq!(Progress::new(0, None, "hi").fraction(), None);
     }
 
     #[test]
@@ -119,10 +110,10 @@ mod tests {
             Progress::new(512, Some(1024), "a.jar").to_string(),
             "50.0% (512 B / 1.0 KiB) a.jar"
         );
-        // 纯状态：不要出现 "(0 B)"
-        assert_eq!(Progress::status("scanning").to_string(), "scanning");
+        // 纯文字：不要出现 "(0 B)"
+        assert_eq!(Progress::new(0, None, "scanning").to_string(), "scanning");
         // 有字节数但总量未知
         assert_eq!(Progress::new(2048, None, "x").to_string(), "(2.0 KiB) x");
-        assert_eq!(Progress::status("").to_string(), "…");
+        assert_eq!(Progress::new(0, None, "").to_string(), "…");
     }
 }

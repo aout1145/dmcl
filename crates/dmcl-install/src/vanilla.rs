@@ -53,9 +53,9 @@ pub fn vanilla_metadata_task(
             let version_id = version_id.clone();
             let version_name = version_name.clone();
             async move {
-                ctx.status(format!("查询版本列表并保存 {version_name}.json"));
+                ctx.log(format!("查询版本列表并保存 {version_name}.json"));
                 download_vanilla(&options, &version_id, &version_name).await?;
-                ctx.status(format!("{version_name}.json 已写入"));
+                ctx.log(format!("{version_name}.json 已写入"));
                 Ok(())
             }
         }),

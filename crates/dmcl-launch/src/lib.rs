@@ -2,33 +2,28 @@
 //!
 //! 拆自原来的 `dmcl.launch` + `dmcl.account`，最重要的两点变化：
 //!
-//! 1. **启动与安装彻底解耦**。原来启动流程里"顺手把缺的库下了、把 natives 解了"；
-//!    现在启动只做一件事：[`GameLauncher::check_integrity`] 返回
-//!    [`IntegrityStatus`]（完整吗？缺哪些文件？），**修复交给调用者** ——
-//!    由它决定是跑一次 [`dmcl_install`] 补全，还是照常启动。
+//! 1. **底层启动与安装解耦**。[`GameLauncher`] 只负责拼命令行与启动进程，
+//!    文件完整性由 [`GameLauncher::check_integrity`] 报告，**是否修复交给调用者**。
+//!    想要「缺了就补」的一站式流程时，用 [`launch_chain`]。
 //! 2. **不读全局配置**。java 的选择（[`JavaChoice`] + [`JavaConfigs`]）、
 //!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
 //!
-//! 「校验文件 → 生成启动参数」这一整段可以打包成 [`PrepareLaunchTask`]，
-//! 作为一个带进度的事件流任务放进任何任务链（见 [`crate::prepare`]）。
-//!
-//! 典型的启动流程（cli 就是这么写的）：
+//! 一站式启动把「准备 → 补全 → 启动」串成一条任务链（见 [`crate::prepare`]）：
+//! [`launch_chain`] 返回 `TaskChain<(), GameMonitor>`，由调用者运行、订阅事件，
+//! 并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use dmcl_launch::{GameLauncher, LaunchOption, OfflineAccount};
+//! use dmcl_install::InstallOptions;
+//! use dmcl_launch::{launch_chain, LaunchOption, OfflineAccount};
 //!
-//! # async fn run(root: std::path::PathBuf) -> anyhow::Result<()> {
+//! # async fn run(root: std::path::PathBuf, install: Arc<InstallOptions>) -> anyhow::Result<()> {
 //! let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), root, "1.20.1");
-//! let mut launcher = GameLauncher::new(option).await?;
 //!
-//! let status = launcher.check_integrity().await?;
-//! if !status.is_complete() {
-//!     println!("{}", status.summary());
-//!     // 交给 dmcl-install 补全文件，然后再启动
-//! }
-//!
-//! let mut monitor = launcher.launch_game().await?;
+//! // 检查完整性 →（缺件则补全）→ 生成启动参数 → 启动子进程
+//! let mut monitor = launch_chain(option, install)
+//!     .run_with((), |event| println!("{event}"))
+//!     .await?;
 //! monitor.wait().await?;
 //! # Ok(())
 //! # }
@@ -54,5 +49,7 @@ pub use java::{
 pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
-pub use prepare::{PrepareLaunchTask, PreparedLaunch};
+pub use prepare::{
+    launch_chain, EnsureGameFilesTask, LaunchTask, PrepareLaunchTask, PreparedLaunch,
+};
 pub use util::{drive_name, escape_shell_command};

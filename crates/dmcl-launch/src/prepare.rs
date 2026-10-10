@@ -1,16 +1,25 @@
-//! 「校验文件 → 生成启动参数」作为一个任务。
+//! 启动流程：准备 → 补全 → 启动。
 //!
-//! [`PrepareLaunchTask`] 是 `Task<(), PreparedLaunch>`：接收空输入、产出
-//! [`PreparedLaunch`]（完整性检查结果 + 生成好的启动参数）。直接 `run` 就能拿到
-//! 结果，也可以塞进任务链把结果继续往下传。
+//! * [`PrepareLaunchTask`]（`Task<(), PreparedLaunch>`）——「校验文件 → 生成启动参数」，
+//!   产出 [`PreparedLaunch`]（完整性检查结果 + 生成好的启动参数）；
+//! * [`EnsureGameFilesTask`]（`Task<PreparedLaunch, PreparedLaunch>`）——缺件时跑一次
+//!   `dmcl_install` 补全，再把原值传下去；
+//! * [`LaunchTask`]（`Task<PreparedLaunch, GameMonitor>`）——用已生成的参数启动子进程，
+//!   产出**未 wait** 的 [`GameMonitor`]。
+//!
+//! [`launch_chain`] 把三者串成 `TaskChain<(), GameMonitor>`：由调用者运行、订阅事件，
+//! 并在拿到未 wait 的 [`GameMonitor`] 后决定是等待退出还是中途停掉。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_task::{BoxFuture, Task, TaskContext};
+use dmcl_install::InstallOptions;
+use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
 use crate::integrity::IntegrityStatus;
-use crate::launcher::GameLauncher;
+use crate::launcher::{command_preview, spawn_game, GameLauncher};
+use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
 use crate::util::escape_shell_command;
 
@@ -48,15 +57,15 @@ impl Task<(), PreparedLaunch> for PrepareLaunchTask {
         Box::pin(async move {
             let mut launcher = GameLauncher::new(option).await?;
 
-            ctx.status("检查文件完整性");
+            ctx.log("检查文件完整性");
             let integrity = launcher.check_integrity().await?;
-            ctx.status(integrity.summary());
+            ctx.log(integrity.summary());
 
-            ctx.status("生成启动参数");
+            ctx.log("生成启动参数");
             let args = launcher.gen_args().await?;
             let command = escape_shell_command(&args);
 
-            ctx.status("启动参数已就绪");
+            ctx.log("启动参数已就绪");
             Ok(PreparedLaunch {
                 integrity,
                 args,
@@ -65,6 +74,95 @@ impl Task<(), PreparedLaunch> for PrepareLaunchTask {
             })
         })
     }
+}
+
+/// 缺件时自动补全游戏文件的任务：`Task<PreparedLaunch, PreparedLaunch>`。
+///
+/// 完整性检查发现缺失文件时，跑一次 [`dmcl_install::game_files_task`] 把文件铺好，
+/// 再把**原样的** [`PreparedLaunch`] 传给下一步；已经完整时直接透传（只在进度里
+/// 留一个步骤）。
+pub struct EnsureGameFilesTask {
+    install: Arc<InstallOptions>,
+    version_name: String,
+}
+
+impl EnsureGameFilesTask {
+    pub fn new(install: Arc<InstallOptions>, version_name: impl Into<String>) -> Self {
+        Self {
+            install,
+            version_name: version_name.into(),
+        }
+    }
+}
+
+impl Task<PreparedLaunch, PreparedLaunch> for EnsureGameFilesTask {
+    fn name(&self) -> &str {
+        "补全游戏文件"
+    }
+
+    fn run<'a>(
+        &'a self,
+        input: PreparedLaunch,
+        ctx: TaskContext,
+    ) -> BoxFuture<'a, Result<PreparedLaunch>> {
+        Box::pin(async move {
+            if input.integrity.is_complete() {
+                return Ok(input);
+            }
+
+            // 缺件摘要与明细：一条条作为日志上报，由前端逐行显示
+            ctx.log(input.integrity.summary());
+            for line in input.integrity.detail(10).lines() {
+                ctx.log(line);
+            }
+
+            // 用父 ctx 跑下载链，进度会转发到当前事件流
+            let chain =
+                dmcl_install::game_files_task(self.install.clone(), self.version_name.clone());
+            Task::<(), ()>::run(&chain, (), ctx).await?;
+            Ok(input)
+        })
+    }
+}
+
+/// 用 [`PreparedLaunch`] 里已经生成好的参数启动游戏，产出**未 wait** 的
+/// [`GameMonitor`]（等待 / 结束由调用者决定）。
+pub struct LaunchTask;
+
+impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
+    fn name(&self) -> &str {
+        "启动游戏"
+    }
+
+    fn run<'a>(
+        &'a self,
+        input: PreparedLaunch,
+        ctx: TaskContext,
+    ) -> BoxFuture<'a, Result<GameMonitor>> {
+        Box::pin(async move {
+            // 命令行经由事件流显示（走进度打印机），避免直接 println 与进度行抢行
+            ctx.log(format!(
+                "命令：{}",
+                command_preview(&input.version_path, &input.args)
+            ));
+            spawn_game(&input.version_path, &input.args)
+        })
+    }
+}
+
+/// 组装「准备 → 补全 → 启动」三段链，返回 `TaskChain<(), GameMonitor>`（不运行）。
+pub fn launch_chain(
+    option: LaunchOption,
+    install: Arc<InstallOptions>,
+) -> TaskChain<(), GameMonitor> {
+    let version_name = option.version_name.clone();
+    TaskChain::new("启动")
+        .then(PrepareLaunchTask::new(option), "准备启动")
+        .then(
+            EnsureGameFilesTask::new(install, version_name),
+            "补全游戏文件",
+        )
+        .then(LaunchTask, "启动游戏")
 }
 
 #[cfg(test)]
@@ -79,6 +177,18 @@ mod tests {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
         let task = PrepareLaunchTask::new(option);
         assert_eq!(task.name(), "准备启动");
+    }
+
+    #[test]
+    fn the_launch_chain_is_prepare_repair_then_launch() {
+        let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
+        let install = Arc::new(InstallOptions::new(
+            "/mc",
+            dmcl_mcmeta::DownloadSource::official(),
+        ));
+        let chain = launch_chain(option, install);
+        let names: Vec<_> = chain.step_names().collect();
+        assert_eq!(names, ["准备启动", "补全游戏文件", "启动游戏"]);
     }
 
     /// 找一个能用的 java 可执行文件；本机没有就返回 `None`（跳过测试）。
@@ -132,7 +242,10 @@ mod tests {
 
         let task = PrepareLaunchTask::new(option);
         // 结果直接由 run 返回，不再需要共享槽
-        let prepared = task.run((), TaskContext::detached("准备启动")).await.unwrap();
+        let prepared = task
+            .run((), TaskContext::detached("准备启动"))
+            .await
+            .unwrap();
 
         assert!(
             prepared.integrity.is_complete(),

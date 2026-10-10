@@ -29,7 +29,7 @@ use crate::context::TaskContext;
 ///
 ///     fn run<'a>(&'a self, input: i32, ctx: TaskContext) -> BoxFuture<'a, anyhow::Result<i32>> {
 ///         Box::pin(async move {
-///             ctx.status(format!("输入 {input}"));
+///             ctx.log(format!("输入 {input}"));
 ///             Ok(input + 1)
 ///         })
 ///     }
@@ -109,7 +109,7 @@ where
 /// # async fn run() -> anyhow::Result<()> {
 /// let chain = TaskChain::new("安装").then(
 ///     task_fn("写配置文件", |ctx| async move {
-///         ctx.status("writing");
+///         ctx.log("writing");
 ///         Ok(())
 ///     }),
 ///     "写配置文件",
@@ -175,7 +175,7 @@ mod tests {
                 let seen = seen.clone();
                 async move {
                     seen.fetch_add(1, Ordering::SeqCst);
-                    ctx.status("counted");
+                    ctx.log("counted");
                     Ok(())
                 }
             }),

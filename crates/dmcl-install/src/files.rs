@@ -100,10 +100,10 @@ pub async fn extract_natives(
     for (jar, name) in plan_natives(&options.plan(), &json) {
         if !jar.is_file() {
             // 库文件缺失时启动流程会在完整性检查里发现，这里不当作错误
-            ctx.status(format!("跳过缺失的 natives: {name}"));
+            ctx.log(format!("跳过缺失的 natives: {name}"));
             continue;
         }
-        ctx.status(format!("解压 {name}"));
+        ctx.log(format!("解压 {name}"));
         extract_zip(jar, target.clone()).await?;
         extracted += 1;
     }

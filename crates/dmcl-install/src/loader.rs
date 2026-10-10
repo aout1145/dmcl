@@ -136,7 +136,7 @@ pub async fn install_forge(
             "net.minecraftforge:forge:{forge_version}"
         )));
         write_safe(&target, &bytes).await?;
-        ctx.status(format!("解出 {}", base_name(&target)));
+        ctx.log(format!("解出 {}", base_name(&target)));
     }
 
     if zip_has_entry(&mut zip, "data/client.lzma") {
@@ -230,11 +230,11 @@ pub fn install_fabric_task(
                 let loader = match loader_version {
                     Some(loader) => loader,
                     None => {
-                        ctx.status("查询最新的稳定 Fabric loader");
+                        ctx.log("查询最新的稳定 Fabric loader");
                         latest_fabric_loader(&options.source, &mc_version).await?
                     }
                 };
-                ctx.status(format!("使用 {mc_version}/{loader}"));
+                ctx.log(format!("使用 {mc_version}/{loader}"));
                 install_fabric(&options, &version_name, &mc_version, &loader).await
             }
         }),
@@ -259,11 +259,11 @@ pub fn install_forge_task(
                 let version = match forge_version {
                     Some(version) => version,
                     None => {
-                        ctx.status("查询最新的 Forge 版本");
+                        ctx.log("查询最新的 Forge 版本");
                         latest_forge_version(&options.source, &mc_version).await?
                     }
                 };
-                ctx.status(format!("使用 Forge {version}"));
+                ctx.log(format!("使用 Forge {version}"));
                 install_forge(&options, &version_name, &version, &ctx).await
             }
         }),
@@ -288,11 +288,11 @@ pub fn install_neoforge_task(
                 let version = match forge_version {
                     Some(version) => version,
                     None => {
-                        ctx.status("查询最新的 NeoForge 版本");
+                        ctx.log("查询最新的 NeoForge 版本");
                         latest_neoforge_version(&options.source, &mc_version).await?
                     }
                 };
-                ctx.status(format!("使用 NeoForge {version}"));
+                ctx.log(format!("使用 NeoForge {version}"));
                 install_neoforge(&options, &version_name, &version, &ctx).await
             }
         }),
@@ -351,7 +351,7 @@ async fn extract_maven_entries(
     for (name, buffer) in files {
         let target = libraries.join(&name["maven/".len()..]);
         write_safe(&target, &buffer).await?;
-        ctx.status(format!("解出 {}", base_name(&name)));
+        ctx.log(format!("解出 {}", base_name(&name)));
     }
     Ok(())
 }

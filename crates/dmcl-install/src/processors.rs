@@ -140,7 +140,7 @@ pub(crate) async fn run_installer_processors(
                 }
             }
         }
-        ctx.status(format!("完成 {jar_coord}"));
+        ctx.log(format!("完成 {jar_coord}"));
     }
 
     Ok(())

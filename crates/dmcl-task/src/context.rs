@@ -193,12 +193,17 @@ impl TaskContext {
         });
     }
 
-    /// 上报一条只要文字的进度（总量未知）。
-    pub fn status(&self, message: impl Into<String>) {
-        self.report(Progress::status(message));
+    /// 上报一条**日志**：一次性文字，前端把它当成一行输出逐条打印、不做覆盖。
+    pub fn log(&self, message: impl Into<String>) {
+        let _ = self.events.send(TaskEvent::Log {
+            step: self.step,
+            steps: self.steps,
+            name: self.name.to_string(),
+            message: message.into(),
+        });
     }
 
-    /// 上报一条带工作量的进度。
+    /// 上报一条带工作量的**进度**（同一个位置可反复更新、由前端原地刷新）。
     pub fn progress(&self, current: u64, total: Option<u64>, message: impl Into<String>) {
         self.report(Progress::new(current, total, message));
     }
@@ -237,5 +242,24 @@ mod tests {
             .await
             .expect("should wake up")
             .unwrap();
+    }
+
+    /// `log` 与 `progress` 是两种不同的事件：日志是纯文字，进度带工作量。
+    #[tokio::test]
+    async fn log_and_progress_are_distinct_events() {
+        let ctx = TaskContext::detached("t");
+        let mut rx = ctx.subscribe();
+
+        ctx.log("hello");
+        ctx.progress(1, Some(2), "half");
+
+        match rx.recv().await.unwrap() {
+            TaskEvent::Log { message, .. } => assert_eq!(message, "hello"),
+            other => panic!("应当是 Log，实际是 {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            TaskEvent::Progress { progress, .. } => assert_eq!(progress.current, 1),
+            other => panic!("应当是 Progress，实际是 {other:?}"),
+        }
     }
 }

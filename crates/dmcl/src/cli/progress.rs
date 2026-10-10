@@ -23,9 +23,12 @@ const INDENT: &str = "      ";
 ///       完成
 /// ```
 ///
-/// 外层步骤头（`[i/n] 名字`）永远单独一行；转发来的子步骤进度缩进显示、只带
-/// 子步骤名，不再重复外层步骤号。交互式终端上同一行的进度原地刷新；管道 / 日志
-/// 里字节进度跨 5% 才打一行、纯文字状态逐条打印（并去重）。
+/// 外层步骤头（`[i/n] 名字`）永远单独一行；转发来的子步骤内容缩进显示、只带
+/// 子步骤名，不再重复外层步骤号。
+///
+/// 事件分两类：**进度**（`TaskEvent::Progress`）是"可原地刷新"的行——交互式终端上
+/// 反复覆盖同一行，管道里跨 5% 刻度才打一行；**日志**（`TaskEvent::Log`）是"最终行"
+/// ——逐条输出、不覆盖、不去重（命令行输出、缺件清单等）。
 pub struct ProgressPrinter {
     term: Term,
     interactive: bool,
@@ -78,8 +81,14 @@ impl ProgressPrinter {
                 self.last_bucket = None;
                 self.print(&step_header(step, steps, &self.current_step_name), true, "");
             }
+            TaskEvent::Log { name, message, .. } => {
+                // 日志是一条“最终行”：逐条输出，不与进度行抢同一行、也不被覆盖。
+                let subject = progress_subject(&name, &self.current_step_name);
+                let text = format!("{subject}  {message}");
+                self.print(&text, true, &subject);
+            }
             TaskEvent::Progress { name, progress, .. } => {
-                // 非交互模式的节流：字节进度只在跨 5% 刻度时打，纯文字状态照常
+                // 非交互模式的节流：字节进度只在跨 5% 刻度时打
                 if !self.interactive {
                     let bucket = progress.percent().map(|percent| (percent / 5.0) as u64);
                     if progress.total.is_some() && bucket == self.last_bucket {
@@ -122,7 +131,7 @@ impl ProgressPrinter {
     /// `end_line=true` 是最终行（两模式都换行）；`false` 是进度行（交互式原地刷新）。
     ///
     /// `subject` 是交互式下判断"换不换行"的前缀：同一步骤 / 同一子步骤的进度
-    /// 前缀不变就覆盖，换了才先换行。
+    /// 前缀不变就覆盖，换了才先换行。日志、步骤头等都走 `end_line=true`。
     fn print(&mut self, text: &str, end_line: bool, subject: &str) {
         if self.interactive {
             if self.mid_line && (end_line || subject != self.live_subject) {
@@ -139,7 +148,8 @@ impl ProgressPrinter {
             }
             let _ = self.term.flush();
         } else {
-            if text == self.last_line {
+            // 非交互：只有"可原地刷新"的进度行去重；日志 / 结构行逐条输出
+            if !end_line && text == self.last_line {
                 return;
             }
             println!("{text}");
@@ -191,11 +201,11 @@ mod tests {
         assert_eq!(progress_subject("下载", "下载"), "      ");
     }
 
-    /// 状态消息不带没意义的 `(0 B)`。
+    /// 纯文字进度（current=0、无总量）不带没意义的 `(0 B)`。
     #[test]
-    fn status_only_progress_has_no_bogus_zero_bytes() {
+    fn text_only_progress_has_no_bogus_zero_bytes() {
         let subject = progress_subject("解压 natives", "下载游戏文件");
-        let line = format!("{subject}  {}", Progress::status("解压 liblwjgl.so"));
+        let line = format!("{subject}  {}", Progress::new(0, None, "解压 liblwjgl.so"));
         assert_eq!(line, "      解压 natives  解压 liblwjgl.so");
     }
 

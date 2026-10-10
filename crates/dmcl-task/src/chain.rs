@@ -312,10 +312,12 @@ where
     }
 }
 
-/// 只转发进度事件：链路结构（开始 / 结束）由父链自己产生。
+/// 只转发步骤内部上报的事件（日志 / 进度）：链路结构（开始 / 结束）由父链自己产生。
 fn forward_progress(ctx: &TaskContext, event: TaskEvent) {
-    if let TaskEvent::Progress { name, progress, .. } = event {
-        ctx.child(name).report(progress);
+    match event {
+        TaskEvent::Log { name, message, .. } => ctx.child(name).log(message),
+        TaskEvent::Progress { name, progress, .. } => ctx.child(name).report(progress),
+        _ => {}
     }
 }
 
@@ -335,7 +337,7 @@ mod tests {
                 let order = order.clone();
                 async move {
                     order.lock().unwrap().push(value.to_string());
-                    ctx.status("ok");
+                    ctx.log("ok");
                     Ok(())
                 }
             })
@@ -483,10 +485,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_chains_forward_their_logs_to_the_parent() {
+        let inner = TaskChain::new("子链").then(
+            task_fn("解压", |ctx| async move {
+                ctx.log("正在解压 a.jar");
+                Ok(())
+            }),
+            "解压",
+        );
+        let outer = TaskChain::new("父链").then(inner, "子任务");
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let collected = events.clone();
+        outer
+            .run_with((), move |event| collected.lock().unwrap().push(event))
+            .await
+            .unwrap();
+
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                TaskEvent::Log { name, message, .. }
+                    if name == "解压" && message == "正在解压 a.jar"
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_chain_can_be_subscribed_from_two_front_ends() {
         let chain = TaskChain::new("chain").then(
             task_fn("step", |ctx| async move {
-                ctx.status("hello");
+                ctx.log("hello");
                 Ok(())
             }),
             "第一步",

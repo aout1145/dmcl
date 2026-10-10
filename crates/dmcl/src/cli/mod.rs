@@ -24,12 +24,8 @@ use dmcl_install::{
     forge_versions, install_loader_task, install_task, neoforge_versions, InstallSpec, LoaderKind,
     LoaderRequest,
 };
-use dmcl_launch::{
-    find_java, GameLauncher, JavaChoice, PrepareLaunchTask, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME,
-    LAUNCHER_VERSION,
-};
+use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
 use dmcl_mcmeta::Mirror;
-use dmcl_task::TaskChain;
 
 use crate::config::Config;
 
@@ -445,34 +441,21 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
     }
 }
 
-/// `launch` —— 先校验完整性，缺文件就补（由前端决定去调安装），然后启动。
+/// `launch` —— 检查完整性 →（缺件则补全）→ 生成启动参数 → 启动子进程，等游戏退出。
+///
+/// 整条「准备 → 补全 → 启动」链由 `dmcl-launch` 的 [`dmcl_launch::launch_chain`] 组装，
+/// 这里负责显示进度，并在拿到**未 wait** 的 `GameMonitor` 后等它退出。
 async fn launch(vername: &str, config: &mut Config) -> Result<()> {
     let source = config.download_source();
     let option = config.launch_option(config.account(), vername);
+    let install = Arc::new(config.install_options(source));
 
-    // 校验文件 → 生成启动参数，作为一个任务跑（带进度），结果直接由链返回
     let mut printer = ProgressPrinter::new();
-    let prepared = TaskChain::new("启动")
-        .then(PrepareLaunchTask::new(option.clone()), "准备启动")
+    let mut monitor = dmcl_launch::launch_chain(option, install)
         .run_with((), |event| printer.handle(event))
         .await?;
     printer.finish();
 
-    if !prepared.integrity.is_complete() {
-        println!("{}", prepared.integrity.summary());
-        println!("{}", prepared.integrity.detail(10));
-        // 修复是调用者的事：这里显式跑一次"下载游戏文件"（已存在的文件会被跳过）
-        let options = Arc::new(config.install_options(source));
-        let mut printer = ProgressPrinter::new();
-        dmcl_install::game_files_task(options, vername.to_string())
-            .run_with((), |event| printer.handle(event))
-            .await?;
-        printer.finish();
-    }
-
-    // 启动参数在"准备启动"里已经生成好了，直接拿它启动，不必再选一次 java
-    let launcher = GameLauncher::new(option).await?;
-    let mut monitor = launcher.launch_with_args(&prepared.args)?;
     monitor.wait().await?;
     Ok(())
 }

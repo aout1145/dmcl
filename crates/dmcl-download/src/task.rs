@@ -135,7 +135,7 @@ impl DownloadTask {
         let connections = Arc::new(Semaphore::new(options.max_connections));
 
         if !pending.is_empty() {
-            ctx.status(format!("待下载 {} 个文件", pending.len()));
+            ctx.log(format!("待下载 {} 个文件", pending.len()));
         }
 
         let mut set: JoinSet<ItemOutcome> = JoinSet::new();
@@ -244,7 +244,7 @@ impl Downloader<'_> {
                 };
             }
             if attempt > 1 {
-                self.ctx.status(format!(
+                self.ctx.log(format!(
                     "重试 {}/{}: {}",
                     attempt, self.options.max_attempts, item.name
                 ));
@@ -573,7 +573,7 @@ impl Tracker {
             let done = self.done.load(Ordering::Relaxed);
             ctx.progress(done, self.total, self.message());
         }
-        ctx.status(format!(
+        ctx.log(format!(
             "下载完成：新下载 {} 个，跳过 {} 个，失败 {} 个（{}）",
             report.downloaded,
             report.skipped,
