@@ -126,7 +126,7 @@ pub(crate) async fn run_installer_processors(
             .arg(&main_class)
             .args(args.iter().cloned())
             .current_dir(&scratch);
-        task.run(ctx.child(jar_coord))
+        task.run((), ctx.child(jar_coord))
             .await
             .with_context(|| format!("执行 {jar_coord} 失败"))?;
 

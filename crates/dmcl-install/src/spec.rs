@@ -74,7 +74,7 @@ impl LoaderRequest {
         options: Arc<InstallOptions>,
         version_name: String,
         mc_version: String,
-    ) -> TaskChain {
+    ) -> TaskChain<(), ()> {
         let name = version_name.clone();
         match self.kind {
             LoaderKind::Fabric => {
@@ -138,7 +138,7 @@ impl InstallSpec {
 ///
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
-pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain {
+pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
         .then(
             vanilla_metadata_task(
@@ -179,7 +179,7 @@ pub fn install_loader_task(
     version_name: String,
     mc_version: String,
     request: LoaderRequest,
-) -> TaskChain {
+) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 {}", request.kind.display_name()))
         .then(
             client_jar_task(options.clone(), version_name.clone()),

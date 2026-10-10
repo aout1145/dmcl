@@ -12,7 +12,9 @@
 //! downloads.push(DownloadItem::new("https://example.com/a.jar", "/tmp/a.jar"));
 //!
 //! let chain = TaskChain::new("下载").then(downloads, "下载文件");
-//! chain.run_with(|event| println!("{event}")).await
+//! // 这条链的最终输出就是 DownloadReport
+//! let _report: dmcl_download::DownloadReport = chain.run_with((), |event| println!("{event}")).await?;
+//! # Ok(())
 //! # }
 //! ```
 //!

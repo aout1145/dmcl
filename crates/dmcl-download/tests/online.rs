@@ -95,7 +95,7 @@ async fn progress_events_are_emitted_while_downloading() {
 
     let mut progress_events = 0usize;
     chain
-        .run_with(|event| {
+        .run_with((), |event| {
             if let TaskEvent::Progress { .. } = event {
                 progress_events += 1;
             }

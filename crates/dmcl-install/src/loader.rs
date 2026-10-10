@@ -219,7 +219,7 @@ pub fn install_fabric_task(
     version_name: String,
     mc_version: String,
     loader_version: Option<String>,
-) -> TaskChain {
+) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 Fabric：{version_name}")).then(
         task_fn("安装 Fabric", move |ctx| {
             let options = options.clone();
@@ -248,7 +248,7 @@ pub fn install_forge_task(
     version_name: String,
     mc_version: String,
     forge_version: Option<String>,
-) -> TaskChain {
+) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 Forge：{version_name}")).then(
         task_fn("安装 Forge", move |ctx| {
             let options = options.clone();
@@ -277,7 +277,7 @@ pub fn install_neoforge_task(
     version_name: String,
     mc_version: String,
     forge_version: Option<String>,
-) -> TaskChain {
+) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 NeoForge：{version_name}")).then(
         task_fn("安装 NeoForge", move |ctx| {
             let options = options.clone();

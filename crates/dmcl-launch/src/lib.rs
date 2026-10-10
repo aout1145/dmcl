@@ -9,6 +9,9 @@
 //! 2. **不读全局配置**。java 的选择（[`JavaChoice`] + [`JavaConfigs`]）、
 //!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
 //!
+//! 「校验文件 → 生成启动参数」这一整段可以打包成 [`PrepareLaunchTask`]，
+//! 作为一个带进度的事件流任务放进任何任务链（见 [`crate::prepare`]）。
+//!
 //! 典型的启动流程（cli 就是这么写的）：
 //!
 //! ```no_run
@@ -37,6 +40,7 @@ pub mod java;
 pub mod launcher;
 pub mod monitor;
 pub mod option;
+pub mod prepare;
 pub mod util;
 
 pub use account::{sha1_uuid, Account, OfflineAccount};
@@ -50,4 +54,5 @@ pub use java::{
 pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
+pub use prepare::{PrepareLaunchTask, PreparedLaunch};
 pub use util::{drive_name, escape_shell_command};

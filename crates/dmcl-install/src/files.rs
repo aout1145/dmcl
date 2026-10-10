@@ -117,7 +117,7 @@ pub async fn extract_natives(
 pub fn client_jar_task(
     options: Arc<InstallOptions>,
     version_name: String,
-) -> impl dmcl_task::Task + 'static {
+) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("下载客户端 jar", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
@@ -136,7 +136,7 @@ pub fn client_jar_task(
 /// 下载游戏文件的任务链：索引 → 库 → 资源 → natives。
 ///
 /// 每一步单独读一次本地的版本 JSON（很便宜），因此步骤之间不需要共享可变状态。
-pub fn game_files_task(options: Arc<InstallOptions>, version_name: String) -> TaskChain {
+pub fn game_files_task(options: Arc<InstallOptions>, version_name: String) -> TaskChain<(), ()> {
     TaskChain::new(format!("下载游戏文件：{version_name}"))
         .then(
             index_step(options.clone(), version_name.clone()),
@@ -156,7 +156,7 @@ pub fn game_files_task(options: Arc<InstallOptions>, version_name: String) -> Ta
 fn index_step(
     options: Arc<InstallOptions>,
     version_name: String,
-) -> impl dmcl_task::Task + 'static {
+) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("获取资源索引", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
@@ -171,7 +171,7 @@ fn index_step(
 fn libraries_step(
     options: Arc<InstallOptions>,
     version_name: String,
-) -> impl dmcl_task::Task + 'static {
+) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("下载库文件", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
@@ -191,7 +191,7 @@ fn libraries_step(
 fn assets_step(
     options: Arc<InstallOptions>,
     version_name: String,
-) -> impl dmcl_task::Task + 'static {
+) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("下载资源", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
@@ -211,7 +211,7 @@ fn assets_step(
 fn natives_step(
     options: Arc<InstallOptions>,
     version_name: String,
-) -> impl dmcl_task::Task + 'static {
+) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("解压 natives", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();

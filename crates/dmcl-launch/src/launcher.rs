@@ -298,6 +298,12 @@ impl GameLauncher {
     /// 返回的 [`GameMonitor`] 可以等待退出，也可以被停掉。
     pub async fn launch_game(&mut self) -> Result<GameMonitor> {
         let args = self.gen_args().await?;
+        self.launch_with_args(&args)
+    }
+
+    /// 用**已经生成好的参数**启动游戏（参数可由 [`crate::PrepareLaunchTask`] 产出，
+    /// 省得再选一次 java、重拼一遍命令行）。
+    pub fn launch_with_args(&self, args: &[String]) -> Result<GameMonitor> {
         if args.is_empty() {
             return Err(anyhow!("命令为空"));
         }
@@ -308,7 +314,7 @@ impl GameLauncher {
                 "cd".to_string(),
                 self.version_path.to_string_lossy().into_owned()
             ]),
-            escape_shell_command(&args)
+            escape_shell_command(args)
         );
 
         let mut command = tokio::process::Command::new(&args[0]);

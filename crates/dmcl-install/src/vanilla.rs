@@ -46,7 +46,7 @@ pub fn vanilla_metadata_task(
     options: Arc<InstallOptions>,
     version_id: String,
     version_name: String,
-) -> TaskChain {
+) -> TaskChain<(), ()> {
     TaskChain::new(format!("获取 {version_id} 的版本元数据")).then(
         task_fn("获取版本元数据", move |ctx| {
             let options = options.clone();

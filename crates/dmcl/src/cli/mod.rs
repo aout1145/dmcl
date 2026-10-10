@@ -25,9 +25,11 @@ use dmcl_install::{
     LoaderRequest,
 };
 use dmcl_launch::{
-    find_java, GameLauncher, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION,
+    find_java, GameLauncher, JavaChoice, PrepareLaunchTask, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME,
+    LAUNCHER_VERSION,
 };
 use dmcl_mcmeta::Mirror;
+use dmcl_task::TaskChain;
 
 use crate::config::Config;
 
@@ -366,7 +368,7 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
             let options = Arc::new(config.install_options(source));
             let mut printer = ProgressPrinter::new();
             let result = install_task(options, spec)
-                .run_with(|event| printer.handle(event))
+                .run_with((), |event| printer.handle(event))
                 .await;
             printer.finish();
             result
@@ -447,23 +449,30 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
 async fn launch(vername: &str, config: &mut Config) -> Result<()> {
     let source = config.download_source();
     let option = config.launch_option(config.account(), vername);
-    let mut launcher = GameLauncher::new(option).await?;
 
-    let status = launcher.check_integrity().await?;
-    if !status.is_complete() {
-        println!("{}", status.summary());
-        println!("{}", status.detail(10));
+    // 校验文件 → 生成启动参数，作为一个任务跑（带进度），结果直接由链返回
+    let mut printer = ProgressPrinter::new();
+    let prepared = TaskChain::new("启动")
+        .then(PrepareLaunchTask::new(option.clone()), "准备启动")
+        .run_with((), |event| printer.handle(event))
+        .await?;
+    printer.finish();
+
+    if !prepared.integrity.is_complete() {
+        println!("{}", prepared.integrity.summary());
+        println!("{}", prepared.integrity.detail(10));
         // 修复是调用者的事：这里显式跑一次"下载游戏文件"（已存在的文件会被跳过）
         let options = Arc::new(config.install_options(source));
         let mut printer = ProgressPrinter::new();
-        let result = dmcl_install::game_files_task(options, vername.to_string())
-            .run_with(|event| printer.handle(event))
-            .await;
+        dmcl_install::game_files_task(options, vername.to_string())
+            .run_with((), |event| printer.handle(event))
+            .await?;
         printer.finish();
-        result?;
     }
 
-    let mut monitor = launcher.launch_game().await?;
+    // 启动参数在"准备启动"里已经生成好了，直接拿它启动，不必再选一次 java
+    let launcher = GameLauncher::new(option).await?;
+    let mut monitor = launcher.launch_with_args(&prepared.args)?;
     monitor.wait().await?;
     Ok(())
 }
@@ -479,7 +488,7 @@ async fn install_loader(
     let request = LoaderRequest::version(kind, loader_version);
     let mut printer = ProgressPrinter::new();
     let result = install_loader_task(options, vername.to_string(), vername.to_string(), request)
-        .run_with(|event| printer.handle(event))
+        .run_with((), |event| printer.handle(event))
         .await;
     printer.finish();
     result

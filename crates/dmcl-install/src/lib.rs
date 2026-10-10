@@ -23,7 +23,7 @@
 //!     .with_loader(LoaderKind::Fabric, None);
 //!
 //! install_task(options, spec)
-//!     .run_with(|event| println!("{event}"))
+//!     .run_with((), |event| println!("{event}"))
 //!     .await
 //! # }
 //! ```
@@ -41,7 +41,7 @@
 //! let chain = TaskChain::new("安装")
 //!     .then(vanilla_metadata_task(options.clone(), "1.20.1".into(), "1.20.1".into()), "获取版本元数据")
 //!     .then(game_files_task(options.clone(), "1.20.1".into()), "下载游戏文件");
-//! chain.run().await
+//! chain.run(()).await
 //! # }
 //! ```
 //!

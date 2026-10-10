@@ -195,16 +195,16 @@ impl DownloadTask {
     }
 }
 
-impl Task for DownloadTask {
+impl Task<(), DownloadReport> for DownloadTask {
     fn name(&self) -> &str {
         &self.name
     }
 
-    fn run<'a>(&'a self, ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
+    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<DownloadReport>> {
         Box::pin(async move {
             let report = self.execute(&ctx).await?;
             if report.failed.is_empty() || self.options.ignore_failures {
-                Ok(())
+                Ok(report)
             } else {
                 Err(anyhow!(
                     "有 {} 个文件下载失败：\n{}",
