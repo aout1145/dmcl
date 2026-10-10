@@ -102,6 +102,9 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
+    /// 事件通道的默认容量。
+    pub const DEFAULT_CAPACITY: usize = 256;
+
     pub(crate) fn new(
         events: broadcast::Sender<TaskEvent>,
         cancel: CancelHandle,
@@ -116,6 +119,34 @@ impl TaskContext {
             steps,
             name: name.into(),
         }
+    }
+
+    /// 建立一个**独立**的上下文：它自带事件通道，不属于任何任务链。
+    ///
+    /// 用途是"我只想把任务跑一遍，不要进度界面"：
+    ///
+    /// ```no_run
+    /// # use dmcl_task::TaskContext;
+    /// # async fn run(task: &dyn dmcl_task::Task) -> anyhow::Result<()> {
+    /// task.run(TaskContext::detached("安装")).await
+    /// # }
+    /// ```
+    ///
+    /// 需要进度的话，用 [`TaskContext::subscribe`] 订阅它。
+    pub fn detached(name: impl Into<Arc<str>>) -> Self {
+        let (events, _) = broadcast::channel(Self::DEFAULT_CAPACITY);
+        Self {
+            events,
+            cancel: CancelHandle::default(),
+            step: 0,
+            steps: 1,
+            name: name.into(),
+        }
+    }
+
+    /// 订阅该上下文的事件流（主要对 [`TaskContext::detached`] 建立的上下文有意义）。
+    pub fn subscribe(&self) -> broadcast::Receiver<TaskEvent> {
+        self.events.subscribe()
     }
 
     /// 由当前上下文派生一个子上下文：事件流向同一个订阅者，但带上子任务的名字
