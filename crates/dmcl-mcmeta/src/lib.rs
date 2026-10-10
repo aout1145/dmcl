@@ -35,7 +35,9 @@ pub use layout::{
     version_json_path,
 };
 pub use loader::{
-    FabricLoader, FabricLoaderEntry, ForgeVersionEntry, NeoForgeListEntry, NeoForgeVersionListing,
+    fabric_loaders, forge_versions, latest_fabric_loader, latest_forge_version,
+    latest_neoforge_version, neoforge_versions, FabricLoader, FabricLoaderEntry, ForgeVersionEntry,
+    NeoForgeListEntry, NeoForgeVersionListing,
 };
 pub use manifest::{LatestVersions, VersionManifest, VersionManifestEntry};
 pub use maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};

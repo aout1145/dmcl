@@ -20,13 +20,9 @@ use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dialoguer::Confirm;
 
-use dmcl_install::loader::fabric_loaders;
-use dmcl_install::{
-    forge_versions, install_loader_task, install_task, neoforge_versions, InstallSpec, LoaderKind,
-    LoaderRequest,
-};
+use dmcl_install::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
-use dmcl_mcmeta::Mirror;
+use dmcl_mcmeta::{fabric_loaders, forge_versions, neoforge_versions, Mirror};
 use dmcl_task::TaskEvent;
 
 use crate::config::Config;

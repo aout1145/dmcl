@@ -136,7 +136,7 @@ async fn a_few_planned_libraries_really_download() {
 #[ignore = "requires network access"]
 async fn the_fabric_loader_list_reports_a_latest_version() {
     let source = DownloadSource::new(Mirror::Official);
-    let latest = dmcl_install::latest_fabric_loader(&source, "1.20.1")
+    let latest = dmcl_mcmeta::latest_fabric_loader(&source, "1.20.1")
         .await
         .expect("fabric");
     assert!(!latest.is_empty());

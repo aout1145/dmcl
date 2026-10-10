@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use dmcl_task::TaskChain;
 
+use crate::fabric::install_fabric_task;
 use crate::files::{client_jar_task, game_files_task};
-use crate::loader::{install_fabric_task, install_forge_task, install_neoforge_task};
+use crate::forge::install_forge_task;
+use crate::neoforge::install_neoforge_task;
 use crate::options::InstallOptions;
 use crate::vanilla::vanilla_metadata_task;
 

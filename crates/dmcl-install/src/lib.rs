@@ -56,10 +56,9 @@
 
 pub mod files;
 pub mod io;
-pub mod loader;
+mod loader;
 pub mod options;
 pub mod plan;
-pub mod processors;
 pub mod spec;
 pub mod vanilla;
 pub mod zip;
@@ -68,11 +67,7 @@ pub use files::{
     download_game_files, download_planned, ensure_asset_index, extract_natives, game_files_task,
 };
 pub use io::{write_json_safe, write_safe};
-pub use loader::{
-    forge_versions, install_fabric, install_fabric_task, install_forge, install_forge_task,
-    install_neoforge, install_neoforge_task, latest_fabric_loader, latest_forge_version,
-    latest_neoforge_version, neoforge_versions,
-};
+pub use loader::{fabric, forge, neoforge};
 pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
 pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries,

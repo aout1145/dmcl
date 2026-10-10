@@ -2,7 +2,10 @@
 //!
 //! 这些文档都只用来"列出可选版本 / 找最新版"，不写回任何东西，因此不保留未建模字段。
 
+use anyhow::Result;
 use serde::Deserialize;
+
+use crate::source::DownloadSource;
 
 /// `bmclapi .../forge/minecraft/<mcver>` 的一项。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -64,6 +67,63 @@ impl FabricLoader {
     pub fn is_stable(&self) -> bool {
         self.stable.unwrap_or(false)
     }
+}
+
+// ---------------------------------------------------------------------------
+// 查询 / 找最新
+// ---------------------------------------------------------------------------
+
+/// Fabric 的 loader 列表（远端顺序）。
+pub async fn fabric_loaders(
+    source: &DownloadSource,
+    mc_version: &str,
+) -> Result<Vec<FabricLoaderEntry>> {
+    source.fetch_fabric_loaders(mc_version).await
+}
+
+/// 最新的**稳定** Fabric loader；没有稳定版时取列表第一个（与原实现一致）。
+pub async fn latest_fabric_loader(source: &DownloadSource, mc_version: &str) -> Result<String> {
+    let list = fabric_loaders(source, mc_version).await?;
+    for entry in list.iter().rev() {
+        if entry.loader.is_stable() {
+            return Ok(entry.loader.version.clone());
+        }
+    }
+    Ok(list
+        .first()
+        .map(|entry| entry.loader.version.clone())
+        .unwrap_or_default())
+}
+
+/// Forge 版本列表（bmclapi only），按 build 升序。
+pub async fn forge_versions(
+    source: &DownloadSource,
+    mc_version: &str,
+) -> Result<Vec<ForgeVersionEntry>> {
+    let mut versions = source.fetch_forge_versions(mc_version).await?;
+    versions.sort_by_key(|entry| entry.build);
+    Ok(versions)
+}
+
+/// 最新 Forge（build 号最大）。
+pub async fn latest_forge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
+    let versions = forge_versions(source, mc_version).await?;
+    Ok(versions
+        .iter()
+        .max_by_key(|entry| entry.build)
+        .map(ForgeVersionEntry::full_name)
+        .unwrap_or_default())
+}
+
+/// NeoForge 版本列表。
+pub async fn neoforge_versions(source: &DownloadSource, mc_version: &str) -> Result<Vec<String>> {
+    source.fetch_neoforge_versions(mc_version).await
+}
+
+/// 最新 NeoForge —— 原实现取列表的**最后一个**元素。
+pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
+    let versions = neoforge_versions(source, mc_version).await?;
+    Ok(versions.last().cloned().unwrap_or_default())
 }
 
 #[cfg(test)]
