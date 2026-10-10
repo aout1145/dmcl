@@ -41,16 +41,31 @@ impl GameMonitor {
 mod tests {
     use super::*;
 
+    /// 一个「睡很久」的命令 —— 两个平台都有。
+    fn long_running() -> tokio::process::Command {
+        #[cfg(windows)]
+        {
+            // Windows 没有 `sleep`，用 `ping` 当等待；`>NUL` 丢掉输出
+            let mut command = tokio::process::Command::new("cmd");
+            command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            let mut command = tokio::process::Command::new("sleep");
+            command.arg("30");
+            command
+        }
+    }
+
     #[tokio::test]
     async fn a_monitor_reports_exit_and_can_kill() {
-        let child = tokio::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
+        let child = long_running().spawn().expect("spawn long-running command");
         let mut monitor = GameMonitor::new(child);
         assert!(monitor.id().is_some());
         assert!(monitor.try_status().unwrap().is_none());
         monitor.kill().await.unwrap();
-        assert!(monitor.wait().await.unwrap().code().is_none());
+        // 被强杀：unix 死于信号（没有退出码），windows 是一个非 0 退出码
+        assert!(!monitor.wait().await.unwrap().success());
     }
 }

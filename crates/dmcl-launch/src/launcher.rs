@@ -176,10 +176,14 @@ impl GameLauncher {
     /// 同 [`GameLauncher::gen_args`]，但把「java 版本不匹配」等需要用户确认的警告
     /// 通过 `ctx` 上报，并**等待前端决定**是否继续。
     pub async fn gen_args_in(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
-        // java 路径；版本不匹配时先问用户
+        // java 路径；已经选好就直接用，否则按配置选一个。版本不匹配时先问用户。
         let required_major = self.json.required_java_major();
-        let java =
-            select_java(required_major, &self.option.java, &self.option.java_configs).await?;
+        let java = match &self.java {
+            Some(java) => java.clone(),
+            None => {
+                select_java(required_major, &self.option.java, &self.option.java_configs).await?
+            }
+        };
         if java.major_version != required_major {
             ctx.confirm(format!(
                 "使用的 java 版本不匹配（需要 {required_major}，实际用 {}），是否继续？",
