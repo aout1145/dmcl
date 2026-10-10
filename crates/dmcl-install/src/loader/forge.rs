@@ -242,13 +242,23 @@ fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<In
 }
 
 /// 从安装包里取出它自带的版本 JSON。
+///
+/// 三代安装器把 profile 放在不同位置：
+/// * 现代式（spec 0/1）：`install_profile.json` 的 `json`（通常 `version.json`）指向的条目；
+/// * 经典式（≤1.11.2）：内联在 `install_profile.json` 的 `versionInfo` 里；
+/// * 兜底：有些包只把它打在 `install.filePath` 指向的内嵌 jar 里。
 fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<VersionJson> {
-    let mut json: VersionJson = if zip_has_entry(zip, "version.json") {
-        serde_json::from_slice(&zip_read_entry(zip, "version.json")?)?
+    let profile = read_install_profile(zip)?;
+    let version_entry = profile.version_json_entry().to_string();
+    let inner_entry = profile.file_path().unwrap_or("").to_string();
+
+    let mut json: VersionJson = if zip_has_entry(zip, &version_entry) {
+        serde_json::from_slice(&zip_read_entry(zip, &version_entry)?)?
+    } else if let Some(version_info) = profile.version_info {
+        // 经典安装器：profile 就内联在 versionInfo 里，且地址是 https。
+        *version_info
     } else {
-        let profile = read_install_profile(zip)?;
-        let entry = profile.file_path().unwrap_or("").to_string();
-        let inner = zip_read_entry(zip, &entry)?;
+        let inner = zip_read_entry(zip, &inner_entry)?;
         let mut inner_zip = open_archive(inner)?;
         serde_json::from_slice(&zip_read_entry(&mut inner_zip, "version.json")?)?
     };
@@ -386,6 +396,64 @@ mod tests {
             "/tmp/.minecraft",
             DownloadSource::new(Mirror::Official),
         ))
+    }
+
+    /// 把若干条目打成内存 zip。
+    fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
+            for (name, data) in files {
+                let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+                writer.start_file(*name, options).unwrap();
+                std::io::Write::write_all(&mut writer, data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buffer
+    }
+
+    #[test]
+    fn installer_version_json_handles_all_three_layouts() {
+        // 现代式：`json` 指向包内的 version.json
+        let modern = zip_of(&[
+            (
+                "install_profile.json",
+                br#"{"spec":1,"json":"/version.json"}"#,
+            ),
+            ("version.json", br#"{"id":"modern","mainClass":"m"}"#),
+        ]);
+        let mut zip = open_archive(modern).unwrap();
+        assert_eq!(
+            read_installer_version_json(&mut zip).unwrap().id.as_deref(),
+            Some("modern")
+        );
+
+        // 经典式：profile 内联在 versionInfo 里，包内没有 version.json
+        let classic = zip_of(&[(
+            "install_profile.json",
+            br#"{"install":{"filePath":"forge-universal.jar"},"versionInfo":{"id":"classic","mainClass":"m"}}"#,
+        )]);
+        let mut zip = open_archive(classic).unwrap();
+        assert_eq!(
+            read_installer_version_json(&mut zip).unwrap().id.as_deref(),
+            Some("classic")
+        );
+
+        // 兜底：version.json 只在 install.filePath 指向的内嵌 jar 里
+        let inner = zip_of(&[("version.json", br#"{"id":"inner","mainClass":"m"}"#)]);
+        let outer = zip_of(&[
+            (
+                "install_profile.json",
+                br#"{"install":{"filePath":"forge-universal.jar"}}"#,
+            ),
+            ("forge-universal.jar", &inner),
+        ]);
+        let mut zip = open_archive(outer).unwrap();
+        assert_eq!(
+            read_installer_version_json(&mut zip).unwrap().id.as_deref(),
+            Some("inner")
+        );
     }
 
     #[test]

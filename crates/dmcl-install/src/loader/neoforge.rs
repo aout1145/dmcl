@@ -228,16 +228,13 @@ fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<In
 }
 
 /// 从安装包里取出它自带的版本 JSON。
+///
+/// NeoForge 只有现代式安装器（spec 1）：版本 JSON 在 `install_profile.json` 的
+/// `json`（通常是 `version.json`）指向的条目里。
 fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<VersionJson> {
-    let mut json: VersionJson = if zip_has_entry(zip, "version.json") {
-        serde_json::from_slice(&zip_read_entry(zip, "version.json")?)?
-    } else {
-        let profile = read_install_profile(zip)?;
-        let entry = profile.file_path().unwrap_or("").to_string();
-        let inner = zip_read_entry(zip, &entry)?;
-        let mut inner_zip = open_archive(inner)?;
-        serde_json::from_slice(&zip_read_entry(&mut inner_zip, "version.json")?)?
-    };
+    let profile = read_install_profile(zip)?;
+    let entry = profile.version_json_entry().to_string();
+    let mut json: VersionJson = serde_json::from_slice(&zip_read_entry(zip, &entry)?)?;
     // 安装包里的地址是具体 url，归一到模板后写盘时才能再解析成官方地址
     json.templatize_urls();
     Ok(json)
@@ -366,6 +363,55 @@ mod tests {
             "/tmp/.minecraft",
             DownloadSource::new(Mirror::Official),
         ))
+    }
+
+    /// 把若干条目打成内存 zip。
+    fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
+            for (name, data) in files {
+                let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+                writer.start_file(*name, options).unwrap();
+                std::io::Write::write_all(&mut writer, data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buffer
+    }
+
+    #[test]
+    fn installer_version_json_uses_the_documented_entry() {
+        // `json` 指向包内的 version.json
+        let installer = zip_of(&[
+            (
+                "install_profile.json",
+                br#"{"spec":1,"json":"/version.json"}"#,
+            ),
+            ("version.json", br#"{"id":"modern","mainClass":"m"}"#),
+        ]);
+        let mut zip = open_archive(installer).unwrap();
+        assert_eq!(
+            read_installer_version_json(&mut zip).unwrap().id.as_deref(),
+            Some("modern")
+        );
+
+        // `json` 指向别的位置时也按它来
+        let custom = zip_of(&[
+            (
+                "install_profile.json",
+                br#"{"spec":1,"json":"/profile/neoforge.json"}"#,
+            ),
+            (
+                "profile/neoforge.json",
+                br#"{"id":"custom","mainClass":"m"}"#,
+            ),
+        ]);
+        let mut zip = open_archive(custom).unwrap();
+        assert_eq!(
+            read_installer_version_json(&mut zip).unwrap().id.as_deref(),
+            Some("custom")
+        );
     }
 
     #[test]
