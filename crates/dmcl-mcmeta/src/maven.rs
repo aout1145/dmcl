@@ -3,7 +3,7 @@
 //!
 //! 刻意手写：crates.io 上没有维护良好、又能处理
 //! `group:artifact:version[:classifier][@ext]` 这种自由形式的库，
-//! 而这三段逻辑各只有十几行纯字符串处理。详见 MIGRATION.md 的"查过但故意保留"一节。
+//! 而这三段逻辑各只有十几行纯字符串处理。
 
 /// `libNameToPath` —— maven 坐标转成仓库里的相对路径。
 ///
