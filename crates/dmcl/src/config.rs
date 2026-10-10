@@ -451,7 +451,8 @@ mod tests {
         let mut config = Config::default();
         config.account.username = "tester".to_string();
         config.download.mirror = Mirror::Bmclapi;
-        config.launch.minecraft_root_path = PathBuf::from("/tmp/mc-root");
+        // 故意用相对路径：`load` 会把它补成绝对路径（平台无关）
+        config.launch.minecraft_root_path = PathBuf::from("mc-root");
 
         // 手动写到指定路径（`save` 用的是平台配置目录，测试里不碰它）
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -462,11 +463,8 @@ mod tests {
         let loaded = Config::load(Some(&path)).await.unwrap();
         assert_eq!(loaded.account.username, "tester");
         assert_eq!(loaded.download.mirror, Mirror::Bmclapi);
-        assert_eq!(
-            loaded.launch.minecraft_root_path,
-            PathBuf::from("/tmp/mc-root")
-        );
-        // 相对路径会被补成绝对路径
+        // 相对路径会被补成绝对路径（相对于进程当前目录）
+        assert_eq!(loaded.launch.minecraft_root_path, absolute("mc-root"));
         assert!(loaded.launch.minecraft_root_path.is_absolute());
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
