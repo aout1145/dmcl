@@ -104,13 +104,9 @@ impl ProgressPrinter {
             TaskEvent::StepFinished { .. } => {
                 self.print(&format!("{INDENT}完成"), true, "");
             }
-            TaskEvent::Failed {
-                step,
-                steps,
-                name,
-                error,
-            } => {
-                let text = format!("{} 失败：{error}", step_header(step, steps, &name));
+            TaskEvent::Failed { step, steps, name } => {
+                // 只标记“哪一步失败了”；错误详情由调用方（main）打印一次
+                let text = format!("{} 失败", step_header(step, steps, &name));
                 self.print(&text, true, "");
             }
             TaskEvent::Finished { name } => {

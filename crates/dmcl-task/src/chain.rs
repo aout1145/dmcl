@@ -192,7 +192,7 @@ where
         let mut value: Box<dyn Any + Send> = Box::new(input);
         for (index, step) in self.steps.iter().enumerate() {
             if let Err(err) = self.cancel.check_cancelled() {
-                self.report_failure(index, steps, step.name(), &err);
+                self.report_failure(index, steps, step.name());
                 return Err(err);
             }
             let _ = self.events.send(TaskEvent::StepStarted {
@@ -218,8 +218,14 @@ where
                     });
                 }
                 Err(err) => {
-                    let err = err.context(format!("步骤「{}」失败", step.name()));
-                    self.report_failure(index, steps, step.name(), &err);
+                    // 嵌套链（如 loader 安装链）可能已经加过一模一样的步骤上下文，避免叠加
+                    let ctx = format!("步骤「{}」失败", step.name());
+                    let err = if format!("{err:#}").starts_with(&ctx) {
+                        err
+                    } else {
+                        err.context(ctx)
+                    };
+                    self.report_failure(index, steps, step.name());
                     return Err(err);
                 }
             }
@@ -263,12 +269,11 @@ where
         }
     }
 
-    fn report_failure(&self, step: usize, steps: usize, name: &str, error: &anyhow::Error) {
+    fn report_failure(&self, step: usize, steps: usize, name: &str) {
         let _ = self.events.send(TaskEvent::Failed {
             step,
             steps,
             name: name.to_string(),
-            error: format!("{error:#}"),
         });
     }
 }

@@ -43,11 +43,13 @@ pub enum TaskEvent {
         name: String,
     },
     /// 第 `step` 个步骤失败，链就此中止。
+    ///
+    /// 只带“哪一步失败了”的结构信息；**错误详情在 `run()` / `run_with()` 的返回值里**，
+    /// 由调用者打印一次，避免事件流和返回值把同一条错误各打一遍。
     Failed {
         step: usize,
         steps: usize,
         name: String,
-        error: String,
     },
     /// 整条链成功结束。
     Finished { name: String },
@@ -110,12 +112,9 @@ impl fmt::Display for TaskEvent {
             TaskEvent::StepFinished { step, steps, name } => {
                 write!(f, "[{}/{steps}] {name}: 完成", step + 1)
             }
-            TaskEvent::Failed {
-                step,
-                steps,
-                name,
-                error,
-            } => write!(f, "[{}/{steps}] {name}: 失败: {error}", step + 1),
+            TaskEvent::Failed { step, steps, name } => {
+                write!(f, "[{}/{steps}] {name}: 失败", step + 1)
+            }
             TaskEvent::Finished { name } => write!(f, "{name}: 全部完成"),
         }
     }
