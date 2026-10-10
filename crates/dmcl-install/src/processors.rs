@@ -7,7 +7,7 @@
 //! 它的输出会逐行变成进度事件，失败时错误信息里带着输出结尾。
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_download::check_file;
+use dmcl_download::{check_file, Checksum};
 use dmcl_mcmeta::{classpath_separator, lib_name_to_path, libraries_dir, version_jar_path};
 use dmcl_mcmeta::{InstallProfile, VersionJson};
 use dmcl_task::{CommandTask, Task, TaskContext};
@@ -43,7 +43,7 @@ pub(crate) async fn run_installer_processors(
         planned.push(PlannedFile {
             url,
             save_to: libraries.join(&path),
-            sha1: artifact.sha1.clone(),
+            checksum: artifact.sha1.clone().map(Checksum::sha1),
             size: artifact.size,
             name: base_name(&path),
         });
@@ -130,11 +130,11 @@ pub(crate) async fn run_installer_processors(
             .await
             .with_context(|| format!("执行 {jar_coord} 失败"))?;
 
-        // 校验产物
+        // 校验产物（安装器档案里的 `outputs` 给的是 sha1 摘要）
         if let Some(outputs) = &step.outputs {
             for (key, value) in outputs {
                 let file = get_arg(key);
-                let expected = get_arg(value);
+                let expected = Checksum::sha1(get_arg(value));
                 if !check_file(&file, Some(&expected)).await {
                     return Err(anyhow!("{file}: sha1 校验失败"));
                 }

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use dmcl_download::DownloadItem;
+use dmcl_download::{Checksum, DownloadItem};
 use dmcl_mcmeta::{
     asset_object_url, assets_index_path, assets_objects_dir, assets_virtual_dir, get_os_name,
     lib_name_to_path, libraries_dir, maven_library_url, rules_allow, version_jar_path, Artifact,
@@ -64,7 +64,8 @@ pub struct PlannedFile {
     pub url: String,
     /// 目标路径。
     pub save_to: PathBuf,
-    pub sha1: Option<String>,
+    /// 期望的校验值（由 SHA-1 摘要构造，Minecraft 文档里给的就是 sha1）。
+    pub checksum: Option<Checksum>,
     pub size: Option<u64>,
     /// 进度里显示的名字。
     pub name: String,
@@ -74,7 +75,7 @@ impl PlannedFile {
     /// 变成真正的下载项：这里才把模板解析成具体地址。
     pub fn into_item(self, options: &InstallOptions) -> DownloadItem {
         DownloadItem::new(options.resolve(&self.url), &self.save_to)
-            .with_sha1(self.sha1)
+            .with_checksum(self.checksum)
             .with_size(self.size)
             .named(self.name)
     }
@@ -99,7 +100,7 @@ pub fn plan_client_jar(
     Some(PlannedFile {
         url,
         save_to: version_jar_path(&plan.root_path, version_name),
-        sha1: client.sha1.clone(),
+        checksum: client.sha1.clone().map(Checksum::sha1),
         size: client.size,
         name: format!("{version_name}.jar"),
     })
@@ -116,7 +117,7 @@ pub fn plan_assets_index(plan: &PlanContext, json: &VersionJson) -> Option<Plann
     Some(PlannedFile {
         url,
         save_to: assets_index_path(&plan.root_path, id),
-        sha1: index.sha1.clone(),
+        checksum: index.sha1.clone().map(Checksum::sha1),
         size: index.size,
         name: format!("{id}.json"),
     })
@@ -165,7 +166,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
                     planned.push(PlannedFile {
                         url: artifact.url.clone().unwrap_or_default(),
                         save_to: libraries.join(&relative),
-                        sha1: artifact.sha1.clone(),
+                        checksum: artifact.sha1.clone().map(Checksum::sha1),
                         size: artifact.size,
                         name: base_name(&relative),
                     });
@@ -175,7 +176,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
             None if lib.url.is_none() => planned.push(PlannedFile {
                 url: maven_library_url(&lib_path),
                 save_to: libraries.join(&lib_path),
-                sha1: lib.sha1.clone(),
+                checksum: lib.sha1.clone().map(Checksum::sha1),
                 size: None,
                 name: base_name(&lib_path),
             }),
@@ -189,7 +190,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
                 planned.push(PlannedFile {
                     url: format!("{base}/{lib_path}"),
                     save_to: libraries.join(&lib_path),
-                    sha1: lib.sha1.clone(),
+                    checksum: lib.sha1.clone().map(Checksum::sha1),
                     size: None,
                     name: base_name(&lib_path),
                 });
@@ -205,7 +206,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
             planned.push(PlannedFile {
                 url,
                 save_to: libraries.join(&path),
-                sha1: artifact.sha1.clone(),
+                checksum: artifact.sha1.clone().map(Checksum::sha1),
                 size: artifact.size,
                 name: base_name(&path),
             });
@@ -258,7 +259,7 @@ pub fn plan_asset_objects(
         planned.push(PlannedFile {
             url: asset_object_url(&relative),
             save_to,
-            sha1: Some(asset.hash.clone()),
+            checksum: Some(Checksum::sha1(asset.hash.clone())),
             size: Some(asset.size),
             name: base_name(key),
         });
@@ -490,13 +491,13 @@ mod tests {
         let planned = PlannedFile {
             url: "${MC_MAVEN}/a/b.jar".to_string(),
             save_to: PathBuf::from("/mc/libraries/a/b.jar"),
-            sha1: Some("abc".to_string()),
+            checksum: Some(Checksum::sha1("abc")),
             size: Some(7),
             name: "b.jar".to_string(),
         };
         let item = planned.into_item(&options);
         assert_eq!(item.url, "https://bmclapi2.bangbang93.com/maven/a/b.jar");
-        assert_eq!(item.sha1.as_deref(), Some("abc"));
+        assert_eq!(item.checksum.as_ref().map(|c| c.hex()), Some("abc"));
         assert_eq!(item.size, Some(7));
         assert_eq!(item.name, "b.jar");
     }

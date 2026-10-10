@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use dmcl_download::hash_file;
+use dmcl_download::Checksum;
 use dmcl_install::{
     plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries, plan_natives,
     PlanContext, PlannedFile,
@@ -23,9 +23,9 @@ use dmcl_mcmeta::{natives_dir, AssetIndexFile, VersionJson};
 pub enum MissingReason {
     /// 文件不存在。
     Missing,
-    /// 文件在，但 sha1 对不上。
+    /// 文件在，但摘要对不上。
     WrongHash,
-    /// 文件在，但大小对不上（没有 sha1 时的兜底判断）。
+    /// 文件在，但大小对不上（没有校验值时的兜底判断）。
     WrongSize,
     /// 目录还没准备好（例如 natives 还没解压）。
     NotPrepared,
@@ -35,7 +35,7 @@ impl fmt::Display for MissingReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             MissingReason::Missing => "缺失",
-            MissingReason::WrongHash => "sha1 校验失败",
+            MissingReason::WrongHash => "摘要校验失败",
             MissingReason::WrongSize => "大小不符",
             MissingReason::NotPrepared => "尚未生成",
         })
@@ -48,7 +48,8 @@ pub struct MissingFile {
     pub path: PathBuf,
     /// 修复时用的 **URL 模板**（`${MC_MAVEN}/…`）；`None` 表示由安装流程自行重建。
     pub url: Option<String>,
-    pub sha1: Option<String>,
+    /// 期望的校验值（由 SHA-1 摘要构造）。
+    pub checksum: Option<Checksum>,
     pub reason: MissingReason,
 }
 
@@ -141,7 +142,7 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
             status.missing.push(MissingFile {
                 path: file.save_to,
                 url: Some(file.url),
-                sha1: file.sha1,
+                checksum: file.checksum,
                 reason,
             });
         }
@@ -155,7 +156,7 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
             status.missing.push(MissingFile {
                 path: dir,
                 url: None,
-                sha1: None,
+                checksum: None,
                 reason: MissingReason::NotPrepared,
             });
         }
@@ -171,10 +172,11 @@ async fn check_planned(file: &PlannedFile) -> Option<MissingReason> {
         Ok(metadata) => metadata,
         Err(_) => return Some(MissingReason::Missing),
     };
-    match file.sha1.as_deref() {
-        Some(expected) => match hash_file(&file.save_to).await {
-            Ok(actual) if actual == expected => None,
-            Ok(_) => Some(MissingReason::WrongHash),
+    match file.checksum.as_ref() {
+        // 算法由校验值自己决定（md5 / sha1 / sha256 一视同仁）
+        Some(checksum) => match checksum.verify_file(&file.save_to).await {
+            Ok(true) => None,
+            Ok(false) => Some(MissingReason::WrongHash),
             Err(_) => Some(MissingReason::Missing),
         },
         None => match file.size {
@@ -301,7 +303,7 @@ mod tests {
         assert!(status.is_complete(), "{:?}", status.missing);
         assert_eq!(status.checked, 1);
 
-        // 内容被改坏后应当报 sha1 不符
+        // 内容被改坏后应当报摘要不符
         tokio::fs::write(&library, b"corrupted").await.unwrap();
         let status = check_integrity(&plan, "1.0").await.unwrap();
         assert_eq!(status.missing.len(), 1);

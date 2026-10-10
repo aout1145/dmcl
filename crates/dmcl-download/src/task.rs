@@ -17,7 +17,6 @@ use crate::hash::{file_matches, hash_file};
 use crate::item::DownloadItem;
 use crate::options::DownloadOptions;
 use crate::report::{DownloadFailure, DownloadReport};
-
 /// 进度事件的节流间隔（避免每 64 KiB 就刷一次事件）。
 const REPORT_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -111,11 +110,11 @@ impl DownloadTask {
         let connections = Arc::new(Semaphore::new(options.max_connections));
         let report = Arc::new(Mutex::new(DownloadReport::default()));
 
-        // 先做本地判断：已经是最新（sha1 / 大小一致）的文件不占用连接
+        // 先做本地判断：已经是最新（校验值 / 大小一致）的文件不占用连接
         let mut pending: Vec<DownloadItem> = Vec::new();
         for item in &self.items {
             let save_to = absolute(&item.save_to);
-            if file_matches(&save_to, item.sha1.as_deref(), item.size).await {
+            if file_matches(&save_to, item.checksum.as_ref(), item.size).await {
                 report.lock().unwrap().skipped += 1;
             } else {
                 pending.push(item.clone());
@@ -280,11 +279,15 @@ impl Downloader<'_> {
             None => self.single(item, &part).await?,
         };
 
-        // 校验：sha1 优先，其次大小
-        if let Some(expected) = item.sha1.as_deref() {
-            let actual = hash_file(&part).await?;
-            if actual != expected {
-                anyhow::bail!("sha1 不匹配（期望 {expected}，实际 {actual}）");
+        // 校验：校验值优先（用哪个算法由它决定），其次大小
+        if let Some(checksum) = item.checksum.as_ref() {
+            let actual = hash_file(&part, checksum.algorithm()).await?;
+            if actual != checksum.hex() {
+                anyhow::bail!(
+                    "{} 校验失败（期望 {}，实际 {actual}）",
+                    checksum.algorithm(),
+                    checksum.hex()
+                );
             }
         } else if let Some(size) = item.size {
             if bytes != size {

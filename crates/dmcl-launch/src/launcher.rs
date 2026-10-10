@@ -302,7 +302,7 @@ impl GameLauncher {
             return Err(anyhow!("命令为空"));
         }
         println!(
-            "command: {} && {} && {}",
+            "命令：{} && {} && {}",
             escape_shell_command(&["cd".to_string(), drive_name(&self.version_path)]),
             escape_shell_command(&[
                 "cd".to_string(),

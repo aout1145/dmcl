@@ -83,7 +83,7 @@ pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) 
 // 安装
 // ---------------------------------------------------------------------------
 
-/// `installFabric` —— Fabric 的自动安装非常简单，看看 Forge 干了什么就懂了。
+/// `installFabric` —— Fabric 的自动安装非常简单，比 Forge 简单多了。
 pub async fn install_fabric(
     options: &InstallOptions,
     version_name: &str,
@@ -320,7 +320,7 @@ async fn fetch_installer(
         vec![PlannedFile {
             url,
             save_to: path.clone(),
-            sha1: None,
+            checksum: None,
             size: None,
             name: file_name,
         }],

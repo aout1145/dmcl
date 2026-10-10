@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::error::{ContextKind, ErrorKind};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use dmcl_install::loader::fabric_loaders;
 use dmcl_install::{
@@ -33,20 +34,150 @@ use crate::config::Config;
 use progress::ProgressPrinter;
 pub use prompt::prompt_interactive;
 
-/// `dmcl` —— 非官方 Minecraft 启动器。
+/// 非官方 Minecraft 启动器（由原 D 语言版本迁移而来）。
 #[derive(Parser, Debug)]
-#[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), about, long_about = None)]
+#[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
 pub struct Cli {
     /// 用这个 java，并把它记进命名 java 配置
     #[arg(long, global = true, value_name = "JAVA")]
     pub java: Option<String>,
 
-    /// 下载镜像源
-    #[arg(long, global = true, value_name = "MIRROR")]
+    /// 下载镜像源（official 或 bmclapi）
+    #[arg(
+        long,
+        global = true,
+        value_name = "MIRROR",
+        hide_possible_values = true
+    )]
     pub mirror: Option<Mirror>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+// ---------------------------------------------------------------------------
+// 全中文的帮助输出
+// ---------------------------------------------------------------------------
+//
+// `clap` 自动生成的小节标题（`Usage:` / `Arguments:` / `Options:`）和
+// `--help` / `--version` 的说明都是英文的，只能在构建命令树时逐层替换。
+// 参数定义仍然只有一份 —— 就是 [`Cli`] 与 [`Commands`] 上的那些属性。
+
+/// 有位置参数的命令（`install`、`list-forge` …）。
+const HELP_TEMPLATE_WITH_POSITIONALS: &str =
+    "{about-with-newline}\n用法：{usage}\n\n位置参数：\n{positionals}\n\n选项：\n{options}{after-help}";
+
+/// 没有位置参数的命令（`list-mc`、`search-java` …）—— 不打出空的小节。
+const HELP_TEMPLATE_WITHOUT_POSITIONALS: &str =
+    "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}{after-help}";
+
+/// 根命令：额外列出子命令。
+const HELP_TEMPLATE_ROOT: &str =
+    "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}\n\n命令：\n{subcommands}{after-help}";
+
+impl Cli {
+    /// 解析命令行，并让帮助文本与常见错误提示保持全中文。
+    ///
+    /// 与 `Cli::parse()` 的区别只有两处：先把命令树里的英文小节标题与
+    /// `--help` / `--version` 说明替换掉，再把 clap 的英文报错翻成中文。
+    pub fn parse_localized() -> Self {
+        let command = localized_command();
+        match command.try_get_matches() {
+            Ok(matches) => Self::from_arg_matches(&matches).unwrap_or_else(|err| err.exit()),
+            Err(err) => match err.kind() {
+                // `--help` / `--version` 走的是"错误"通道，照常打印并退出
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => err.exit(),
+                _ => {
+                    match translate_error(&err) {
+                        Some(message) => eprintln!("错误：{message}"),
+                        // 认不出来的错误就照原样打印，免得把信息丢掉
+                        None => eprint!("{err}"),
+                    }
+                    eprintln!("提示：用 dmcl --help 查看用法");
+                    std::process::exit(2);
+                }
+            },
+        }
+    }
+}
+
+/// 把 clap 的英文报错翻成中文。
+///
+/// 只处理最常见的几种（少参数、参数不认识、命令不认识、取值不合法），
+/// 其余返回 `None`，由调用者退回到 clap 原文。
+fn translate_error(err: &clap::Error) -> Option<String> {
+    let context = |kind: ContextKind| {
+        err.get(kind)
+            .map(|value| value.to_string().replace(", ", "、"))
+            .unwrap_or_default()
+    };
+    match err.kind() {
+        ErrorKind::MissingRequiredArgument => Some(format!(
+            "缺少必填参数：{}",
+            context(ContextKind::InvalidArg)
+        )),
+        ErrorKind::UnknownArgument => Some(format!(
+            "不认识的参数：{}",
+            context(ContextKind::InvalidArg)
+        )),
+        ErrorKind::InvalidSubcommand => Some(format!(
+            "不认识的命令：{}",
+            context(ContextKind::InvalidSubcommand)
+        )),
+        ErrorKind::InvalidValue => Some(format!(
+            "参数取值不合法：{}",
+            context(ContextKind::InvalidValue)
+        )),
+        ErrorKind::MissingSubcommand => Some("缺少子命令".to_string()),
+        _ => None,
+    }
+}
+
+/// 把 clap 自动生成的英文说明换成中文。
+fn localized_command() -> clap::Command {
+    fn localize(mut command: clap::Command) -> clap::Command {
+        // `--help` / `--version` 是 clap 在 build 阶段补进命令树的，
+        // 先 build 一次才能改到它们
+        command.build();
+        let has_positionals = command.get_positionals().next().is_some();
+        let template = if has_positionals {
+            HELP_TEMPLATE_WITH_POSITIONALS
+        } else {
+            HELP_TEMPLATE_WITHOUT_POSITIONALS
+        };
+        let mut command = command.help_template(template);
+        // `mut_arg` 遇到不存在的参数会 panic，所以先问一句在不在
+        if command.get_arguments().any(|arg| arg.get_id() == "help") {
+            command = command.mut_arg("help", |arg| arg.help("打印帮助信息"));
+        }
+        if command.get_arguments().any(|arg| arg.get_id() == "version") {
+            command = command.mut_arg("version", |arg| arg.help("打印版本信息"));
+        }
+        command
+    }
+
+    let root = Cli::command();
+    // 先 build 一次：`--help` / `--version` / `help` 子命令都是 clap 在这个阶段补进去的
+    let mut root = root;
+    root.build();
+
+    let names: Vec<String> = root
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+
+    root = localize(root).help_template(HELP_TEMPLATE_ROOT);
+    for name in names {
+        if name == "help" {
+            // clap 自动加的 `help` 子命令，说明也得换掉
+            root = root.mut_subcommand("help", |command| {
+                command.about("打印帮助信息（也可查询某个子命令的帮助）")
+            });
+        } else {
+            root = root.mut_subcommand(name, localize);
+        }
+    }
+    root
 }
 
 /// 原 `DmclCli` 的全部命令。
@@ -54,14 +185,17 @@ pub struct Cli {
 pub enum Commands {
     /// 启动游戏
     Launch {
+        /// 本地版本目录名（versions/<名字>）
         #[arg(value_name = "version-name")]
         vername: String,
     },
 
     /// 安装游戏
     Install {
+        /// Minecraft 版本号（如 1.20.1）
         #[arg(value_name = "mc-version-id")]
         version_id: String,
+        /// 本地版本目录名（versions/<名字>）
         #[arg(value_name = "version-name")]
         version_name: String,
         /// 顺便装 Forge
@@ -86,17 +220,20 @@ pub enum Commands {
 
     /// 列出 Minecraft 版本
     ListMc {
+        /// 版本类型，逗号分隔（如 release,snapshot；默认 release）
         #[arg(
             long = "type",
             value_name = "type",
             value_delimiter = ',',
-            default_value = "release"
+            default_value = "release",
+            hide_default_value = true
         )]
         r#type: Vec<String>,
     },
 
     /// 列出 Forge 版本
     ListForge {
+        /// Minecraft 版本号（如 1.20.1）
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
@@ -104,20 +241,24 @@ pub enum Commands {
     /// 列出 NeoForge 版本
     #[command(name = "list-neoforge")]
     ListNeoforge {
+        /// Minecraft 版本号（如 1.20.1）
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
 
     /// 列出 Fabric 版本
     ListFabric {
+        /// Minecraft 版本号（如 1.20.1）
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
 
     /// 在指定版本上安装 Forge
     InstallForge {
+        /// 本地版本目录名（versions/<名字>）
         #[arg(value_name = "version-name")]
         vername: String,
+        /// Forge 版本号
         #[arg(value_name = "forge-version-id")]
         forgever: String,
     },
@@ -125,8 +266,10 @@ pub enum Commands {
     /// 在指定版本上安装 NeoForge
     #[command(name = "install-neoforge")]
     InstallNeoforge {
+        /// 本地版本目录名（versions/<名字>）
         #[arg(value_name = "version-name")]
         vername: String,
+        /// NeoForge 版本号
         #[arg(value_name = "neoforge-version-id")]
         forgever: String,
     },
@@ -170,7 +313,7 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
             // 没有子命令 ⇒ 执行配置里的 `cli.default_command`（默认 `prompt`）
             let default = config.cli.default_command.clone();
             if default.is_empty() {
-                println!("unknown command");
+                println!("未知命令");
                 return Ok(());
             }
             let argv: Vec<OsString> = vec![
@@ -181,12 +324,12 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
                 Ok(parsed) => match parsed.command {
                     Some(command) => dispatch(command, config).await,
                     None => {
-                        println!("unknown command");
+                        println!("未知命令");
                         Ok(())
                     }
                 },
                 Err(_) => {
-                    println!("unknown command");
+                    println!("未知命令");
                     Ok(())
                 }
             }
@@ -281,10 +424,10 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
         Commands::Prompt => prompt_interactive().await,
 
         Commands::Version => {
-            println!("{LAUNCHER_NAME} version {LAUNCHER_VERSION}");
-            println!("build time: {}", env!("DMCL_BUILD_TIME"));
+            println!("{LAUNCHER_NAME} 版本 {LAUNCHER_VERSION}");
+            println!("构建时间：{}", env!("DMCL_BUILD_TIME"));
             println!();
-            println!("thanks: bmclapi");
+            println!("感谢：bmclapi");
             Ok(())
         }
 
@@ -294,7 +437,7 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
         }
 
         Commands::EditConfig => {
-            println!("Tip: edit {}", Config::path().display());
+            println!("提示：编辑 {}", Config::path().display());
             Ok(())
         }
     }
@@ -344,7 +487,7 @@ async fn install_loader(
 
 /// `search-java` —— 扫描并**写回配置**（这是前端才有权做的事）。
 async fn search_java(config: &mut Config) -> Result<()> {
-    println!("find following javas:");
+    println!("找到以下 java：");
     let configs = find_java(DEFAULT_JAVA_ROOTS).await?;
     for (name, path) in &configs {
         println!("{name}: {}", path.display());
@@ -437,5 +580,71 @@ mod tests {
             }
             other => panic!("解析结果不对: {other:?}"),
         }
+    }
+
+    /// 帮助文本里不该再出现 clap 的英文小节标题。
+    #[test]
+    fn help_output_is_chinese() {
+        let root = localized_command();
+
+        let root_help = root.clone().render_long_help().to_string();
+        for english in ["Usage:", "Options:", "Commands:", "Print help"] {
+            assert!(
+                !root_help.contains(english),
+                "根帮助里残留 {english}:\n{root_help}"
+            );
+        }
+        assert!(root_help.contains("用法："));
+        assert!(root_help.contains("打印帮助信息"));
+
+        let install_help = root
+            .find_subcommand("install")
+            .unwrap()
+            .clone()
+            .render_long_help()
+            .to_string();
+        for english in ["Usage:", "Arguments:", "Options:", "Print help"] {
+            assert!(
+                !install_help.contains(english),
+                "install 帮助里残留 {english}:\n{install_help}"
+            );
+        }
+        assert!(install_help.contains("位置参数："));
+        assert!(install_help.contains("Minecraft 版本号"));
+    }
+
+    /// clap 的报错也要是中文。
+    #[test]
+    fn clap_errors_are_translated() {
+        let command = localized_command();
+
+        let err = command
+            .clone()
+            .try_get_matches_from(["dmcl", "install"])
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+        let message = translate_error(&err).expect("应当翻译成中文");
+        assert!(message.contains("缺少必填参数"), "{message}");
+        assert!(message.contains("mc-version-id"), "{message}");
+
+        let err = command
+            .clone()
+            .try_get_matches_from(["dmcl", "--nope"])
+            .unwrap_err();
+        assert!(translate_error(&err).unwrap().contains("不认识的参数"));
+
+        let err = command
+            .clone()
+            .try_get_matches_from(["dmcl", "bogus"])
+            .unwrap_err();
+        assert!(translate_error(&err).unwrap().contains("不认识的命令"));
+
+        // `--help` 走的是"错误"通道，但绝不能被当成报错翻译
+        let err = command
+            .clone()
+            .try_get_matches_from(["dmcl", "--help"])
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        assert!(translate_error(&err).is_none());
     }
 }

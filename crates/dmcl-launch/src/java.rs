@@ -217,7 +217,7 @@ pub async fn select_java(
     let java = JavaOption::probe(path).await?;
     if java.major_version != required_major {
         println!(
-            "warning: 使用了不匹配的 java 版本（需要 {required_major}，实际用 {}）",
+            "警告：使用了不匹配的 java 版本（需要 {required_major}，实际用 {}）",
             java.major_version
         );
     }

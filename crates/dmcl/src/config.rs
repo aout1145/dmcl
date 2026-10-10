@@ -199,7 +199,9 @@ impl Config {
 
     /// `showConfig` —— 人类可读的转储（字段名与 D 版一致）。
     pub fn show(&self) {
-        println!("CONFIG PATH: {}\n", Self::path().display());
+        // 下面这些字段名刻意保持与 dmcl.json 的键一致（它们是配置键，不是文案），
+        // 只有标题行是给人看的说明。
+        println!("配置文件：{}\n", Self::path().display());
         println!("launch.java = {}", self.launch.java);
         println!(
             "launch.java_configs = {{{}}}",

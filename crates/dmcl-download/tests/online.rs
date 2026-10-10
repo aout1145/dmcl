@@ -6,7 +6,9 @@
 
 use std::path::PathBuf;
 
-use dmcl_download::{hash_file, DownloadItem, DownloadOptions, DownloadReport, DownloadTask};
+use dmcl_download::{
+    hash_file, DownloadItem, DownloadOptions, DownloadReport, DownloadTask, HashAlgorithm,
+};
 use dmcl_task::{TaskChain, TaskContext, TaskEvent};
 
 /// 一个小而稳定的官方文件（约 200 KiB 的版本清单）。
@@ -62,14 +64,15 @@ async fn chunked_download_matches_single_stream_byte_for_byte() {
     assert!(execute(&first).await.is_success());
 
     let size = std::fs::metadata(&single).unwrap().len();
-    let sha1 = hash_file(&single).await.unwrap();
+    // 这里特意用 sha256：顺带验证非 sha1 算法在真实下载里也能走通
+    let sha256 = hash_file(&single, HashAlgorithm::Sha256).await.unwrap();
 
     // 强制分块：把阈值和块大小都调小，让一个小文件也真的被切成好几段
     let options = DownloadOptions::default().with_chunking(1024, 4096);
     let second = DownloadTask::new(options).with_item(
         DownloadItem::new(URL, &chunked)
             .with_size(Some(size))
-            .with_sha1(Some(sha1)),
+            .with_sha256(Some(sha256)),
     );
     let report = execute(&second).await;
     assert!(report.is_success(), "{:?}", report.failed);
