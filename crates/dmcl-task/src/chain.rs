@@ -218,13 +218,7 @@ where
                     });
                 }
                 Err(err) => {
-                    // 嵌套链（如 loader 安装链）可能已经加过一模一样的步骤上下文，避免叠加
-                    let ctx = format!("步骤「{}」失败", step.name());
-                    let err = if format!("{err:#}").starts_with(&ctx) {
-                        err
-                    } else {
-                        err.context(ctx)
-                    };
+                    let err = err.context(format!("步骤「{}」失败", step.name()));
                     self.report_failure(index, steps, step.name());
                     return Err(err);
                 }

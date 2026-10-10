@@ -3,8 +3,13 @@
 //! 查询部分（[`fabric_loaders`]、[`forge_versions`] …）直接转调
 //! [`dmcl_mcmeta::DownloadSource`]，把原实现里散落在下载模块里的接口收敛到这里；
 //! "取最新版"的规则也与原实现逐条保持一致（见各函数文档）。
+//!
+//! 安装被拆成多个步骤组成的任务链：Fabric 两步，Forge / NeoForge 五步
+//! （确定版本 → 下载安装器 → 解出安装器内的库 → 运行安装器 → 写版本元数据）。
+//! 步骤之间用一个 `Installer` 值传参，不共享可变状态；每个阶段各自读一次磁盘。
 
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -13,7 +18,7 @@ use dmcl_mcmeta::{
     read_version_json, version_json_path, DownloadSource, FabricLoaderEntry, ForgeVersionEntry,
     InstallProfile, VersionJson,
 };
-use dmcl_task::{task_fn, TaskChain, TaskContext};
+use dmcl_task::{task_fn_io, TaskChain, TaskContext};
 
 use crate::files::download_planned;
 use crate::io::{write_json_safe, write_safe};
@@ -83,8 +88,78 @@ pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) 
 // 安装
 // ---------------------------------------------------------------------------
 
-/// `installFabric` —— Fabric 的自动安装非常简单，比 Forge 简单多了。
+/// 安装 Forge / NeoForge 时在步骤之间传递的中间值。
+struct Installer {
+    /// 安装器对应的加载器版本号。
+    version: String,
+    /// 安装器的下载地址。
+    url: String,
+    /// 安装器文件名。
+    file_name: String,
+    /// 安装器落地的临时路径。
+    path: PathBuf,
+}
+
+/// 安装器临时路径：`<tmp>/dmcl-installer-<label>/<file_name>`。
+fn installer_temp_path(label: &str, file_name: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("dmcl-installer-{label}"))
+        .join(file_name)
+}
+
+fn forge_installer(version: &str) -> Installer {
+    let file_name = format!("forge-{version}-installer.jar");
+    Installer {
+        version: version.to_string(),
+        url: forge_installer_url(version),
+        path: installer_temp_path(version, &file_name),
+        file_name,
+    }
+}
+
+fn neoforge_installer(version: &str) -> Installer {
+    let (url, name) = neoforge_installer_url(version);
+    let file_name = format!("{name}-{version}-installer.jar");
+    Installer {
+        version: version.to_string(),
+        url,
+        path: installer_temp_path(version, &file_name),
+        file_name,
+    }
+}
+
+// --- Fabric ---
+
+/// `installFabric` —— Fabric 的自动安装非常简单，比 Forge 简单多了（薄封装）。
 pub async fn install_fabric(
+    options: &InstallOptions,
+    version_name: &str,
+    mc_version: &str,
+    loader_version: &str,
+) -> Result<()> {
+    write_fabric_version_json(options, version_name, mc_version, loader_version).await
+}
+
+/// 解析 Fabric loader 版本（`requested` 为 `None` 时取最新稳定版）。
+async fn resolve_fabric_version(
+    options: &InstallOptions,
+    mc_version: &str,
+    requested: Option<&str>,
+    ctx: &TaskContext,
+) -> Result<String> {
+    let loader = match requested {
+        Some(loader) => loader.to_string(),
+        None => {
+            ctx.log("查询最新的稳定 Fabric loader");
+            latest_fabric_loader(&options.source, mc_version).await?
+        }
+    };
+    ctx.log(format!("使用 {mc_version}/{loader}"));
+    Ok(loader)
+}
+
+/// 取 Fabric profile，合并进本地版本 JSON 并写盘。
+async fn write_fabric_version_json(
     options: &InstallOptions,
     version_name: &str,
     mc_version: &str,
@@ -103,28 +178,109 @@ pub async fn install_fabric(
     write_json_safe(&path, &mc_json).await
 }
 
-/// `installForge`。
+// --- Forge ---
+
+/// `installForge`（薄封装：顺序跑各阶段）。
 pub async fn install_forge(
     options: &InstallOptions,
     version_name: &str,
     forge_version: &str,
     ctx: &TaskContext,
 ) -> Result<()> {
-    let path = version_json_path(&options.root_path, version_name);
-    let mut mc_json = read_version_json(&path).await?;
-    let libraries = libraries_dir(&options.root_path);
+    let installer = forge_installer(forge_version);
+    download_installer(options, &installer, ctx).await?;
+    extract_forge_libraries(options, forge_version, &installer.path, ctx).await?;
+    run_forge_installer(options, version_name, forge_version, &installer.path, ctx).await?;
+    write_installer_version_json(options, version_name, &installer.path).await
+}
 
-    let installer = fetch_installer(
+/// 解析 Forge 版本（`requested` 为 `None` 时取最新版）。
+async fn resolve_forge_version(
+    options: &InstallOptions,
+    mc_version: &str,
+    requested: Option<&str>,
+    ctx: &TaskContext,
+) -> Result<String> {
+    let version = match requested {
+        Some(version) => version.to_string(),
+        None => {
+            ctx.log("查询最新的 Forge 版本");
+            latest_forge_version(&options.source, mc_version).await?
+        }
+    };
+    ctx.log(format!("使用 Forge {version}"));
+    Ok(version)
+}
+
+// --- NeoForge ---
+
+/// `installNeoForge`（薄封装：顺序跑各阶段）。
+pub async fn install_neoforge(
+    options: &InstallOptions,
+    version_name: &str,
+    forge_version: &str,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let installer = neoforge_installer(forge_version);
+    download_installer(options, &installer, ctx).await?;
+    extract_neoforge_libraries(options, &installer.path, ctx).await?;
+    run_neoforge_installer(options, version_name, forge_version, &installer.path, ctx).await?;
+    write_installer_version_json(options, version_name, &installer.path).await
+}
+
+/// 解析 NeoForge 版本（`requested` 为 `None` 时取最新版）。
+async fn resolve_neoforge_version(
+    options: &InstallOptions,
+    mc_version: &str,
+    requested: Option<&str>,
+    ctx: &TaskContext,
+) -> Result<String> {
+    let version = match requested {
+        Some(version) => version.to_string(),
+        None => {
+            ctx.log("查询最新的 NeoForge 版本");
+            latest_neoforge_version(&options.source, mc_version).await?
+        }
+    };
+    ctx.log(format!("使用 NeoForge {version}"));
+    Ok(version)
+}
+
+// --- 各阶段 ---
+
+/// 下载安装器到临时路径。后续步骤按需重新打开，不把字节流长期攥在手里。
+async fn download_installer(
+    options: &InstallOptions,
+    installer: &Installer,
+    ctx: &TaskContext,
+) -> Result<()> {
+    download_planned(
         options,
-        forge_installer_url(forge_version),
-        format!("forge-{forge_version}-installer.jar"),
-        forge_version,
+        "安装器",
+        vec![PlannedFile {
+            url: installer.url.clone(),
+            save_to: installer.path.clone(),
+            checksum: None,
+            size: None,
+            name: installer.file_name.clone(),
+        }],
         ctx,
     )
-    .await?;
-    let mut zip = open_archive(installer)?;
+    .await
+    .map(|_| ())
+}
 
-    // 解出安装器里自带的 jar
+/// Forge：解出安装器里 `maven/` 下的文件；老版把单个 jar 直接铺进 `libraries/`。
+async fn extract_forge_libraries(
+    options: &InstallOptions,
+    forge_version: &str,
+    installer: &Path,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let libraries = libraries_dir(&options.root_path);
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
+
     if zip_has_entry(&mut zip, "maven/") {
         extract_maven_entries(&mut zip, &libraries, ctx).await?;
     } else if !zip_has_entry(&mut zip, "version.json") {
@@ -138,74 +294,92 @@ pub async fn install_forge(
         write_safe(&target, &bytes).await?;
         ctx.log(format!("解出 {}", base_name(&target)));
     }
-
-    if zip_has_entry(&mut zip, "data/client.lzma") {
-        // 1.13+ 需要跑 processor 生成 forge-client.jar
-        let profile = read_install_profile(&mut zip)?;
-        run_installer_processors(
-            options,
-            version_name,
-            forge_version,
-            &profile,
-            &mut zip,
-            &mc_json,
-            ctx,
-        )
-        .await?;
-    }
-
-    let installer_json = read_installer_version_json(&mut zip)?;
-    mc_json.merge(&installer_json)?;
-    mc_json.extra.remove("_comment_");
-    finish_version_json(&mut mc_json, version_name, true);
-    write_json_safe(&path, &mc_json).await
+    Ok(())
 }
 
-/// `installNeoForge`。
-pub async fn install_neoforge(
+/// NeoForge：解出安装器里 `maven/` 下的文件。
+async fn extract_neoforge_libraries(
     options: &InstallOptions,
-    version_name: &str,
-    forge_version: &str,
+    installer: &Path,
     ctx: &TaskContext,
 ) -> Result<()> {
-    let path = version_json_path(&options.root_path, version_name);
-    let mut mc_json = read_version_json(&path).await?;
     let libraries = libraries_dir(&options.root_path);
-
-    let (url, name) = neoforge_installer_url(forge_version);
-    let installer = fetch_installer(
-        options,
-        url,
-        format!("{name}-{forge_version}-installer.jar"),
-        forge_version,
-        ctx,
-    )
-    .await?;
-    let mut zip = open_archive(installer)?;
-
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
     if zip_has_entry(&mut zip, "maven/") {
         extract_maven_entries(&mut zip, &libraries, ctx).await?;
     }
+    Ok(())
+}
 
-    // 这里没有 Forge 那条 `data/client.lzma` 判断（与原实现一致）
-    let profile = read_install_profile(&mut zip)?;
+/// Forge：1.13+ 跑安装器 processor 生成 forge-client.jar。
+async fn run_forge_installer(
+    options: &InstallOptions,
+    version_name: &str,
+    forge_version: &str,
+    installer: &Path,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
+    if zip_has_entry(&mut zip, "data/client.lzma") {
+        run_processors(options, version_name, forge_version, &mut zip, ctx).await?;
+    }
+    Ok(())
+}
+
+/// NeoForge：总是跑安装器 processor（没有 Forge 那条 `data/client.lzma` 判断）。
+async fn run_neoforge_installer(
+    options: &InstallOptions,
+    version_name: &str,
+    forge_version: &str,
+    installer: &Path,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
+    run_processors(options, version_name, forge_version, &mut zip, ctx).await
+}
+
+/// 打开安装器、读 profile 与本地版本 JSON，跑 processor。
+async fn run_processors(
+    options: &InstallOptions,
+    version_name: &str,
+    loader_label: &str,
+    zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let path = version_json_path(&options.root_path, version_name);
+    let mc_json = read_version_json(&path).await?;
+    let profile = read_install_profile(zip)?;
     run_installer_processors(
         options,
         version_name,
-        forge_version,
+        loader_label,
         &profile,
-        &mut zip,
+        zip,
         &mc_json,
         ctx,
     )
-    .await?;
+    .await
+}
 
+/// 把安装器自带的版本 JSON 合并进本地版本 JSON 并写盘（Forge / NeoForge 相同）。
+async fn write_installer_version_json(
+    options: &InstallOptions,
+    version_name: &str,
+    installer: &Path,
+) -> Result<()> {
+    let path = version_json_path(&options.root_path, version_name);
+    let mut mc_json = read_version_json(&path).await?;
+
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
     let installer_json = read_installer_version_json(&mut zip)?;
     mc_json.merge(&installer_json)?;
     mc_json.extra.remove("_comment_");
-    mc_json.inherits_from = None;
-    mc_json.id = Some(version_name.to_string());
     finish_version_json(&mut mc_json, version_name, true);
+
     write_json_safe(&path, &mc_json).await
 }
 
@@ -220,26 +394,45 @@ pub fn install_fabric_task(
     mc_version: String,
     loader_version: Option<String>,
 ) -> TaskChain<(), ()> {
-    TaskChain::new(format!("安装 Fabric：{version_name}")).then(
-        task_fn("安装 Fabric", move |ctx| {
-            let options = options.clone();
-            let version_name = version_name.clone();
-            let mc_version = mc_version.clone();
-            let loader_version = loader_version.clone();
-            async move {
-                let loader = match loader_version {
-                    Some(loader) => loader,
-                    None => {
-                        ctx.log("查询最新的稳定 Fabric loader");
-                        latest_fabric_loader(&options.source, &mc_version).await?
+    TaskChain::new(format!("安装 Fabric：{version_name}"))
+        .then(
+            task_fn_io("确定 Fabric 版本", {
+                let options = options.clone();
+                let mc_version = mc_version.clone();
+                move |_: (), ctx: TaskContext| {
+                    let options = options.clone();
+                    let mc_version = mc_version.clone();
+                    let loader_version = loader_version.clone();
+                    async move {
+                        resolve_fabric_version(
+                            &options,
+                            &mc_version,
+                            loader_version.as_deref(),
+                            &ctx,
+                        )
+                        .await
                     }
-                };
-                ctx.log(format!("使用 {mc_version}/{loader}"));
-                install_fabric(&options, &version_name, &mc_version, &loader).await
-            }
-        }),
-        "安装 Fabric",
-    )
+                }
+            }),
+            "确定 Fabric 版本",
+        )
+        .then(
+            task_fn_io("获取并写入版本元数据", {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                let mc_version = mc_version.clone();
+                move |loader: String, _ctx: TaskContext| {
+                    let options = options.clone();
+                    let version_name = version_name.clone();
+                    let mc_version = mc_version.clone();
+                    async move {
+                        write_fabric_version_json(&options, &version_name, &mc_version, &loader)
+                            .await
+                    }
+                }
+            }),
+            "获取并写入版本元数据",
+        )
 }
 
 /// 安装 Forge 的任务链（`forge_version = None` 时自动取最新版）。
@@ -249,26 +442,97 @@ pub fn install_forge_task(
     mc_version: String,
     forge_version: Option<String>,
 ) -> TaskChain<(), ()> {
-    TaskChain::new(format!("安装 Forge：{version_name}")).then(
-        task_fn("安装 Forge", move |ctx| {
-            let options = options.clone();
-            let version_name = version_name.clone();
-            let mc_version = mc_version.clone();
-            let forge_version = forge_version.clone();
-            async move {
-                let version = match forge_version {
-                    Some(version) => version,
-                    None => {
-                        ctx.log("查询最新的 Forge 版本");
-                        latest_forge_version(&options.source, &mc_version).await?
+    TaskChain::new(format!("安装 Forge：{version_name}"))
+        .then(
+            task_fn_io("确定 Forge 版本", {
+                let options = options.clone();
+                let mc_version = mc_version.clone();
+                move |_: (), ctx: TaskContext| {
+                    let options = options.clone();
+                    let mc_version = mc_version.clone();
+                    let forge_version = forge_version.clone();
+                    async move {
+                        let version = resolve_forge_version(
+                            &options,
+                            &mc_version,
+                            forge_version.as_deref(),
+                            &ctx,
+                        )
+                        .await?;
+                        Ok(forge_installer(&version))
                     }
-                };
-                ctx.log(format!("使用 Forge {version}"));
-                install_forge(&options, &version_name, &version, &ctx).await
-            }
-        }),
-        "安装 Forge",
-    )
+                }
+            }),
+            "确定 Forge 版本",
+        )
+        .then(
+            task_fn_io("下载 Forge 安装器", {
+                let options = options.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    async move {
+                        download_installer(&options, &installer, &ctx).await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "下载 Forge 安装器",
+        )
+        .then(
+            task_fn_io("解出安装器内的库", {
+                let options = options.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    async move {
+                        extract_forge_libraries(
+                            &options,
+                            &installer.version,
+                            &installer.path,
+                            &ctx,
+                        )
+                        .await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "解出安装器内的库",
+        )
+        .then(
+            task_fn_io("运行安装器", {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    let version_name = version_name.clone();
+                    async move {
+                        run_forge_installer(
+                            &options,
+                            &version_name,
+                            &installer.version,
+                            &installer.path,
+                            &ctx,
+                        )
+                        .await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "运行安装器",
+        )
+        .then(
+            task_fn_io("写入版本元数据", {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                move |installer: Installer, _ctx: TaskContext| {
+                    let options = options.clone();
+                    let version_name = version_name.clone();
+                    async move {
+                        write_installer_version_json(&options, &version_name, &installer.path).await
+                    }
+                }
+            }),
+            "写入版本元数据",
+        )
 }
 
 /// 安装 NeoForge 的任务链（`forge_version = None` 时自动取最新版）。
@@ -278,62 +542,101 @@ pub fn install_neoforge_task(
     mc_version: String,
     forge_version: Option<String>,
 ) -> TaskChain<(), ()> {
-    TaskChain::new(format!("安装 NeoForge：{version_name}")).then(
-        task_fn("安装 NeoForge", move |ctx| {
-            let options = options.clone();
-            let version_name = version_name.clone();
-            let mc_version = mc_version.clone();
-            let forge_version = forge_version.clone();
-            async move {
-                let version = match forge_version {
-                    Some(version) => version,
-                    None => {
-                        ctx.log("查询最新的 NeoForge 版本");
-                        latest_neoforge_version(&options.source, &mc_version).await?
+    TaskChain::new(format!("安装 NeoForge：{version_name}"))
+        .then(
+            task_fn_io("确定 NeoForge 版本", {
+                let options = options.clone();
+                let mc_version = mc_version.clone();
+                move |_: (), ctx: TaskContext| {
+                    let options = options.clone();
+                    let mc_version = mc_version.clone();
+                    let forge_version = forge_version.clone();
+                    async move {
+                        let version = resolve_neoforge_version(
+                            &options,
+                            &mc_version,
+                            forge_version.as_deref(),
+                            &ctx,
+                        )
+                        .await?;
+                        Ok(neoforge_installer(&version))
                     }
-                };
-                ctx.log(format!("使用 NeoForge {version}"));
-                install_neoforge(&options, &version_name, &version, &ctx).await
-            }
-        }),
-        "安装 NeoForge",
-    )
+                }
+            }),
+            "确定 NeoForge 版本",
+        )
+        .then(
+            task_fn_io("下载 NeoForge 安装器", {
+                let options = options.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    async move {
+                        download_installer(&options, &installer, &ctx).await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "下载 NeoForge 安装器",
+        )
+        .then(
+            task_fn_io("解出安装器内的库", {
+                let options = options.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    async move {
+                        extract_neoforge_libraries(&options, &installer.path, &ctx).await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "解出安装器内的库",
+        )
+        .then(
+            task_fn_io("运行安装器", {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                move |installer: Installer, ctx: TaskContext| {
+                    let options = options.clone();
+                    let version_name = version_name.clone();
+                    async move {
+                        run_neoforge_installer(
+                            &options,
+                            &version_name,
+                            &installer.version,
+                            &installer.path,
+                            &ctx,
+                        )
+                        .await?;
+                        Ok(installer)
+                    }
+                }
+            }),
+            "运行安装器",
+        )
+        .then(
+            task_fn_io("写入版本元数据", {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                move |installer: Installer, _ctx: TaskContext| {
+                    let options = options.clone();
+                    let version_name = version_name.clone();
+                    async move {
+                        write_installer_version_json(&options, &version_name, &installer.path).await
+                    }
+                }
+            }),
+            "写入版本元数据",
+        )
 }
 
 // ---------------------------------------------------------------------------
 // 内部
 // ---------------------------------------------------------------------------
 
-/// 下载安装器到临时目录，返回其字节。
-async fn fetch_installer(
-    options: &InstallOptions,
-    url: String,
-    file_name: String,
-    loader_label: &str,
-    ctx: &TaskContext,
-) -> Result<Vec<u8>> {
-    let scratch = std::env::temp_dir().join(format!("dmcl-installer-{loader_label}"));
-    let path = scratch.join(&file_name);
-    download_planned(
-        options,
-        "安装器",
-        vec![PlannedFile {
-            url,
-            save_to: path.clone(),
-            checksum: None,
-            size: None,
-            name: file_name,
-        }],
-        ctx,
-    )
-    .await?;
-    Ok(tokio::fs::read(&path).await?)
-}
-
 /// 安装包里 `maven/` 下的文件直接铺到 `libraries/`。
 async fn extract_maven_entries(
     zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
-    libraries: &std::path::Path,
+    libraries: &Path,
     ctx: &TaskContext,
 ) -> Result<()> {
     let count = zip.len();
@@ -394,4 +697,61 @@ pub async fn version_is_launchable(options: &InstallOptions, version_name: &str)
         return Err(anyhow!("{version_name} 的版本 JSON 里没有 mainClass"));
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmcl_mcmeta::Mirror;
+
+    fn options() -> Arc<InstallOptions> {
+        Arc::new(InstallOptions::new(
+            "/tmp/.minecraft",
+            DownloadSource::new(Mirror::Official),
+        ))
+    }
+
+    #[test]
+    fn forge_install_is_five_named_steps() {
+        let chain = install_forge_task(
+            options(),
+            "1.20.1".into(),
+            "1.20.1".into(),
+            Some("47.2.0".into()),
+        );
+        let names: Vec<_> = chain.step_names().collect();
+        assert_eq!(
+            names,
+            [
+                "确定 Forge 版本",
+                "下载 Forge 安装器",
+                "解出安装器内的库",
+                "运行安装器",
+                "写入版本元数据",
+            ]
+        );
+    }
+
+    #[test]
+    fn neoforge_install_is_five_named_steps() {
+        let chain = install_neoforge_task(
+            options(),
+            "1.20.1".into(),
+            "1.20.1".into(),
+            Some("47.1.0".into()),
+        );
+        assert_eq!(chain.step_names().count(), 5);
+    }
+
+    #[test]
+    fn fabric_install_is_two_named_steps() {
+        let chain = install_fabric_task(
+            options(),
+            "1.20.1".into(),
+            "1.20.1".into(),
+            Some("0.15.0".into()),
+        );
+        let names: Vec<_> = chain.step_names().collect();
+        assert_eq!(names, ["确定 Fabric 版本", "获取并写入版本元数据"]);
+    }
 }
