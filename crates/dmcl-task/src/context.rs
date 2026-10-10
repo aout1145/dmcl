@@ -127,8 +127,8 @@ impl TaskContext {
     ///
     /// ```no_run
     /// # use dmcl_task::TaskContext;
-    /// # async fn run(task: &dyn dmcl_task::Task) -> anyhow::Result<()> {
-    /// task.run(TaskContext::detached("安装")).await
+    /// # async fn run(task: &dyn dmcl_task::Task<(), ()>) -> anyhow::Result<()> {
+    /// task.run((), TaskContext::detached("安装")).await
     /// # }
     /// ```
     ///

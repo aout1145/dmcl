@@ -128,12 +128,12 @@ impl CommandTask {
     }
 }
 
-impl Task for CommandTask {
+impl Task<(), ()> for CommandTask {
     fn name(&self) -> &str {
         &self.name
     }
 
-    fn run<'a>(&'a self, ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
+    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             ctx.check_cancelled()?;
 
@@ -240,7 +240,7 @@ mod tests {
         let chain =
             TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("echo hello"), "echo");
         let mut rx = chain.subscribe();
-        let handle = tokio::spawn(async move { chain.run().await });
+        let handle = tokio::spawn(async move { chain.run(()).await });
 
         let mut messages = Vec::new();
         while let Ok(event) = rx.recv().await {
@@ -262,7 +262,7 @@ mod tests {
                 .named("失败命令"),
             "失败命令",
         );
-        let err = chain.run().await.unwrap_err();
+        let err = chain.run(()).await.unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("失败命令"), "{text}");
     }
@@ -274,7 +274,7 @@ mod tests {
             CommandTask::new("/definitely/not/here").arg("--x"),
             "坏命令",
         );
-        let err = chain.run().await.unwrap_err();
+        let err = chain.run(()).await.unwrap_err();
         assert!(format!("{err:#}").contains("/definitely/not/here --x"));
     }
 
@@ -284,7 +284,7 @@ mod tests {
         let chain =
             TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("sleep 30"), "长命令");
         let cancel = chain.cancel_handle();
-        let handle = tokio::spawn(async move { chain.run().await });
+        let handle = tokio::spawn(async move { chain.run(()).await });
 
         tokio::time::sleep(Duration::from_millis(200)).await;
         cancel.cancel();
@@ -304,6 +304,6 @@ mod tests {
             CommandTask::new("sh").arg("-c").arg("true").inherit_stdio(),
             "true",
         );
-        chain.run().await.unwrap();
+        chain.run(()).await.unwrap();
     }
 }
