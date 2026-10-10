@@ -228,13 +228,12 @@ fn tail_text(tail: &Mutex<VecDeque<String>>) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::chain::TaskChain;
     use std::time::Duration;
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn captured_output_becomes_logs() {
         let chain =
@@ -252,7 +251,6 @@ mod tests {
         assert!(messages.iter().any(|line| line == "hello"), "{messages:?}");
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error() {
         let chain = TaskChain::new("run").then(
@@ -267,7 +265,6 @@ mod tests {
         assert!(text.contains("失败命令"), "{text}");
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_missing_program_is_reported_with_its_command_line() {
         let chain = TaskChain::new("run").then(
@@ -278,7 +275,6 @@ mod tests {
         assert!(format!("{err:#}").contains("/definitely/not/here --x"));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn cancelling_kills_the_child() {
         let chain =
@@ -297,7 +293,6 @@ mod tests {
         assert!(err.downcast_ref::<Cancelled>().is_some());
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn inherit_mode_just_waits() {
         let chain = TaskChain::new("run").then(
