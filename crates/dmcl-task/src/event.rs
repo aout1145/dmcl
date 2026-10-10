@@ -125,7 +125,7 @@ mod tests {
             progress: Progress::new(1, Some(2), "f.jar"),
         };
         assert_eq!(progress.progress().unwrap().current, 1);
-        assert_eq!(progress.to_string(), "[1/1] x:  50.0% (1 B / 2 B) f.jar");
+        assert_eq!(progress.to_string(), "[1/1] x: 50.0% (1 B / 2 B) f.jar");
 
         assert!(TaskEvent::Finished { name: "x".into() }
             .progress()

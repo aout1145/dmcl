@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use dmcl_task::TaskChain;
 
-use crate::files::game_files_task;
+use crate::files::{client_jar_task, game_files_task};
 use crate::loader::{install_fabric_task, install_forge_task, install_neoforge_task};
 use crate::options::InstallOptions;
 use crate::vanilla::vanilla_metadata_task;
@@ -134,20 +134,24 @@ impl InstallSpec {
     }
 }
 
-/// 完整的安装链：原版元数据 → 各加载器 → 游戏文件。
+/// 完整的安装链：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
 ///
-/// 步骤划分与原来的 CLI 一致：
-/// `download_vanilla` → `install_forge` / `install_neoforge` / `install_fabric` →
-/// `download_game_files`。
+/// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
+/// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
 pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain {
-    let mut chain = TaskChain::new(format!("安装 {}", spec.version_name)).then(
-        vanilla_metadata_task(
-            options.clone(),
-            spec.version_id.clone(),
-            spec.version_name.clone(),
-        ),
-        "获取原版元数据",
-    );
+    let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
+        .then(
+            vanilla_metadata_task(
+                options.clone(),
+                spec.version_id.clone(),
+                spec.version_name.clone(),
+            ),
+            "获取原版元数据",
+        )
+        .then(
+            client_jar_task(options.clone(), spec.version_name.clone()),
+            "下载客户端 jar",
+        );
 
     for request in &spec.loaders {
         chain = chain.then(
@@ -168,15 +172,23 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
 
 /// 在**已有**的版本上装一个加载器，然后补齐文件。
 ///
-/// 对应原来的 `install-forge` / `install-neoforge` 命令。
+/// 对应原来的 `install-forge` / `install-neoforge` 命令。客户端 jar 同样先
+/// 确保就位（如果版本已经装过，这一步会被"已是最新"跳过）。
 pub fn install_loader_task(
     options: Arc<InstallOptions>,
     version_name: String,
     mc_version: String,
     request: LoaderRequest,
 ) -> TaskChain {
-    request
-        .task(options.clone(), version_name.clone(), mc_version)
+    TaskChain::new(format!("安装 {}", request.kind.display_name()))
+        .then(
+            client_jar_task(options.clone(), version_name.clone()),
+            "下载客户端 jar",
+        )
+        .then(
+            request.task(options.clone(), version_name.clone(), mc_version),
+            format!("安装 {}", request.kind.display_name()),
+        )
         .then(game_files_task(options, version_name), "下载游戏文件")
 }
 
@@ -209,7 +221,16 @@ mod tests {
         let spec = InstallSpec::new("1.20.1", "1.20.1").with_fabric(None);
         let chain = install_task(options(), spec);
         let steps: Vec<&str> = chain.step_names().collect();
-        assert_eq!(steps, vec!["获取原版元数据", "安装 Fabric", "下载游戏文件"]);
+        // 客户端 jar 必须先于加载器：Forge/NeoForge 的 processor 要读它
+        assert_eq!(
+            steps,
+            vec![
+                "获取原版元数据",
+                "下载客户端 jar",
+                "安装 Fabric",
+                "下载游戏文件"
+            ]
+        );
         assert_eq!(chain.name(), "安装 1.20.1");
     }
 
@@ -222,6 +243,6 @@ mod tests {
             LoaderRequest::version(LoaderKind::Forge, "47.2.0"),
         );
         let steps: Vec<&str> = chain.step_names().collect();
-        assert_eq!(steps, vec!["安装 Forge", "下载游戏文件"]);
+        assert_eq!(steps, vec!["下载客户端 jar", "安装 Forge", "下载游戏文件"]);
     }
 }

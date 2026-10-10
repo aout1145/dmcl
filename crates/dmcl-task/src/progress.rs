@@ -53,7 +53,7 @@ impl fmt::Display for Progress {
         if let Some(percent) = self.percent() {
             write!(
                 f,
-                "{percent:>5.1}% ({} / {})",
+                "{percent:.1}% ({} / {})",
                 human_bytes(self.current),
                 human_bytes(self.total.unwrap_or(0))
             )?;
@@ -117,7 +117,7 @@ mod tests {
     fn display_combines_percent_and_message() {
         assert_eq!(
             Progress::new(512, Some(1024), "a.jar").to_string(),
-            " 50.0% (512 B / 1.0 KiB) a.jar"
+            "50.0% (512 B / 1.0 KiB) a.jar"
         );
         // 纯状态：不要出现 "(0 B)"
         assert_eq!(Progress::status("scanning").to_string(), "scanning");
