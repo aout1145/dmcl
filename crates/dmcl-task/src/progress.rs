@@ -50,17 +50,27 @@ impl Progress {
 
 impl fmt::Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (self.percent(), self.total) {
-            (Some(percent), Some(total)) => write!(
+        if let Some(percent) = self.percent() {
+            write!(
                 f,
                 "{percent:>5.1}% ({} / {})",
                 human_bytes(self.current),
-                human_bytes(total)
-            )?,
-            _ => write!(f, "({})", human_bytes(self.current))?,
-        }
-        if !self.message.is_empty() {
-            write!(f, " {}", self.message)?;
+                human_bytes(self.total.unwrap_or(0))
+            )?;
+            if !self.message.is_empty() {
+                write!(f, " {}", self.message)?;
+            }
+        } else if self.current > 0 {
+            // 有字节数但总量未知
+            write!(f, "({})", human_bytes(self.current))?;
+            if !self.message.is_empty() {
+                write!(f, " {}", self.message)?;
+            }
+        } else if self.message.is_empty() {
+            write!(f, "…")?;
+        } else {
+            // 纯状态：只要文字，不带没意义的 "(0 B)"
+            write!(f, "{}", self.message)?;
         }
         Ok(())
     }
@@ -109,6 +119,10 @@ mod tests {
             Progress::new(512, Some(1024), "a.jar").to_string(),
             " 50.0% (512 B / 1.0 KiB) a.jar"
         );
-        assert_eq!(Progress::status("scanning").to_string(), "(0 B) scanning");
+        // 纯状态：不要出现 "(0 B)"
+        assert_eq!(Progress::status("scanning").to_string(), "scanning");
+        // 有字节数但总量未知
+        assert_eq!(Progress::new(2048, None, "x").to_string(), "(2.0 KiB) x");
+        assert_eq!(Progress::status("").to_string(), "…");
     }
 }
