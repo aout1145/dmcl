@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 dmcl-task.workspace = true
-dmcl-mcmeta.workspace = true
+dmcl-mcmeta = { workspace = true, features = ["clap"] }
 dmcl-download.workspace = true
 dmcl-install.workspace = true
 dmcl-launch.workspace = true

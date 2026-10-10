@@ -1,34 +1,30 @@
-//! Interactive prompt (was `dmcl.cli.prompt`).
+//! 交互式菜单（原 `dmcl.cli.prompt`）。
 //!
-//! The original implemented its own terminal TUI: raw `getch()`, manual ANSI
-//! screen clearing and hand-built USAGE strings. Here [`dialoguer`] provides
-//! the menu / input widgets (and, through its re-exported [`console`] crate,
-//! terminal control), while `clap`'s introspection provides the command and
-//! parameter metadata — nothing is hand-rolled any more.
+//! 原实现自己写了一套终端界面：原生 `getch()`、手搓 ANSI 清屏、手拼 USAGE 字符串。
+//! 这里由 [`dialoguer`] 提供菜单与输入（终端控制则用它再导出的 `console`），
+//! 命令与参数元数据则由 `clap` 的内省给出 —— 一行手写界面代码都没有了。
 //!
-//! Behaviour is preserved: a loop showing the commands, arrow/`W`/`S` + enter
-//! selection, per-parameter prompting (defaults shown, `y/N` for flags), then
-//! the selected command is re-executed through the launcher binary itself.
+//! 行为保持不变：循环展示命令，回车选择，逐参数提问（显示默认值，开关用 `y/N`），
+//! 然后通过启动器自己重新执行选中的命令。
 
 use anyhow::Result;
 use clap::CommandFactory;
 use dialoguer::console::Term;
 use dialoguer::{Confirm, Input, Select};
 
-use crate::utils::escape_shell_command;
+use dmcl_launch::escape_shell_command;
 
 use super::Cli;
 
-/// Arguments that are global and therefore not worth prompting for.
+/// 全局参数，不值得逐个提问。
 const SKIPPED_ARGS: &[&str] = &["help", "java", "mirror", "version"];
 
-/// `clrscr()` — delegated to the terminal crate instead of a literal ANSI
-/// escape sequence.
+/// `clrscr()` —— 交给终端库，不再手写 ANSI 转义。
 fn clear_screen() {
     let _ = Term::stdout().clear_screen();
 }
 
-/// `prompt` — the interactive command browser.
+/// `prompt` —— 交互式命令浏览器。
 pub async fn prompt_interactive() -> Result<()> {
     loop {
         clear_screen();
@@ -36,7 +32,7 @@ pub async fn prompt_interactive() -> Result<()> {
         let root = Cli::command();
         let subcommands: Vec<clap::Command> = root
             .get_subcommands()
-            .filter(|s| s.get_name() != "prompt" && s.get_name() != "help")
+            .filter(|sub| sub.get_name() != "prompt" && sub.get_name() != "help")
             .cloned()
             .collect();
         if subcommands.is_empty() {
@@ -46,16 +42,18 @@ pub async fn prompt_interactive() -> Result<()> {
 
         let width = subcommands
             .iter()
-            .map(|s| s.get_name().len())
+            .map(|sub| sub.get_name().len())
             .max()
             .unwrap_or(0);
         let items: Vec<String> = subcommands
             .iter()
-            .map(|s| {
+            .map(|sub| {
                 format!(
                     "{:<width$}  {}",
-                    s.get_name(),
-                    s.get_about().map(|a| a.to_string()).unwrap_or_default()
+                    sub.get_name(),
+                    sub.get_about()
+                        .map(|about| about.to_string())
+                        .unwrap_or_default()
                 )
             })
             .collect();
@@ -66,7 +64,7 @@ pub async fn prompt_interactive() -> Result<()> {
             .default(0)
             .interact_opt()?;
         let Some(index) = selection else {
-            // Esc ⇒ leave the prompt.
+            // Esc ⇒ 退出菜单
             return Ok(());
         };
 
@@ -84,7 +82,7 @@ pub async fn prompt_interactive() -> Result<()> {
                 let default = arg
                     .get_default_values()
                     .first()
-                    .map(|v| v.to_string_lossy().into_owned())
+                    .map(|value| value.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let label = if default.is_empty() {
                     id.to_string()
@@ -101,7 +99,7 @@ pub async fn prompt_interactive() -> Result<()> {
                     None => argv.push(value),
                 }
             } else {
-                // bool flag
+                // 布尔开关
                 let yes = Confirm::new()
                     .with_prompt(format!("{id}?"))
                     .default(false)
@@ -117,8 +115,7 @@ pub async fn prompt_interactive() -> Result<()> {
         clear_screen();
         println!("Running: {}", escape_shell_command(&argv));
 
-        // Re-run ourselves with the assembled arguments, exactly like the
-        // original `spawnProcess([thisExePath(), cmd.name, ...])`.
+        // 用拼好的参数重新执行自己，与原 `spawnProcess([thisExePath(), cmd.name, ...])` 一致
         let exe = std::env::current_exe()?;
         let _status = tokio::process::Command::new(exe)
             .args(&argv)

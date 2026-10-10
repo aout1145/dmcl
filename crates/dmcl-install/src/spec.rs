@@ -175,17 +175,9 @@ pub fn install_loader_task(
     mc_version: String,
     request: LoaderRequest,
 ) -> TaskChain {
-    let kind = request.kind;
     request
         .task(options.clone(), version_name.clone(), mc_version)
         .then(game_files_task(options, version_name), "下载游戏文件")
-        .then(
-            dmcl_task::task_fn("加载器安装完成", move |ctx| async move {
-                ctx.status(format!("{kind} 安装完成"));
-                Ok(())
-            }),
-            "完成",
-        )
 }
 
 #[cfg(test)]
@@ -230,6 +222,6 @@ mod tests {
             LoaderRequest::version(LoaderKind::Forge, "47.2.0"),
         );
         let steps: Vec<&str> = chain.step_names().collect();
-        assert_eq!(steps, vec!["安装 Forge", "下载游戏文件", "完成"]);
+        assert_eq!(steps, vec!["安装 Forge", "下载游戏文件"]);
     }
 }

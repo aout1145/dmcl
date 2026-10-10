@@ -62,11 +62,11 @@ impl VersionManifest {
 
     /// 按 `type` 过滤（`list-mc --type=release,snapshot`）。
     ///
-    /// 保持"原样顺序"，由调用者决定是否倒序输出。
+    /// 保持清单原有的"新到旧"顺序，调用者想按"旧到新"输出就自己 `.rev()`。
     pub fn filter_kinds<'a>(
         &'a self,
         kinds: &'a [String],
-    ) -> impl Iterator<Item = &'a VersionManifestEntry> + 'a {
+    ) -> impl DoubleEndedIterator<Item = &'a VersionManifestEntry> + 'a {
         self.versions
             .iter()
             .filter(move |ver| kinds.iter().any(|kind| kind == &ver.kind))
