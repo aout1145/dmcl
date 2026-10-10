@@ -1,0 +1,57 @@
+[package]
+name = "dmcl"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-or-later"
+description = "An unofficial Minecraft launcher written in Rust (migrated from the original D implementation)."
+authors = ["a_out_"]
+
+# The whole launcher lives in a library crate so that additional front-ends
+# (a future GUI, a daemon, tests, ...) can reuse the exact same core logic
+# without going through the CLI.
+[lib]
+name = "dmcl"
+path = "src/lib.rs"
+
+# The CLI is only one of the possible front-ends of the library.
+[[bin]]
+name = "dmcl"
+path = "src/main.rs"
+
+[dependencies]
+# async runtime + async io / process / fs / sync primitives
+tokio = { version = "1", features = ["full"] }
+# json: typed (de)serialisation of the Minecraft documents
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# async http client (used for every network access)
+reqwest = "0.12"
+# crypto: sha1 sums of the Minecraft metadata
+sha1 = "0.10"
+# sha1 digest -> hex string (replaces the hand written formatter)
+hex = "0.4"
+# zip extraction (jar / installer handling)
+zip = { version = "4", default-features = false, features = ["deflate"] }
+# lexical path normalisation (`a/./b/../c` -> `a/c`)
+path-clean = "1"
+# recursive directory walking (java discovery)
+walkdir = "2"
+# offline account uuid (name based, sha1)
+uuid = "1"
+# platform config directory (%APPDATA% / $XDG_CONFIG_HOME)
+dirs = "6"
+# error handling
+anyhow = "1"
+# cli argument parsing
+clap = { version = "4", features = ["derive"] }
+# interactive prompt + terminal control (replaces the hand written TUI)
+dialoguer = "0.11"
+# posix quoting for the "command: ..." echo line
+shell-words = "1"
+# tolerant version comparison for maven coordinates ("1.20.1-47.2.0" > "1.20.1")
+version-compare = "0.2"
+
+[profile.release]
+lto = true
+strip = true
