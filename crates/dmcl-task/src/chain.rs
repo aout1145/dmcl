@@ -192,9 +192,40 @@ impl Task for TaskChain {
         &self.name
     }
 
-    fn run<'a>(&'a self, _ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
-        // 子链自带事件流，内部进度通过自己的通道汇报；父链只需等待结果。
-        Box::pin(async move { TaskChain::run(self).await })
+    /// 把整条子链当成一个步骤来跑。
+    ///
+    /// 子链有自己的事件通道，这里会把它的事件**转发**到父上下文，
+    /// 所以"链套链"时父链的订阅者仍然能看到每一步的进度。
+    fn run<'a>(&'a self, ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let mut rx = self.events.subscribe();
+            let mut closed = false;
+            let running = TaskChain::run(self);
+            tokio::pin!(running);
+
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut running => {
+                        while let Ok(event) = rx.try_recv() {
+                            forward_progress(&ctx, event);
+                        }
+                        return result;
+                    }
+                    event = rx.recv(), if !closed => match event {
+                        Ok(event) => forward_progress(&ctx, event),
+                        Err(_) => closed = true,
+                    },
+                }
+            }
+        })
+    }
+}
+
+/// 只转发进度事件：链路结构（开始 / 结束）由父链自己产生。
+fn forward_progress(ctx: &TaskContext, event: TaskEvent) {
+    if let TaskEvent::Progress { name, progress, .. } = event {
+        ctx.child(name).report(progress);
     }
 }
 
@@ -314,6 +345,40 @@ mod tests {
         chain.cancel_handle().cancel();
         let err = chain.run().await.unwrap_err();
         assert!(err.downcast_ref::<crate::context::Cancelled>().is_some());
+    }
+
+    #[tokio::test]
+    async fn nested_chains_forward_their_progress_to_the_parent() {
+        let inner = TaskChain::new("子链").then(
+            task_fn("下载", |ctx| async move {
+                ctx.progress(1, Some(2), "a.jar");
+                Ok(())
+            }),
+            "下载",
+        );
+        let outer = TaskChain::new("父链").then(inner, "子任务");
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let collected = events.clone();
+        outer
+            .run_with(move |event| collected.lock().unwrap().push(event))
+            .await
+            .unwrap();
+
+        let events = events.lock().unwrap();
+        // 子链里的进度必须出现在父链的事件流里，且带上子步骤的名字
+        let progress: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                TaskEvent::Progress { name, progress, .. } => {
+                    Some((name.clone(), progress.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(progress.len(), 1, "{events:?}");
+        assert_eq!(progress[0].0, "下载");
+        assert_eq!(progress[0].1.current, 1);
     }
 
     #[tokio::test]

@@ -13,6 +13,7 @@ dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
 
 tokio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
 path-clean.workspace = true

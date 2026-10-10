@@ -354,6 +354,7 @@ dependencies = [
  "dmcl-mcmeta",
  "dmcl-task",
  "path-clean",
+ "serde",
  "serde_json",
  "tokio",
  "zip",
