@@ -366,10 +366,12 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "dmcl-download",
+ "dmcl-install",
  "dmcl-mcmeta",
  "dmcl-task",
  "hex",
  "serde",
+ "serde_json",
  "sha1",
  "shell-words",
  "tokio",

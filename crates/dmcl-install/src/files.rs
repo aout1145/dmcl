@@ -50,7 +50,7 @@ pub async fn ensure_asset_index(
     json: &VersionJson,
     ctx: &TaskContext,
 ) -> Result<Option<AssetIndexFile>> {
-    let Some(planned) = plan_assets_index(options, json) else {
+    let Some(planned) = plan_assets_index(&options.plan(), json) else {
         return Ok(None);
     };
     let path = planned.save_to.clone();
@@ -74,12 +74,12 @@ pub async fn download_game_files(
     let index = ensure_asset_index(options, &json, ctx).await?;
 
     let mut planned = Vec::new();
-    if let Some(client) = plan_client_jar(options, &json, version_name) {
+    if let Some(client) = plan_client_jar(&options.plan(), &json, version_name) {
         planned.push(client);
     }
-    planned.extend(plan_libraries(options, &json));
+    planned.extend(plan_libraries(&options.plan(), &json));
     if let Some(index) = &index {
-        planned.extend(plan_asset_objects(options, &json, index));
+        planned.extend(plan_asset_objects(&options.plan(), &json, index));
     }
 
     download_planned(options, "游戏文件", planned, ctx).await
@@ -97,7 +97,7 @@ pub async fn extract_natives(
     let target = natives_dir(version_name);
     let mut extracted = 0;
 
-    for (jar, name) in plan_natives(options, &json) {
+    for (jar, name) in plan_natives(&options.plan(), &json) {
         if !jar.is_file() {
             // 库文件缺失时启动流程会在完整性检查里发现，这里不当作错误
             ctx.status(format!("跳过缺失的 natives: {name}"));
@@ -155,10 +155,10 @@ fn libraries_step(
         async move {
             let json = options.version_json(&version_name).await?;
             let mut planned = Vec::new();
-            if let Some(client) = plan_client_jar(&options, &json, &version_name) {
+            if let Some(client) = plan_client_jar(&options.plan(), &json, &version_name) {
                 planned.push(client);
             }
-            planned.extend(plan_libraries(&options, &json));
+            planned.extend(plan_libraries(&options.plan(), &json));
             download_planned(&options, "库文件", planned, &ctx).await?;
             Ok(())
         }
@@ -178,7 +178,7 @@ fn assets_step(
             let Some(index) = ensure_asset_index(&options, &json, &ctx).await? else {
                 return Ok(());
             };
-            let planned = plan_asset_objects(&options, &json, &index);
+            let planned = plan_asset_objects(&options.plan(), &json, &index);
             download_planned(&options, "资源文件", planned, &ctx).await?;
             Ok(())
         }

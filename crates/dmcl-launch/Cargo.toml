@@ -11,9 +11,11 @@ authors.workspace = true
 dmcl-task.workspace = true
 dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
+dmcl-install.workspace = true
 
 tokio.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha1.workspace = true
 hex.workspace = true
 uuid.workspace = true

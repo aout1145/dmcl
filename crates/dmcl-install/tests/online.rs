@@ -71,7 +71,7 @@ async fn planning_holds_for_a_real_version_json() {
         .expect("download_vanilla");
 
     let json = options.version_json(VERSION).await.unwrap();
-    let planned = plan_libraries(&options, &json);
+    let planned = plan_libraries(&options.plan(), &json);
     assert!(!planned.is_empty());
 
     for file in &planned {
@@ -87,7 +87,7 @@ async fn planning_holds_for_a_real_version_json() {
         // 1.7.10 有 linux natives，必须规划到解压清单里
     }
     // 客户端 jar 也在计划里
-    let client = dmcl_install::plan_client_jar(&options, &json, VERSION).unwrap();
+    let client = dmcl_install::plan_client_jar(&options.plan(), &json, VERSION).unwrap();
     assert!(client.into_item(&options).url.starts_with("https://"));
 }
 
@@ -102,7 +102,7 @@ async fn a_few_planned_libraries_really_download() {
 
     let json = options.version_json(VERSION).await.unwrap();
     // 挑几个小文件，避免测试太重
-    let small: Vec<_> = plan_libraries(&options, &json)
+    let small: Vec<_> = plan_libraries(&options.plan(), &json)
         .into_iter()
         .take(3)
         .collect();

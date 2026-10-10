@@ -18,6 +18,45 @@ use dmcl_mcmeta::{
 
 use crate::options::InstallOptions;
 
+/// 规划一个版本需要哪些文件时，只依赖这几项配置。
+///
+/// 单独拆出来是为了让**别的 crate 也能复用规划逻辑**（例如 `dmcl-launch` 的完整性
+/// 检查），而不必携带下载源、java 提供者这些安装才用得上的东西。
+#[derive(Debug, Clone)]
+pub struct PlanContext {
+    /// `.minecraft` 根目录。
+    pub root_path: PathBuf,
+    /// 是否跳过 `*.ogg` 资源。
+    pub skip_music: bool,
+    /// natives 分类器里 `${arch}` 的取值。
+    pub natives_arch: u32,
+}
+
+impl PlanContext {
+    pub fn new(root_path: impl Into<PathBuf>) -> Self {
+        Self {
+            root_path: root_path.into(),
+            skip_music: false,
+            natives_arch: crate::options::default_natives_arch(),
+        }
+    }
+
+    pub fn with_skip_music(mut self, skip_music: bool) -> Self {
+        self.skip_music = skip_music;
+        self
+    }
+
+    pub fn with_natives_arch(mut self, natives_arch: u32) -> Self {
+        self.natives_arch = natives_arch;
+        self
+    }
+
+    /// 解压后 natives 应该待的目录。
+    pub fn natives_dir(&self, version_name: &str) -> PathBuf {
+        dmcl_mcmeta::natives_dir(version_name)
+    }
+}
+
 /// 一个计划中的下载项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedFile {
@@ -51,7 +90,7 @@ pub fn base_name(path: impl AsRef<Path>) -> String {
 
 /// 客户端 jar（`downloads.client`）。
 pub fn plan_client_jar(
-    options: &InstallOptions,
+    plan: &PlanContext,
     json: &VersionJson,
     version_name: &str,
 ) -> Option<PlannedFile> {
@@ -59,7 +98,7 @@ pub fn plan_client_jar(
     let url = client.url.clone()?;
     Some(PlannedFile {
         url,
-        save_to: version_jar_path(&options.root_path, version_name),
+        save_to: version_jar_path(&plan.root_path, version_name),
         sha1: client.sha1.clone(),
         size: client.size,
         name: format!("{version_name}.jar"),
@@ -67,7 +106,7 @@ pub fn plan_client_jar(
 }
 
 /// 资源索引本身（`assets/indexes/<id>.json`）。
-pub fn plan_assets_index(options: &InstallOptions, json: &VersionJson) -> Option<PlannedFile> {
+pub fn plan_assets_index(plan: &PlanContext, json: &VersionJson) -> Option<PlannedFile> {
     let index = json.asset_index.as_ref()?;
     let id = json.asset_index_id();
     if id.is_empty() {
@@ -76,7 +115,7 @@ pub fn plan_assets_index(options: &InstallOptions, json: &VersionJson) -> Option
     let url = index.url.clone()?;
     Some(PlannedFile {
         url,
-        save_to: assets_index_path(&options.root_path, id),
+        save_to: assets_index_path(&plan.root_path, id),
         sha1: index.sha1.clone(),
         size: index.size,
         name: format!("{id}.json"),
@@ -103,8 +142,8 @@ pub fn native_artifact(lib: &Library, arch: u32) -> Option<&Artifact> {
 }
 
 /// 库文件（含 natives 分类器 jar）。
-pub fn plan_libraries(options: &InstallOptions, json: &VersionJson) -> Vec<PlannedFile> {
-    let libraries = libraries_dir(&options.root_path);
+pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile> {
+    let libraries = libraries_dir(&plan.root_path);
     let mut planned = Vec::new();
 
     for lib in &json.libraries {
@@ -158,7 +197,7 @@ pub fn plan_libraries(options: &InstallOptions, json: &VersionJson) -> Vec<Plann
         }
 
         // natives 分类器
-        if let Some(artifact) = native_artifact(lib, options.natives_arch) {
+        if let Some(artifact) = native_artifact(lib, plan.natives_arch) {
             let (Some(url), Some(path)) = (artifact.url.clone(), artifact.path.clone()) else {
                 // 文档里没给地址的 natives 直接跳过（原实现会拿空 url 去请求然后报错）
                 continue;
@@ -177,12 +216,12 @@ pub fn plan_libraries(options: &InstallOptions, json: &VersionJson) -> Vec<Plann
 }
 
 /// 需要解压的 natives jar（路径 + 显示名）。
-pub fn plan_natives(options: &InstallOptions, json: &VersionJson) -> Vec<(PathBuf, String)> {
-    let libraries = libraries_dir(&options.root_path);
+pub fn plan_natives(plan: &PlanContext, json: &VersionJson) -> Vec<(PathBuf, String)> {
+    let libraries = libraries_dir(&plan.root_path);
     json.libraries
         .iter()
         .filter(|lib| rules_allow(&lib.rules))
-        .filter_map(|lib| native_artifact(lib, options.natives_arch))
+        .filter_map(|lib| native_artifact(lib, plan.natives_arch))
         .filter_map(|artifact| artifact.path.clone())
         .map(|path| {
             let name = base_name(&path);
@@ -193,17 +232,17 @@ pub fn plan_natives(options: &InstallOptions, json: &VersionJson) -> Vec<(PathBu
 
 /// 资源对象。
 pub fn plan_asset_objects(
-    options: &InstallOptions,
+    plan: &PlanContext,
     json: &VersionJson,
     index: &AssetIndexFile,
 ) -> Vec<PlannedFile> {
     let id = json.asset_index_id();
-    let virtual_dir = assets_virtual_dir(&options.root_path, id);
-    let objects_dir = assets_objects_dir(&options.root_path);
+    let virtual_dir = assets_virtual_dir(&plan.root_path, id);
+    let objects_dir = assets_objects_dir(&plan.root_path);
     let mut planned = Vec::new();
 
     for (key, asset) in &index.objects {
-        if options.skip_music && is_music(key) {
+        if plan.skip_music && is_music(key) {
             continue;
         }
         // hash 太短（脏数据）时跳过
@@ -241,7 +280,13 @@ mod tests {
     use super::*;
     use dmcl_mcmeta::{DownloadSource, Mirror};
 
-    fn options() -> InstallOptions {
+    /// 规划只依赖 [`PlanContext`]（launch 做完整性检查时用的也是它）。
+    fn options() -> PlanContext {
+        PlanContext::new("/mc").with_natives_arch(64)
+    }
+
+    /// 把规划结果变成下载项时需要完整的安装配置（下载源）。
+    fn install_options() -> InstallOptions {
         InstallOptions::new("/mc", DownloadSource::new(Mirror::Bmclapi)).with_natives_arch(64)
     }
 
@@ -254,6 +299,7 @@ mod tests {
     #[test]
     fn client_jar_and_asset_index_are_planned_with_templates() {
         let options = options();
+        let install = install_options();
         let json = version(
             r#"{
                 "downloads": {"client": {"url": "https://piston-data.mojang.com/v1/objects/x/client.jar",
@@ -272,7 +318,7 @@ mod tests {
         assert_eq!(client.size, Some(100));
         // 不可镜像的地址解析后仍是官方地址
         assert_eq!(
-            client.into_item(&options).url,
+            client.into_item(&install).url,
             "https://piston-data.mojang.com/v1/objects/x/client.jar"
         );
 
@@ -280,7 +326,7 @@ mod tests {
         assert_eq!(index.url, "${MC_META}/v1/packages/beef/5.json");
         assert_eq!(index.save_to, PathBuf::from("/mc/assets/indexes/5.json"));
         assert_eq!(
-            index.into_item(&options).url,
+            index.into_item(&install).url,
             "https://bmclapi2.bangbang93.com/v1/packages/beef/5.json"
         );
     }
@@ -440,7 +486,7 @@ mod tests {
 
     #[test]
     fn planned_files_resolve_against_the_configured_mirror() {
-        let options = options();
+        let options = install_options();
         let planned = PlannedFile {
             url: "${MC_MAVEN}/a/b.jar".to_string(),
             save_to: PathBuf::from("/mc/libraries/a/b.jar"),

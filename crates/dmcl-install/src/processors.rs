@@ -48,7 +48,7 @@ pub(crate) async fn run_installer_processors(
             name: base_name(&path),
         });
     }
-    planned.extend(plan_libraries(options, mc_json));
+    planned.extend(plan_libraries(&options.plan(), mc_json));
     download_planned(options, "安装器依赖库", planned, ctx).await?;
 
     // 2) client.lzma 解到一个临时目录（processor 的工作目录）

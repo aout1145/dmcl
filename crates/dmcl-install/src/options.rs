@@ -121,6 +121,15 @@ impl InstallOptions {
         self.source.resolve(url)
     }
 
+    /// 只跟"本地有哪些文件"有关的那部分配置。
+    pub fn plan(&self) -> crate::plan::PlanContext {
+        crate::plan::PlanContext {
+            root_path: self.root_path.clone(),
+            skip_music: self.skip_music,
+            natives_arch: self.natives_arch,
+        }
+    }
+
     /// 造一个下载任务：复用下载源的 http 客户端（同一连接池）。
     pub fn download_task(&self, name: impl Into<String>, items: Vec<DownloadItem>) -> DownloadTask {
         let mut task = DownloadTask::new(self.download.clone())

@@ -76,7 +76,7 @@ pub use loader::{
 pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
 pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries,
-    plan_natives, PlannedFile,
+    plan_natives, PlanContext, PlannedFile,
 };
 pub use spec::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};
