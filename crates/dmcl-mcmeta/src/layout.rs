@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use path_clean::PathClean;
 
-use crate::version::VersionJson;
+use crate::vanilla::version::VersionJson;
 
 /// 把路径变成绝对路径并归一化（处理 `.` / `..` / 重复分隔符）。
 pub fn absolute(path: impl AsRef<Path>) -> PathBuf {

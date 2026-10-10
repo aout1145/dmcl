@@ -4,7 +4,8 @@
 //! cargo test -p dmcl-mcmeta --test online -- --ignored --nocapture
 //! ```
 
-use dmcl_mcmeta::{DownloadSource, Mirror, VersionJson, VERSION_MANIFEST};
+use dmcl_mcmeta::source::{DownloadSource, Mirror};
+use dmcl_mcmeta::vanilla::{VersionJson, VERSION_MANIFEST};
 
 #[tokio::test]
 #[ignore = "requires network access"]

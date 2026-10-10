@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_download::DownloadReport;
-use dmcl_mcmeta::{natives_dir, AssetIndexFile, VersionJson};
+use dmcl_mcmeta::layout::natives_dir;
+use dmcl_mcmeta::vanilla::{AssetIndexFile, VersionJson};
 use dmcl_task::{task_fn, TaskChain, TaskContext};
 
 use crate::options::InstallOptions;
@@ -87,7 +88,7 @@ pub async fn download_game_files(
 
 /// 把 natives jar 解压到该版本的临时目录，返回解压了几个。
 ///
-/// 这个目录在启动时由 [`dmcl_mcmeta::natives_dir`] 给出，启动流程不再自己解压。
+/// 这个目录在启动时由 [`dmcl_mcmeta::layout::natives_dir`] 给出，启动流程不再自己解压。
 pub async fn extract_natives(
     options: &InstallOptions,
     version_name: &str,

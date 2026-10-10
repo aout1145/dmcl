@@ -28,7 +28,7 @@ use dmcl_install::{InstallOptions, JavaProvider};
 use dmcl_launch::{
     select_java, JavaChoice, JavaConfigs, LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION,
 };
-use dmcl_mcmeta::{DownloadSource, Mirror};
+use dmcl_mcmeta::source::{DownloadSource, Mirror};
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 

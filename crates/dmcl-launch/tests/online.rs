@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use dmcl_install::InstallOptions;
 use dmcl_launch::{GameLauncher, LaunchOption, OfflineAccount};
-use dmcl_mcmeta::{DownloadSource, Mirror};
+use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
 const VERSION: &str = "1.7.10";
 

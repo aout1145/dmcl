@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::json::JsonMap;
 use crate::macros::string_enum;
-use crate::rules::JsonMap;
 use crate::source::{resolve_urls, templatize_urls, Mirror, UrlFields};
-use crate::version::Library;
+use crate::vanilla::version::Library;
 
 string_enum! {
     /// 安装器 processor 运行在哪一侧。

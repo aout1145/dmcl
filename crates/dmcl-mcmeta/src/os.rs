@@ -27,6 +27,11 @@ pub fn classpath_separator() -> char {
     }
 }
 
+/// 当前操作系统的版本号（用于匹配 `rules[].os.version` 里的正则）。
+pub fn os_version() -> String {
+    os_info::get().version().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

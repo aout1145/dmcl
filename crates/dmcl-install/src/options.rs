@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dmcl_download::{DownloadItem, DownloadOptions, DownloadTask};
-use dmcl_mcmeta::{read_version_json_safe, DownloadSource, VersionJson};
+use dmcl_mcmeta::layout::read_version_json_safe;
+use dmcl_mcmeta::source::DownloadSource;
+use dmcl_mcmeta::vanilla::VersionJson;
 
 use crate::zip::find_on_path;
 
@@ -161,7 +163,7 @@ pub fn root_exists(root_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::Mirror;
+    use dmcl_mcmeta::source::Mirror;
 
     #[test]
     fn options_carry_the_callers_configuration() {

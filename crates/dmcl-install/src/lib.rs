@@ -2,7 +2,7 @@
 //!
 //! 这个 crate 只做"把文件写下去"，不做任何决策：
 //!
-//! * 装什么、从哪儿下 → 来自 [`dmcl_mcmeta`]（元数据 + [`dmcl_mcmeta::DownloadSource`]）；
+//! * 装什么、从哪儿下 → 来自 [`dmcl_mcmeta`]（元数据 + [`dmcl_mcmeta::source::DownloadSource`]）；
 //! * 怎么并发下 → 来自 [`dmcl_download`]；
 //! * 进度怎么报、任务怎么串 → 来自 [`dmcl_task`]；
 //! * 配置（`.`minecraft` 路径、镜像、并发度、是否跳过音乐）→ 由调用者通过
@@ -15,7 +15,7 @@
 //! ```no_run
 //! use std::sync::Arc;
 //! use dmcl_install::{install_task, InstallOptions, InstallSpec, LoaderKind};
-//! use dmcl_mcmeta::{DownloadSource, Mirror};
+//! use dmcl_mcmeta::source::{DownloadSource, Mirror};
 //!
 //! # async fn run() -> anyhow::Result<()> {
 //! let options = Arc::new(InstallOptions::new("/tmp/.minecraft", DownloadSource::new(Mirror::Bmclapi)));
@@ -33,7 +33,7 @@
 //! ```no_run
 //! use std::sync::Arc;
 //! use dmcl_install::{files::game_files_task, vanilla::vanilla_metadata_task, InstallOptions};
-//! use dmcl_mcmeta::{DownloadSource, Mirror};
+//! use dmcl_mcmeta::source::{DownloadSource, Mirror};
 //! use dmcl_task::TaskChain;
 //!
 //! # async fn run() -> anyhow::Result<()> {

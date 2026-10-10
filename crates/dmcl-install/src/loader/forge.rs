@@ -6,17 +6,17 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use dmcl_download::{check_file, Checksum};
-use dmcl_mcmeta::{
-    classpath_separator, forge_installer_url, latest_forge_version, lib_name_to_path,
-    libraries_dir, read_version_json, version_jar_path, version_json_path,
-};
+use dmcl_mcmeta::forge::{forge_installer_url, latest_forge_version, InstallProfile};
+use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
+use dmcl_mcmeta::maven::lib_name_to_path;
+use dmcl_mcmeta::os::classpath_separator;
+use dmcl_mcmeta::vanilla::VersionJson;
 use dmcl_task::{task_fn_io, CommandTask, Task, TaskChain, TaskContext};
 
 use crate::files::download_planned;
-use crate::io::write_safe;
+use crate::io::{write_json_safe, write_safe};
 use crate::loader::common::{
-    download_installer, extract_maven_entries, installer_temp_path, read_install_profile,
-    write_installer_version_json, Installer,
+    download_installer, extract_maven_entries, finish_version_json, installer_temp_path, Installer,
 };
 use crate::options::InstallOptions;
 use crate::plan::{base_name, plan_libraries, PlannedFile};
@@ -236,6 +236,46 @@ async fn run_installer_processors(
     Ok(())
 }
 
+fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<InstallProfile> {
+    let bytes = zip_read_entry(zip, "install_profile.json")?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// 从安装包里取出它自带的版本 JSON。
+fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<VersionJson> {
+    let mut json: VersionJson = if zip_has_entry(zip, "version.json") {
+        serde_json::from_slice(&zip_read_entry(zip, "version.json")?)?
+    } else {
+        let profile = read_install_profile(zip)?;
+        let entry = profile.file_path().unwrap_or("").to_string();
+        let inner = zip_read_entry(zip, &entry)?;
+        let mut inner_zip = open_archive(inner)?;
+        serde_json::from_slice(&zip_read_entry(&mut inner_zip, "version.json")?)?
+    };
+    // 安装包里的地址是具体 url，归一到模板后写盘时才能再解析成官方地址
+    json.templatize_urls();
+    Ok(json)
+}
+
+/// 把安装器自带的版本 JSON 合并进本地版本 JSON 并写盘。
+async fn write_installer_version_json(
+    options: &InstallOptions,
+    version_name: &str,
+    installer: &Path,
+) -> Result<()> {
+    let path = version_json_path(&options.root_path, version_name);
+    let mut mc_json = read_version_json(&path).await?;
+
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
+    let installer_json = read_installer_version_json(&mut zip)?;
+    mc_json.merge(&installer_json)?;
+    mc_json.extra.remove("_comment_");
+    finish_version_json(&mut mc_json, version_name, true);
+
+    write_json_safe(&path, &mc_json).await
+}
+
 /// 安装 Forge 的任务链（`forge_version = None` 时自动取最新版）。
 pub fn install_forge_task(
     options: Arc<InstallOptions>,
@@ -339,7 +379,7 @@ pub fn install_forge_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::{DownloadSource, Mirror};
+    use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
     fn options() -> Arc<InstallOptions> {
         Arc::new(InstallOptions::new(

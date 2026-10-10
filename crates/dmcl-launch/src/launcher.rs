@@ -10,10 +10,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use dmcl_mcmeta::{
-    classpath_separator, lib_name_get_name, lib_name_get_version, lib_name_to_path,
-    read_version_json_safe, rules_allow, version_dir, Argument, VersionJson,
-};
+use dmcl_mcmeta::layout::{read_version_json_safe, version_dir};
+use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
+use dmcl_mcmeta::os::classpath_separator;
+use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
 use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
 
@@ -71,9 +71,10 @@ impl GameLauncher {
 
         // 名字 -> (版本, 绝对路径)
         let mut libs: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
+        let rules = RuleContext::current();
 
         for lib in &self.json.libraries {
-            if !rules_allow(&lib.rules) {
+            if !rules_allow(&lib.rules, &rules) {
                 continue;
             }
             let coord = lib.name.as_str();
@@ -148,12 +149,13 @@ impl GameLauncher {
             // 1.12.2 及更早：根本没有 `arguments` 对象
             return args;
         };
+        let rules = RuleContext::current();
         for arg in json_args {
             match arg {
                 Argument::Plain(value) => args.push(value.clone()),
                 Argument::Ruled(ruled) => {
                     // `else if ("rules" in arg && checkRules(arg["rules"]))`
-                    if ruled.rules.is_some() && rules_allow(&ruled.rules) {
+                    if ruled.rules.is_some() && rules_allow(&ruled.rules, &rules) {
                         if let Some(value) = &ruled.value {
                             value.push_into(&mut args);
                         }
@@ -473,7 +475,7 @@ mod tests {
                     "game": [
                         "--username", "${auth_player_name}",
                         {"rules": [{"action": "allow", "os": {"name": "plan9"}}], "value": ["--never"]},
-                        {"rules": [{"action": "disallow", "os": {"name": "plan9"}}], "value": "--always"}
+                        {"rules": [{"action": "allow"}, {"action": "disallow", "os": {"name": "plan9"}}], "value": "--always"}
                     ]
                 }
             }"#,

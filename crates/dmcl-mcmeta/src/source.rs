@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn generic_rewriting_visits_every_url_field() {
-        use crate::version::VersionJson;
+        use crate::vanilla::version::VersionJson;
 
         let json = serde_json::json!({
             "downloads": {

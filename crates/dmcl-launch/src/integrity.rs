@@ -16,7 +16,10 @@ use dmcl_install::{
     plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries, plan_natives,
     PlanContext, PlannedFile,
 };
-use dmcl_mcmeta::{natives_dir, AssetIndexFile, VersionJson};
+use dmcl_mcmeta::layout::{
+    natives_dir, read_version_json, read_version_json_safe, version_json_path,
+};
+use dmcl_mcmeta::vanilla::{AssetIndexFile, VersionJson};
 
 /// 一个文件为什么不合格。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +116,7 @@ impl IntegrityStatus {
 /// 需要修复时，调用者应执行一次 `dmcl_install`（它会跳过已存在的文件，
 /// 只补缺的部分）。
 pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<IntegrityStatus> {
-    let json = dmcl_mcmeta::read_version_json_safe(&plan.root_path, version_name).await?;
+    let json = read_version_json_safe(&plan.root_path, version_name).await?;
     let mut status = IntegrityStatus {
         complete: true,
         missing: Vec::new(),
@@ -203,8 +206,8 @@ async fn dir_is_populated(path: &Path) -> bool {
 
 /// 检查一个版本目录是否至少有一份可用的版本 JSON。
 pub async fn version_json_exists(root_path: &Path, version_name: &str) -> Result<VersionJson> {
-    let path = dmcl_mcmeta::version_json_path(root_path, version_name);
-    dmcl_mcmeta::read_version_json(&path)
+    let path = version_json_path(root_path, version_name);
+    read_version_json(&path)
         .await
         .with_context(|| format!("找不到版本 {}（{}）", version_name, path.display()))
 }
@@ -221,7 +224,7 @@ mod tests {
 
     /// 一个最小版本：一个库、一个资源、没有 natives。
     async fn write_version(root: &Path) {
-        use dmcl_mcmeta::version_json_path;
+        use dmcl_mcmeta::layout::version_json_path;
 
         let json = serde_json::json!({
             "id": "1.0",
@@ -287,7 +290,7 @@ mod tests {
                 }}
             }]
         });
-        let path = dmcl_mcmeta::version_json_path(&root, "1.0");
+        let path = version_json_path(&root, "1.0");
         tokio::fs::write(&path, serde_json::to_string(&json).unwrap())
             .await
             .unwrap();

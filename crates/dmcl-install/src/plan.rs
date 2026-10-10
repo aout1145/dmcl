@@ -10,10 +10,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use dmcl_download::{Checksum, DownloadItem};
-use dmcl_mcmeta::{
-    asset_object_url, assets_index_path, assets_objects_dir, assets_virtual_dir, get_os_name,
-    lib_name_to_path, libraries_dir, maven_library_url, rules_allow, version_jar_path, Artifact,
-    AssetIndexFile, Library, VersionJson,
+use dmcl_mcmeta::layout::{
+    assets_index_path, assets_objects_dir, assets_virtual_dir, libraries_dir, version_jar_path,
+};
+use dmcl_mcmeta::maven::lib_name_to_path;
+use dmcl_mcmeta::os::get_os_name;
+use dmcl_mcmeta::vanilla::{
+    asset_object_url, maven_library_url, rules_allow, Artifact, AssetIndexFile, Library,
+    RuleContext, VersionJson,
 };
 
 use crate::options::InstallOptions;
@@ -53,7 +57,7 @@ impl PlanContext {
 
     /// 解压后 natives 应该待的目录。
     pub fn natives_dir(&self, version_name: &str) -> PathBuf {
-        dmcl_mcmeta::natives_dir(version_name)
+        dmcl_mcmeta::layout::natives_dir(version_name)
     }
 }
 
@@ -145,10 +149,11 @@ pub fn native_artifact(lib: &Library, arch: u32) -> Option<&Artifact> {
 /// 库文件（含 natives 分类器 jar）。
 pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile> {
     let libraries = libraries_dir(&plan.root_path);
+    let rules = RuleContext::current();
     let mut planned = Vec::new();
 
     for lib in &json.libraries {
-        if !rules_allow(&lib.rules) {
+        if !rules_allow(&lib.rules, &rules) {
             continue;
         }
         let coord = lib.name.as_str();
@@ -219,9 +224,10 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
 /// 需要解压的 natives jar（路径 + 显示名）。
 pub fn plan_natives(plan: &PlanContext, json: &VersionJson) -> Vec<(PathBuf, String)> {
     let libraries = libraries_dir(&plan.root_path);
+    let rules = RuleContext::current();
     json.libraries
         .iter()
-        .filter(|lib| rules_allow(&lib.rules))
+        .filter(|lib| rules_allow(&lib.rules, &rules))
         .filter_map(|lib| native_artifact(lib, plan.natives_arch))
         .filter_map(|artifact| artifact.path.clone())
         .map(|path| {
@@ -279,7 +285,7 @@ fn is_music(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::{DownloadSource, Mirror};
+    use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
     /// 规划只依赖 [`PlanContext`]（launch 做完整性检查时用的也是它）。
     fn options() -> PlanContext {

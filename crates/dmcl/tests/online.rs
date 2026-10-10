@@ -85,20 +85,20 @@ async fn mirror_choice_reaches_the_resolved_urls() {
     let mut config = config_for(root);
 
     // 官方源
-    config.download.mirror = dmcl_mcmeta::Mirror::Official;
+    config.download.mirror = dmcl_mcmeta::source::Mirror::Official;
     let official = config
         .download_source()
-        .resolve(dmcl_mcmeta::VERSION_MANIFEST);
+        .resolve(dmcl_mcmeta::vanilla::VERSION_MANIFEST);
     assert_eq!(
         official,
         "https://piston-meta.mojang.com/mc/game/version_manifest.json"
     );
 
     // bmclapi
-    config.download.mirror = dmcl_mcmeta::Mirror::Bmclapi;
+    config.download.mirror = dmcl_mcmeta::source::Mirror::Bmclapi;
     let bmclapi = config
         .download_source()
-        .resolve(dmcl_mcmeta::VERSION_MANIFEST);
+        .resolve(dmcl_mcmeta::vanilla::VERSION_MANIFEST);
     assert_eq!(
         bmclapi,
         "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"
@@ -107,7 +107,7 @@ async fn mirror_choice_reaches_the_resolved_urls() {
     // 配置里的镜像也确实能取到版本列表。
     // 注意：bmclapi 在部分网络环境下不可达（其跳转目标被代理拦截），
     // 因此这里用官方源验证"配置 → 取数"这条链路。
-    config.download.mirror = dmcl_mcmeta::Mirror::Official;
+    config.download.mirror = dmcl_mcmeta::source::Mirror::Official;
     let manifest = config
         .download_source()
         .fetch_version_manifest()

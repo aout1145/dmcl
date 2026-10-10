@@ -184,7 +184,7 @@ mod tests {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
         let install = Arc::new(InstallOptions::new(
             "/mc",
-            dmcl_mcmeta::DownloadSource::official(),
+            dmcl_mcmeta::source::DownloadSource::official(),
         ));
         let chain = launch_chain(option, install);
         let names: Vec<_> = chain.step_names().collect();
@@ -226,7 +226,7 @@ mod tests {
             "mainClass": "com.example.Main",
             "arguments": {"jvm": [], "game": ["--demo"]}
         });
-        let path = dmcl_mcmeta::version_json_path(&root, "1.0");
+        let path = dmcl_mcmeta::layout::version_json_path(&root, "1.0");
         tokio::fs::create_dir_all(path.parent().unwrap())
             .await
             .unwrap();

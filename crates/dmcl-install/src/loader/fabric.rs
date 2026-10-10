@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_mcmeta::{latest_fabric_loader, read_version_json, version_json_path};
+use dmcl_mcmeta::fabric::latest_fabric_loader;
+use dmcl_mcmeta::layout::{read_version_json, version_json_path};
 use dmcl_task::{task_fn_io, TaskChain, TaskContext};
 
 use crate::io::write_json_safe;
@@ -109,7 +110,7 @@ pub fn install_fabric_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::{DownloadSource, Mirror};
+    use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
     fn options() -> Arc<InstallOptions> {
         Arc::new(InstallOptions::new(

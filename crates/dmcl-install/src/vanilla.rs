@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_mcmeta::{layout::absolute, version_json_path, Mirror};
+use dmcl_mcmeta::layout::{absolute, version_json_path};
+use dmcl_mcmeta::source::Mirror;
 use dmcl_task::{task_fn, TaskChain};
 
 use crate::io::{write_json_safe, write_safe};

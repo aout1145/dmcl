@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::rules::{JsonMap, Rule};
+use crate::json::JsonMap;
 use crate::source::{resolve_urls, templatize_urls, Mirror, UrlFields};
+use crate::vanilla::rules::Rule;
 
 // ---------------------------------------------------------------------------
 // downloads / libraries

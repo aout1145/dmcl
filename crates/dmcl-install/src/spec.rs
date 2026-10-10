@@ -197,7 +197,7 @@ pub fn install_loader_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::{DownloadSource, Mirror};
+    use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
     fn options() -> Arc<InstallOptions> {
         Arc::new(InstallOptions::new(

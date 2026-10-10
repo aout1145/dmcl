@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dmcl_install::PlanContext;
-use dmcl_mcmeta::{natives_dir, version_dir};
+use dmcl_mcmeta::layout::{natives_dir, version_dir};
 
 use crate::account::Account;
 use crate::java::{JavaChoice, JavaConfigs};

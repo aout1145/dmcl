@@ -22,7 +22,10 @@ use dialoguer::Confirm;
 
 use dmcl_install::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
-use dmcl_mcmeta::{fabric_loaders, forge_versions, neoforge_versions, Mirror};
+use dmcl_mcmeta::fabric::fabric_loaders;
+use dmcl_mcmeta::forge::forge_versions;
+use dmcl_mcmeta::neoforge::neoforge_versions;
+use dmcl_mcmeta::source::Mirror;
 use dmcl_task::TaskEvent;
 
 use crate::config::Config;
