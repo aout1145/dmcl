@@ -87,6 +87,12 @@ impl ProgressPrinter {
                 let text = format!("{subject}  {message}");
                 self.print(&text, true, &subject);
             }
+            TaskEvent::Warning { name, message, .. } => {
+                // 警告也占一行最终行；是否继续由 CLI 的 on_event 询问后答复。
+                let subject = progress_subject(&name, &self.current_step_name);
+                let text = format!("{subject}  ⚠ 警告：{message}");
+                self.print(&text, true, &subject);
+            }
             TaskEvent::Progress { name, progress, .. } => {
                 // 非交互模式的节流：字节进度只在跨 5% 刻度时打
                 if !self.interactive {
@@ -122,6 +128,11 @@ impl ProgressPrinter {
             let _ = self.term.flush();
             self.mid_line = false;
         }
+    }
+
+    /// 是否是交互式终端（决定要不要弹确认）。
+    pub fn is_interactive(&self) -> bool {
+        self.interactive
     }
 
     /// `end_line=true` 是最终行（两模式都换行）；`false` 是进度行（交互式原地刷新）。

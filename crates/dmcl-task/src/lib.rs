@@ -53,6 +53,7 @@ mod context;
 mod event;
 mod progress;
 mod task;
+mod warning;
 
 pub use chain::TaskChain;
 pub use command::{CommandTask, OutputMode};
@@ -60,3 +61,4 @@ pub use context::{CancelHandle, Cancelled, TaskContext};
 pub use event::TaskEvent;
 pub use progress::{human_bytes, Progress};
 pub use task::{task_fn, task_fn_io, BoxFuture, FnTask, Task};
+pub use warning::WarningDecision;

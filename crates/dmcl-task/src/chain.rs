@@ -317,11 +317,17 @@ where
     }
 }
 
-/// 只转发步骤内部上报的事件（日志 / 进度）：链路结构（开始 / 结束）由父链自己产生。
+/// 只转发步骤内部上报的事件（日志 / 进度 / 警告）：链路结构（开始 / 结束）由父链自己产生。
 fn forward_progress(ctx: &TaskContext, event: TaskEvent) {
     match event {
         TaskEvent::Log { name, message, .. } => ctx.child(name).log(message),
         TaskEvent::Progress { name, progress, .. } => ctx.child(name).report(progress),
+        TaskEvent::Warning {
+            name,
+            message,
+            decision,
+            ..
+        } => ctx.child(name).report_warning(message, decision),
         _ => {}
     }
 }
@@ -516,6 +522,33 @@ mod tests {
             )),
             "{events:?}"
         );
+    }
+
+    /// 警告也要能从嵌套链转发到父链，并让父链的订阅者作答。
+    #[tokio::test]
+    async fn nested_chains_forward_their_warnings_to_the_parent() {
+        let inner = TaskChain::new("子链").then(
+            task_fn("检查", |ctx| async move {
+                ctx.confirm("继续吗？").await?;
+                Ok(())
+            }),
+            "检查",
+        );
+        let outer = TaskChain::new("父链").then(inner, "子任务");
+
+        let handled = Arc::new(AtomicBool::new(false));
+        let flag = handled.clone();
+        outer
+            .run_with((), move |event| {
+                if let TaskEvent::Warning { name, decision, .. } = event {
+                    assert_eq!(name, "检查");
+                    flag.store(true, Ordering::SeqCst);
+                    decision.accept();
+                }
+            })
+            .await
+            .unwrap();
+        assert!(handled.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

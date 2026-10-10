@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use dialoguer::Confirm;
 
 use dmcl_install::loader::fabric_loaders;
 use dmcl_install::{
@@ -26,6 +27,7 @@ use dmcl_install::{
 };
 use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
 use dmcl_mcmeta::Mirror;
+use dmcl_task::TaskEvent;
 
 use crate::config::Config;
 
@@ -364,7 +366,7 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
             let options = Arc::new(config.install_options(source));
             let mut printer = ProgressPrinter::new();
             let result = install_task(options, spec)
-                .run_with((), |event| printer.handle(event))
+                .run_with((), |event| handle_event(&mut printer, event))
                 .await;
             printer.finish();
             result
@@ -441,6 +443,34 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
     }
 }
 
+/// 渲染一条任务事件；遇到**警告**就询问用户，让它决定继续还是中止。
+fn handle_event(printer: &mut ProgressPrinter, event: TaskEvent) {
+    let warning = match &event {
+        TaskEvent::Warning {
+            message, decision, ..
+        } => Some((message.clone(), decision.clone())),
+        _ => None,
+    };
+    printer.handle(event);
+
+    if let Some((message, decision)) = warning {
+        let proceed = if printer.is_interactive() {
+            Confirm::new()
+                .with_prompt(format!("⚠ {message}\n是否继续？"))
+                .default(true)
+                .interact()
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        if proceed {
+            decision.accept();
+        } else {
+            decision.abort();
+        }
+    }
+}
+
 /// `launch` —— 检查完整性 →（缺件则补全）→ 生成启动参数 → 启动子进程，等游戏退出。
 ///
 /// 整条「准备 → 补全 → 启动」链由 `dmcl-launch` 的 [`dmcl_launch::launch_chain`] 组装，
@@ -452,7 +482,7 @@ async fn launch(vername: &str, config: &mut Config) -> Result<()> {
 
     let mut printer = ProgressPrinter::new();
     let mut monitor = dmcl_launch::launch_chain(option, install)
-        .run_with((), |event| printer.handle(event))
+        .run_with((), |event| handle_event(&mut printer, event))
         .await?;
     printer.finish();
 
@@ -471,7 +501,7 @@ async fn install_loader(
     let request = LoaderRequest::version(kind, loader_version);
     let mut printer = ProgressPrinter::new();
     let result = install_loader_task(options, vername.to_string(), vername.to_string(), request)
-        .run_with((), |event| printer.handle(event))
+        .run_with((), |event| handle_event(&mut printer, event))
         .await;
     printer.finish();
     result

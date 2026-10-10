@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, watch};
 
 use crate::event::TaskEvent;
 use crate::progress::Progress;
+use crate::warning::{WarningDecision, WarningGate};
 
 /// 任务被取消时返回的错误，调用者可以用 `downcast_ref` 识别它。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +208,40 @@ impl TaskContext {
     pub fn progress(&self, current: u64, total: Option<u64>, message: impl Into<String>) {
         self.report(Progress::new(current, total, message));
     }
+
+    /// 上报一条需要前端决策的**警告**，并**阻塞等待**答复：
+    ///
+    /// * 没有订阅者时直接继续（不阻塞，脚本 / 库场景安全）；
+    /// * 前端 [`WarningDecision::abort`] → 触发取消，返回 [`Cancelled`]；
+    /// * 前端 [`WarningDecision::accept`] → 继续。
+    pub async fn confirm(&self, message: impl Into<String>) -> Result<()> {
+        let gate = WarningGate::new();
+        let sent = self
+            .events
+            .send(TaskEvent::Warning {
+                step: self.step,
+                steps: self.steps,
+                name: self.name.to_string(),
+                message: message.into(),
+                decision: WarningDecision(gate.clone()),
+            })
+            .is_ok();
+        if sent && !gate.wait().await {
+            self.cancel.cancel();
+        }
+        self.check_cancelled()
+    }
+
+    /// 以当前上下文的名字重新上报一条警告（供链转发嵌套链的警告）。
+    pub(crate) fn report_warning(&self, message: impl Into<String>, decision: WarningDecision) {
+        let _ = self.events.send(TaskEvent::Warning {
+            step: self.step,
+            steps: self.steps,
+            name: self.name.to_string(),
+            message: message.into(),
+            decision,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -261,5 +296,47 @@ mod tests {
             TaskEvent::Progress { progress, .. } => assert_eq!(progress.current, 1),
             other => panic!("应当是 Progress，实际是 {other:?}"),
         }
+    }
+
+    /// 前端 accept → confirm 继续。
+    #[tokio::test]
+    async fn confirm_continues_when_the_frontend_accepts() {
+        let ctx = TaskContext::detached("t");
+        let mut rx = ctx.subscribe();
+        let waiting = tokio::spawn({
+            let ctx = ctx.clone();
+            async move { ctx.confirm("继续吗？").await }
+        });
+
+        match rx.recv().await.unwrap() {
+            TaskEvent::Warning { decision, .. } => decision.accept(),
+            other => panic!("应当是 Warning，实际是 {other:?}"),
+        }
+        waiting.await.unwrap().unwrap();
+    }
+
+    /// 前端 abort → confirm 触发取消并返回 Cancelled。
+    #[tokio::test]
+    async fn confirm_cancels_when_the_frontend_aborts() {
+        let ctx = TaskContext::detached("t");
+        let mut rx = ctx.subscribe();
+        let waiting = tokio::spawn({
+            let ctx = ctx.clone();
+            async move { ctx.confirm("继续吗？").await }
+        });
+
+        match rx.recv().await.unwrap() {
+            TaskEvent::Warning { decision, .. } => decision.abort(),
+            other => panic!("应当是 Warning，实际是 {other:?}"),
+        }
+        let err = waiting.await.unwrap().unwrap_err();
+        assert!(err.downcast_ref::<Cancelled>().is_some());
+    }
+
+    /// 没有前端订阅时，confirm 不阻塞、直接继续。
+    #[tokio::test]
+    async fn confirm_continues_without_a_frontend() {
+        let ctx = TaskContext::detached("t");
+        ctx.confirm("继续吗？").await.unwrap();
     }
 }

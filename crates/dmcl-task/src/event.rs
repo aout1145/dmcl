@@ -3,6 +3,7 @@
 use std::fmt;
 
 use crate::progress::Progress;
+use crate::warning::WarningDecision;
 
 /// 任务链在运行过程中向订阅者推送的事件。
 ///
@@ -36,6 +37,17 @@ pub enum TaskEvent {
         name: String,
         progress: Progress,
     },
+    /// 一条需要前端决策的**警告**：任务会**阻塞等待**答复。
+    ///
+    /// 前端用 [`WarningDecision::accept`] 继续、用 [`WarningDecision::abort`] 中止
+    /// （中止会让任务被取消）。若没有订阅者，任务不会阻塞、直接继续。
+    Warning {
+        step: usize,
+        steps: usize,
+        name: String,
+        message: String,
+        decision: WarningDecision,
+    },
     /// 第 `step` 个步骤成功结束。
     StepFinished {
         step: usize,
@@ -63,6 +75,7 @@ impl TaskEvent {
             | TaskEvent::StepStarted { name, .. }
             | TaskEvent::Log { name, .. }
             | TaskEvent::Progress { name, .. }
+            | TaskEvent::Warning { name, .. }
             | TaskEvent::StepFinished { name, .. }
             | TaskEvent::Failed { name, .. }
             | TaskEvent::Finished { name } => name,
@@ -76,6 +89,7 @@ impl TaskEvent {
             TaskEvent::StepStarted { step, .. }
             | TaskEvent::Log { step, .. }
             | TaskEvent::Progress { step, .. }
+            | TaskEvent::Warning { step, .. }
             | TaskEvent::StepFinished { step, .. }
             | TaskEvent::Failed { step, .. } => *step,
         }
@@ -109,6 +123,13 @@ impl fmt::Display for TaskEvent {
                 name,
                 progress,
             } => write!(f, "[{}/{steps}] {name}: {progress}", step + 1),
+            TaskEvent::Warning {
+                step,
+                steps,
+                name,
+                message,
+                ..
+            } => write!(f, "[{}/{steps}] {name}: 警告: {message}", step + 1),
             TaskEvent::StepFinished { step, steps, name } => {
                 write!(f, "[{}/{steps}] {name}: 完成", step + 1)
             }

@@ -62,7 +62,7 @@ impl Task<(), PreparedLaunch> for PrepareLaunchTask {
             ctx.log(integrity.summary());
 
             ctx.log("生成启动参数");
-            let args = launcher.gen_args().await?;
+            let args = launcher.gen_args_in(&ctx).await?;
             let command = escape_shell_command(&args);
 
             ctx.log("启动参数已就绪");

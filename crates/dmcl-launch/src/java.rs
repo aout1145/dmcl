@@ -215,12 +215,6 @@ pub async fn select_java(
         .cloned()
         .ok_or_else(|| anyhow!("没有这个 java 配置: {name}"))?;
     let java = JavaOption::probe(path).await?;
-    if java.major_version != required_major {
-        println!(
-            "警告：使用了不匹配的 java 版本（需要 {required_major}，实际用 {}）",
-            java.major_version
-        );
-    }
     Ok(java)
 }
 

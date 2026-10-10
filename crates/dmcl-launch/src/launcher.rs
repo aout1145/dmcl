@@ -14,6 +14,7 @@ use dmcl_mcmeta::{
     classpath_separator, lib_name_get_name, lib_name_get_version, lib_name_to_path,
     read_version_json_safe, rules_allow, version_dir, Argument, VersionJson,
 };
+use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
 
 use crate::account::Account;
@@ -166,15 +167,26 @@ impl GameLauncher {
 
     /// `genArgs`。
     pub async fn gen_args(&mut self) -> Result<Vec<String>> {
-        let mut args: Vec<String> = Vec::new();
+        self.gen_args_in(&TaskContext::detached("生成启动参数"))
+            .await
+    }
 
-        // java 路径
-        let java = select_java(
-            self.json.required_java_major(),
-            &self.option.java,
-            &self.option.java_configs,
-        )
-        .await?;
+    /// 同 [`GameLauncher::gen_args`]，但把「java 版本不匹配」等需要用户确认的警告
+    /// 通过 `ctx` 上报，并**等待前端决定**是否继续。
+    pub async fn gen_args_in(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
+        // java 路径；版本不匹配时先问用户
+        let required_major = self.json.required_java_major();
+        let java =
+            select_java(required_major, &self.option.java, &self.option.java_configs).await?;
+        if java.major_version != required_major {
+            ctx.confirm(format!(
+                "使用的 java 版本不匹配（需要 {required_major}，实际用 {}），是否继续？",
+                java.major_version
+            ))
+            .await?;
+        }
+
+        let mut args: Vec<String> = Vec::new();
         args.push(java.path.to_string_lossy().into_owned());
         self.java = Some(java);
 
