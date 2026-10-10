@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use version_compare::Cmp;
 
 use crate::json::JsonMap;
 use crate::macros::string_enum;
@@ -17,6 +18,39 @@ string_enum! {
     }
 }
 
+/// `os.versionRange` —— 26.x 起新增的版本区间（比旧的 `os.version` 正则更结构化）。
+///
+/// `min` 是**闭**区间（`>= min`），`max` 是**开**区间（`< max`）。26.3 的
+/// `default-user-jvm` 正是用 `min`/`max` 把 Windows 的 ZGC 与 G1GC 两套参数切成互补区间。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VersionRange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<String>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+impl VersionRange {
+    /// `min <= version < max`；无法比较的版本一律视为不命中。
+    pub fn matches(&self, version: &str) -> bool {
+        if let Some(min) = &self.min {
+            match version_compare::compare(version, min) {
+                Ok(Cmp::Lt) | Err(()) => return false,
+                Ok(_) => {}
+            }
+        }
+        if let Some(max) = &self.max {
+            match version_compare::compare(version, max) {
+                Ok(Cmp::Lt) => {}
+                Ok(_) | Err(()) => return false,
+            }
+        }
+        true
+    }
+}
+
 /// 规则里的 `os` 子对象。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OsRule {
@@ -26,6 +60,13 @@ pub struct OsRule {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
+    /// 26.x 的区间版本约束。
+    #[serde(
+        default,
+        rename = "versionRange",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub version_range: Option<VersionRange>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -91,6 +132,12 @@ impl Rule {
                 };
                 match &ctx.os_version {
                     Some(version) if regex.is_match(version) => {}
+                    _ => return false,
+                }
+            }
+            if let Some(range) = &os.version_range {
+                match &ctx.os_version {
+                    Some(version) if range.matches(version) => {}
                     _ => return false,
                 }
             }
@@ -203,6 +250,35 @@ mod tests {
         assert!(check_rules(&rules, &mac));
         mac.os_version = Some("11.0".into());
         assert!(!check_rules(&rules, &mac));
+    }
+
+    #[test]
+    fn os_version_range_is_min_inclusive_max_exclusive() {
+        let min = parse_rules(
+            r#"[{"action":"allow","os":{"name":"windows","versionRange":{"min":"10.0.17134"}}}]"#,
+        );
+        let mut win = ctx("windows");
+        win.os_version = Some("10.0.17134".into());
+        assert!(check_rules(&min, &win), "恰好等于 min 应命中");
+        win.os_version = Some("10.0.10000".into());
+        assert!(!check_rules(&min, &win));
+
+        let max = parse_rules(
+            r#"[{"action":"allow","os":{"name":"windows","versionRange":{"max":"10.0.17134"}}}]"#,
+        );
+        win.os_version = Some("10.0.17134".into());
+        assert!(!check_rules(&max, &win), "恰好等于 max 应不命中");
+        win.os_version = Some("10.0.10000".into());
+        assert!(check_rules(&max, &win));
+    }
+
+    #[test]
+    fn version_range_round_trips_through_serde() {
+        let rule: Rule =
+            serde_json::from_str(r#"{"action":"allow","os":{"versionRange":{"min":"1.2"}}}"#)
+                .unwrap();
+        let written = serde_json::to_value(&rule).unwrap();
+        assert_eq!(written["os"]["versionRange"]["min"], "1.2");
     }
 
     #[test]

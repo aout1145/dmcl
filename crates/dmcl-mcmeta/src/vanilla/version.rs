@@ -61,6 +61,15 @@ impl UrlFields for LibraryDownloads {
     }
 }
 
+/// `libraries[].extract` —— 从 natives jar 里解压时排除的路径前缀。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Extract {
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
 /// `libraries` 数组的一个元素。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Library {
@@ -73,11 +82,24 @@ pub struct Library {
     /// `os -> classifier 名`，例如 `{"linux": "natives-linux"}`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub natives: Option<std::collections::BTreeMap<String, String>>,
+    /// natives 解压时的排除规则。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extract: Option<Extract>,
     /// "困难库"（没有 `downloads` 块）的仓库 base url。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    // ---- Fabric / 第三方加载器直接写在库上的校验信息 ----
+    // 没有 `downloads` 块时，`url` + `name` 拼出地址，校验值就在这里。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub md5: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -100,17 +122,51 @@ pub struct VersionDownloads {
     pub client: Option<Artifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<Artifact>,
+    /// 1.14+ 客户端混淆映射（`client_mappings`）的下载信息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_mappings: Option<Artifact>,
+    /// 1.14+ 服务端混淆映射（`server_mappings`）的下载信息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_mappings: Option<Artifact>,
+    /// 只有远古版本（≤1.5.2）才有的 Windows 专用服务端。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_server: Option<Artifact>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
 
+impl VersionDownloads {
+    /// 所有带下载信息的条目，顺序固定。
+    pub fn artifacts(&self) -> impl Iterator<Item = &Artifact> {
+        [
+            &self.client,
+            &self.server,
+            &self.client_mappings,
+            &self.server_mappings,
+            &self.windows_server,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// 所有带下载信息的条目（可变），顺序固定。
+    pub fn artifacts_mut(&mut self) -> impl Iterator<Item = &mut Artifact> {
+        [
+            &mut self.client,
+            &mut self.server,
+            &mut self.client_mappings,
+            &mut self.server_mappings,
+            &mut self.windows_server,
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
 impl UrlFields for VersionDownloads {
     fn for_each_url_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
-        if let Some(client) = &mut self.client {
-            client.for_each_url_mut(f);
-        }
-        if let Some(server) = &mut self.server {
-            server.for_each_url_mut(f);
+        for artifact in self.artifacts_mut() {
+            artifact.for_each_url_mut(f);
         }
     }
 }
@@ -166,6 +222,13 @@ pub struct Arguments {
     pub jvm: Option<Vec<Argument>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub game: Option<Vec<Argument>>,
+    /// 26.x 起新增：用户没有自定义 JVM 参数时使用的默认 JVM 参数。
+    #[serde(
+        default,
+        rename = "default-user-jvm",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_user_jvm: Option<Vec<Argument>>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -175,6 +238,7 @@ impl Arguments {
         match key {
             "jvm" => self.jvm.as_ref(),
             "game" => self.game.as_ref(),
+            "default-user-jvm" => self.default_user_jvm.as_ref(),
             _ => None,
         }
     }
@@ -223,6 +287,60 @@ pub struct JavaVersion {
     pub extra: JsonMap,
 }
 
+/// `logging` 块（1.7+ 的 log4j 配置）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Logging {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<LoggingClient>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoggingClient {
+    /// 形如 `-Dlog4j.configurationFile=${path}`；`${path}` 由启动器替换成本地路径。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<LoggingFile>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+impl LoggingClient {
+    /// 把 `argument` 里的 `${path}` 替换成本地日志配置文件路径。
+    pub fn argument_with_path(&self, path: &str) -> Option<String> {
+        self.argument
+            .as_ref()
+            .map(|argument| argument.replace("${path}", path))
+    }
+}
+
+/// `logging.client.file` —— 与 [`Artifact`] 类似，但路径键名是 `id`。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoggingFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha1: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+impl UrlFields for LoggingFile {
+    fn for_each_url_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+        if let Some(url) = &mut self.url {
+            f(url);
+        }
+    }
+}
+
 /// `versions/<name>/<name>.json`。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VersionJson {
@@ -265,7 +383,37 @@ pub struct VersionJson {
     pub downloads: Option<VersionDownloads>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets: Option<String>,
+    // ---- 元信息（写回游戏不需要，但文档里存在） ----
+    #[serde(
+        default,
+        rename = "complianceLevel",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub compliance_level: Option<i64>,
+    #[serde(
+        default,
+        rename = "minimumLauncherVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub minimum_launcher_version: Option<i64>,
+    #[serde(
+        default,
+        rename = "releaseTime",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub release_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    /// `type` —— `release` / `snapshot` / `unobfuscated` / `old_beta` / `old_alpha`。
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// 1.7+ 的 log4j 配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logging: Option<Logging>,
     /// 所有未建模的字段，原样保留。
+    ///
+    /// 真实文档里通常只剩 Forge 写在 `version.json` 顶部的 `_comment_` / `_comment`
+    /// 注释字段。详见 [`crate::vanilla`] 的说明。
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -277,6 +425,13 @@ impl UrlFields for VersionJson {
         }
         if let Some(asset_index) = &mut self.asset_index {
             asset_index.for_each_url_mut(f);
+        }
+        if let Some(logging) = &mut self.logging {
+            if let Some(client) = &mut logging.client {
+                if let Some(file) = &mut client.file {
+                    file.for_each_url_mut(f);
+                }
+            }
         }
         for library in &mut self.libraries {
             library.for_each_url_mut(f);
@@ -443,5 +598,100 @@ mod tests {
         }
         // 其它形状落进兜底
         assert!(matches!(game[2], Argument::Other(_)));
+    }
+
+    #[test]
+    fn modern_and_legacy_document_fields_are_modeled() {
+        let json: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "x",
+                "type": "release",
+                "releaseTime": "2026-09-15T11:23:02+00:00",
+                "time": "2026-09-15T11:23:02+00:00",
+                "complianceLevel": 1,
+                "minimumLauncherVersion": 21,
+                "logging": {"client": {
+                    "argument": "-Dlog4j.configurationFile=${path}",
+                    "file": {"id": "client-1.12.xml", "sha1": "s", "size": 888,
+                             "url": "https://piston-data.mojang.com/x"},
+                    "type": "log4j2-xml"
+                }},
+                "downloads": {
+                    "client": {"url": "https://piston-data.mojang.com/c"},
+                    "server": {"url": "https://piston-data.mojang.com/s"},
+                    "client_mappings": {"url": "https://piston-data.mojang.com/cm"},
+                    "windows_server": {"url": "https://piston-data.mojang.com/w"}
+                },
+                "arguments": {
+                    "game": ["--one"],
+                    "default-user-jvm": [
+                        {"value": ["-Xmx2G"]},
+                        {"rules": [{"action": "allow", "os": {"name": "windows",
+                            "versionRange": {"min": "10.0.17134"}}}], "value": ["-XX:+UseZGC"]}
+                    ]
+                },
+                "libraries": [{
+                    "name": "a:a:1",
+                    "extract": {"exclude": ["META-INF/"]},
+                    "url": "https://maven.fabricmc.net/",
+                    "sha1": "s1", "sha256": "s256", "sha512": "s512", "md5": "m", "size": 9
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(json.kind.as_deref(), Some("release"));
+        assert_eq!(
+            json.release_time.as_deref(),
+            Some("2026-09-15T11:23:02+00:00")
+        );
+        assert_eq!(json.time.as_deref(), Some("2026-09-15T11:23:02+00:00"));
+        assert_eq!(json.compliance_level, Some(1));
+        assert_eq!(json.minimum_launcher_version, Some(21));
+
+        let downloads = json.downloads.as_ref().unwrap();
+        assert!(downloads.client_mappings.is_some());
+        assert!(downloads.windows_server.is_some());
+        assert!(downloads.server_mappings.is_none());
+        assert_eq!(downloads.artifacts().count(), 4);
+
+        let client = json.logging.as_ref().unwrap().client.as_ref().unwrap();
+        assert_eq!(client.kind.as_deref(), Some("log4j2-xml"));
+        assert_eq!(
+            client.file.as_ref().unwrap().id.as_deref(),
+            Some("client-1.12.xml")
+        );
+        assert_eq!(
+            client.argument_with_path("/tmp/x.xml").as_deref(),
+            Some("-Dlog4j.configurationFile=/tmp/x.xml")
+        );
+
+        // 26.x 的 default-user-jvm 能按 key 取到
+        assert_eq!(json.arguments_for("default-user-jvm").unwrap().len(), 2);
+
+        let lib = &json.libraries[0];
+        assert_eq!(lib.extract.as_ref().unwrap().exclude, vec!["META-INF/"]);
+        assert_eq!(lib.sha256.as_deref(), Some("s256"));
+        assert_eq!(lib.sha512.as_deref(), Some("s512"));
+        assert_eq!(lib.md5.as_deref(), Some("m"));
+        assert_eq!(lib.size, Some(9));
+
+        // 把这些新字段写回去也不能丢
+        let written = serde_json::to_value(&json).unwrap();
+        assert_eq!(written["type"], "release");
+        assert_eq!(written["complianceLevel"], 1);
+        assert_eq!(
+            written["downloads"]["client_mappings"]["url"],
+            "https://piston-data.mojang.com/cm"
+        );
+        assert_eq!(
+            written["libraries"][0]["extract"]["exclude"][0],
+            "META-INF/"
+        );
+        assert_eq!(written["libraries"][0]["sha256"], "s256");
+        assert_eq!(
+            written["arguments"]["default-user-jvm"][1]["value"][0],
+            "-XX:+UseZGC"
+        );
     }
 }

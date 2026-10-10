@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::source::{DownloadSource, Mirror, Root};
 
 pub mod install_profile;
-pub use install_profile::{DataEntry, DataPair, InstallEntry, InstallProfile, Processor, Side};
+pub use install_profile::{DataEntry, DataPair, InstallProfile, Processor, Side};
 
 /// bmclapi 的 NeoForge 版本列表接口。
 pub const NEOFORGE_VERSION_LIST_BMCLAPI: &str = "https://bmclapi2.bangbang93.com/neoforge/list";
@@ -23,6 +23,25 @@ pub struct NeoForgeVersionListing {
 pub struct NeoForgeListEntry {
     #[serde(default)]
     pub version: String,
+    /// 带 `neoforge-` 前缀的原始版本名。
+    #[serde(
+        default,
+        rename = "rawVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub raw_version: Option<String>,
+    #[serde(default, rename = "mcversion", skip_serializing_if = "Option::is_none")]
+    pub mc_version: Option<String>,
+    /// 安装器在镜像上的路径。
+    #[serde(
+        default,
+        rename = "installerPath",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub installer_path: Option<String>,
+    /// 未建模：bmclapi 的 Mongo 记账字段（`_id` / `__v`）。
+    #[serde(flatten)]
+    pub extra: crate::json::JsonMap,
 }
 
 /// NeoForge 安装器（1.20.1 的 NeoForge 实际发布在 `net.neoforged:forge` 下）。
@@ -118,6 +137,23 @@ mod tests {
         let (url, name) = neoforge_installer_url("21.1.72");
         assert_eq!(name, "neoforge");
         assert!(url.contains("/net/neoforged/neoforge/21.1.72/neoforge-"));
+    }
+
+    #[test]
+    fn neoforge_list_entries_keep_mirror_metadata() {
+        let entry: NeoForgeListEntry = serde_json::from_str(
+            r#"{"version":"21.1.257","rawVersion":"neoforge-21.1.257","mcversion":"1.21.1",
+                "installerPath":"/maven/net/neoforged/neoforge/21.1.257/neoforge-21.1.257-installer.jar"}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.version, "21.1.257");
+        assert_eq!(entry.raw_version.as_deref(), Some("neoforge-21.1.257"));
+        assert_eq!(entry.mc_version.as_deref(), Some("1.21.1"));
+        assert!(entry
+            .installer_path
+            .as_deref()
+            .unwrap()
+            .ends_with("-installer.jar"));
     }
 
     #[test]

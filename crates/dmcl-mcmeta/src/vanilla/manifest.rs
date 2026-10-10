@@ -37,6 +37,10 @@ pub struct VersionManifestEntry {
     pub sha1: Option<String>,
     #[serde(default, rename = "releaseTime")]
     pub release_time: Option<String>,
+    #[serde(default)]
+    pub time: Option<String>,
+    #[serde(default, rename = "complianceLevel")]
+    pub compliance_level: Option<i64>,
 }
 
 impl UrlFields for VersionManifestEntry {

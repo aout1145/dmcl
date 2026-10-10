@@ -23,6 +23,29 @@ pub struct ForgeVersionEntry {
     /// build 号 —— 不可能为负。
     #[serde(default)]
     pub build: u64,
+    /// 该 build 下各类文件的下载信息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<ForgeFile>>,
+    /// 最后修改时间（ISO 8601）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    /// 未建模：bmclapi 的 Mongo 记账字段（`_id` / `__v`）。
+    #[serde(flatten)]
+    pub extra: crate::json::JsonMap,
+}
+
+/// Forge build 下的一个文件（changelog / installer / mdk / universal）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ForgeFile {
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    /// 文件的 sha1。
+    #[serde(default)]
+    pub hash: Option<String>,
+    #[serde(flatten)]
+    pub extra: crate::json::JsonMap,
 }
 
 impl ForgeVersionEntry {
@@ -108,6 +131,24 @@ mod tests {
             forge_installer_url("1.20.1-47.2.0"),
             "${FORGE_MAVEN}/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar"
         );
+    }
+
+    #[test]
+    fn forge_list_entries_keep_files_and_modified() {
+        let entry: ForgeVersionEntry = serde_json::from_str(
+            r#"{"mcversion":"1.21.1","version":"52.1.16","build":52010016,
+                "modified":"2026-07-21T11:11:51.000Z",
+                "files":[{"format":"jar","category":"installer","hash":"abc"}],
+                "_id":"x","__v":0}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            entry.files.as_ref().unwrap()[0].category.as_deref(),
+            Some("installer")
+        );
+        assert_eq!(entry.modified.as_deref(), Some("2026-07-21T11:11:51.000Z"));
+        // 未建模的 Mongo 记账字段落在 extra
+        assert!(entry.extra.contains_key("_id"));
     }
 
     #[test]

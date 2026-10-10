@@ -1,4 +1,4 @@
-//! 安装器档案（Forge / NeoForge 安装包里的 `install_profile.json`）。
+//! 安装器档案（NeoForge 安装包里的 `install_profile.json`）。
 
 use std::collections::BTreeMap;
 
@@ -45,16 +45,14 @@ impl DataEntry {
             DataEntry::Other(value) => value.get("client").and_then(Value::as_str),
         }
     }
-}
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InstallEntry {
-    #[serde(default, rename = "filePath", skip_serializing_if = "Option::is_none")]
-    pub file_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(flatten)]
-    pub extra: JsonMap,
+    /// `profile["data"][key]["server"]`。
+    pub fn server(&self) -> Option<&str> {
+        match self {
+            DataEntry::Pair(pair) => pair.server.as_deref(),
+            DataEntry::Other(value) => value.get("server").and_then(Value::as_str),
+        }
+    }
 }
 
 /// `processors` 的一项。
@@ -85,10 +83,58 @@ impl Processor {
 }
 
 /// `install_profile.json`。
+///
+/// NeoForge 只有现代式（spec 1）安装器，没有 Forge 早期那套 `install` / `versionInfo`
+/// 经典结构，所以这里也不建模它们。未被本结构体建模的键（目前只剩 `_comment_`
+/// 这类注释）会留在 [`InstallProfile::extra`] 里。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InstallProfile {
+    /// `spec` —— 安装器规范版本（NeoForge 一直是 1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install: Option<InstallEntry>,
+    pub spec: Option<i64>,
+    /// `profile` —— 写进 `launcher_profiles.json` 的档案名（如 `NeoForge`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// 完整版本号（如 `neoforge-21.1.257`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// maven 坐标（Forge 有，NeoForge 通常没有）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// 目标原版版本号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minecraft: Option<String>,
+    /// 包内版本 JSON 的路径（如 `/version.json`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
+    /// 服务端 jar 的路径模板（`{LIBRARY_DIR}` 等占位符）。
+    #[serde(
+        default,
+        rename = "serverJarPath",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub server_jar_path: Option<String>,
+    /// 是否隐藏"解压 natives"提示。
+    #[serde(
+        default,
+        rename = "hideExtract",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hide_extract: Option<bool>,
+    /// 镜像列表地址。
+    #[serde(
+        default,
+        rename = "mirrorList",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mirror_list: Option<String>,
+    /// 安装器窗口用的图标（data URI）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub welcome: Option<String>,
     #[serde(default)]
     pub libraries: Vec<Library>,
     #[serde(default)]
@@ -108,9 +154,12 @@ impl UrlFields for InstallProfile {
 }
 
 impl InstallProfile {
-    /// 安装包内嵌的那个 jar 的路径（zip 内的条目名，不是文件系统路径）。
-    pub fn file_path(&self) -> Option<&str> {
-        self.install.as_ref().and_then(|i| i.file_path.as_deref())
+    /// 包内版本 JSON 的条目名（`json` 字段，去掉前导 `/`）；缺省 `version.json`。
+    pub fn version_json_entry(&self) -> &str {
+        self.json
+            .as_deref()
+            .map(|json| json.trim_start_matches('/'))
+            .unwrap_or("version.json")
     }
 
     /// 把所有 url 归一成模板。
@@ -132,7 +181,6 @@ mod tests {
     fn install_profile_handles_the_comment_entry() {
         let profile: InstallProfile = serde_json::from_str(
             r#"{
-                "install": {"filePath": "net/minecraftforge/forge.jar"},
                 "libraries": [{"name":"x:x:1","downloads":{"artifact":{"path":"p","url":"u","sha1":"s"}}}],
                 "processors": [{"jar":"j","classpath":["c"],"args":["a"],"outputs":{"{A}":"b"},"sides":["client"]}],
                 "data": {
@@ -143,8 +191,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(profile.file_path(), Some("net/minecraftforge/forge.jar"));
         assert_eq!(profile.data["BINPATCH"].client(), Some("/data/client.lzma"));
+        assert_eq!(profile.data["BINPATCH"].server(), Some("/data/server.lzma"));
         // 自由格式的 `_comment_` 字符串不能让解析失败
         assert_eq!(profile.data["_comment_"].client(), None);
         assert!(profile.processors[0].is_client_side());
@@ -160,6 +208,8 @@ mod tests {
                 .as_deref(),
             Some("p")
         );
+        // `json` 缺省时条目名是 version.json
+        assert_eq!(profile.version_json_entry(), "version.json");
     }
 
     #[test]
@@ -169,5 +219,44 @@ mod tests {
         let processor: Processor =
             serde_json::from_str(r#"{"jar":"j","sides":["server"]}"#).unwrap();
         assert!(!processor.is_client_side());
+    }
+
+    #[test]
+    fn modern_installer_fields_round_trip() {
+        let profile: InstallProfile = serde_json::from_str(
+            r#"{
+                "_comment_": ["please do not automate"],
+                "spec": 1,
+                "profile": "NeoForge",
+                "version": "neoforge-21.1.257",
+                "minecraft": "1.21.1",
+                "json": "/version.json",
+                "serverJarPath": "{LIBRARY_DIR}/server.jar",
+                "hideExtract": true,
+                "mirrorList": "https://mirrors.neoforged.net",
+                "icon": "data:image/png;base64,AAAA",
+                "logo": "/big_logo.png",
+                "welcome": "Welcome to the simple NeoForge installer",
+                "libraries": [],
+                "processors": [],
+                "data": {}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(profile.spec, Some(1));
+        assert_eq!(profile.profile.as_deref(), Some("NeoForge"));
+        assert_eq!(profile.version.as_deref(), Some("neoforge-21.1.257"));
+        assert_eq!(profile.minecraft.as_deref(), Some("1.21.1"));
+        assert_eq!(profile.hide_extract, Some(true));
+        assert_eq!(profile.version_json_entry(), "version.json");
+        // 注释键留在 `extra` 里，不丢失
+        assert!(profile.extra.contains_key("_comment_"));
+        let written = serde_json::to_value(&profile).unwrap();
+        assert_eq!(written["spec"], 1);
+        assert_eq!(written["serverJarPath"], "{LIBRARY_DIR}/server.jar");
+        // NeoForge 没有经典式 install / versionInfo
+        assert!(written.get("install").is_none());
+        assert!(written.get("versionInfo").is_none());
     }
 }
