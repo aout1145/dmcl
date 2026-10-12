@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use dialoguer::Confirm;
@@ -305,25 +305,18 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
             // 没有子命令 ⇒ 执行配置里的 `cli.default_command`（默认 `prompt`）
             let default = config.cli.default_command.clone();
             if default.is_empty() {
-                println!("未知命令");
-                return Ok(());
+                return Err(anyhow!("没有可执行的命令（cli.default_command 为空）"));
             }
             let argv: Vec<OsString> = vec![
                 OsString::from(env!("CARGO_PKG_NAME")),
-                OsString::from(default),
+                OsString::from(default.clone()),
             ];
             match Cli::try_parse_from(argv) {
                 Ok(parsed) => match parsed.command {
                     Some(command) => dispatch(command, config).await,
-                    None => {
-                        println!("未知命令");
-                        Ok(())
-                    }
+                    None => Err(anyhow!("未知命令：{default}")),
                 },
-                Err(_) => {
-                    println!("未知命令");
-                    Ok(())
-                }
+                Err(_) => Err(anyhow!("未知命令：{default}")),
             }
         }
     }
@@ -418,7 +411,12 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
         Commands::Prompt => prompt_interactive().await,
 
         Commands::Version => {
-            println!("{LAUNCHER_NAME} 版本 {LAUNCHER_VERSION}");
+            let suffix = if cfg!(debug_assertions) {
+                " (debug)"
+            } else {
+                ""
+            };
+            println!("{LAUNCHER_NAME} 版本 {LAUNCHER_VERSION}{suffix}");
             println!("构建时间：{}", env!("DMCL_BUILD_TIME"));
             println!();
             println!("感谢：bmclapi");

@@ -1,6 +1,10 @@
 //! 平台相关的名字与约定。
 
-/// `getOSName()` —— Minecraft 规则对象里使用的系统名。
+// 只支持这三个平台；其它平台直接编译失败，而不是运行时报错。
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+compile_error!("dmcl 目前只支持 Windows / macOS / Linux");
+
+/// Minecraft 规则对象里使用的系统名。
 ///
 /// 注意 macOS 必须叫 `osx`：这是游戏自己的规则文档里写死的名字，不是笔误。
 pub fn get_os_name() -> &'static str {
@@ -8,10 +12,8 @@ pub fn get_os_name() -> &'static str {
         "windows"
     } else if cfg!(target_os = "macos") {
         "osx"
-    } else if cfg!(target_os = "linux") {
-        "linux"
     } else {
-        "unknown"
+        "linux"
     }
 }
 
@@ -39,10 +41,7 @@ mod tests {
     #[test]
     fn os_name_follows_the_game_rules() {
         // macOS 在规则文档里叫 osx
-        assert!(matches!(
-            get_os_name(),
-            "windows" | "linux" | "osx" | "unknown"
-        ));
+        assert!(matches!(get_os_name(), "windows" | "linux" | "osx"));
         #[cfg(target_os = "macos")]
         assert_eq!(get_os_name(), "osx");
         #[cfg(target_os = "linux")]

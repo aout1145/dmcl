@@ -1,7 +1,10 @@
 //! NeoForge 的元数据、地址与取数（版本列表、安装器地址、安装器档案）。
 
-use anyhow::Result;
+use std::cmp::Ordering;
+
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use version_compare::{compare, Cmp};
 
 use crate::source::{DownloadSource, Mirror, Root};
 
@@ -91,17 +94,25 @@ impl DownloadSource {
                 let listing: NeoForgeVersionListing = self
                     .get_json(&neoforge_version_list_url_official(mc_version))
                     .await?;
-                // 官方接口返回整个仓库的版本，需要按 mc 版本前缀过滤：
-                // 1.20.1 时代的前缀就是 "1.20.1"，之后是去掉 "1." 的 mc 版本号
+                // 官方接口返回整个仓库的版本，按 mc 版本前缀过滤：
+                // 1.20.1 时代的前缀就是 "1.20.1"，之后是去掉前导 "1." 的 mc 版本号
+                //（1.21.1 → "21.1"）。按前两段精确比较，避免 "21.1" 误配 "21.10"。
                 let prefix = if mc_version == "1.20.1" {
-                    "1.20.1".to_string()
+                    "1.20.1"
                 } else {
-                    mc_version.get(2..).unwrap_or("").to_string()
+                    mc_version.strip_prefix("1.").ok_or_else(|| {
+                        anyhow!("NeoForge 目前只支持 1.x 的 Minecraft 版本：{mc_version}")
+                    })?
                 };
+                let want: Vec<&str> = prefix.split('.').collect();
                 listing
                     .versions
                     .into_iter()
-                    .filter(|version| version.starts_with(&prefix))
+                    .filter(|version| {
+                        let mut parts = version.split('.');
+                        parts.next() == want.first().copied()
+                            && parts.next() == want.get(1).copied()
+                    })
                     .collect()
             }
             Mirror::Bmclapi => {
@@ -114,10 +125,17 @@ impl DownloadSource {
     }
 }
 
-/// 最新 NeoForge —— 取列表的**最后一个**元素。
+/// 最新 NeoForge —— 按版本号取最大者。
 pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
     let versions = source.fetch_neoforge_versions(mc_version).await?;
-    Ok(versions.last().cloned().unwrap_or_default())
+    Ok(versions
+        .into_iter()
+        .max_by(|a, b| match compare(a, b) {
+            Ok(Cmp::Lt) => Ordering::Less,
+            Ok(Cmp::Gt) => Ordering::Greater,
+            _ => Ordering::Equal,
+        })
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

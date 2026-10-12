@@ -34,7 +34,7 @@ const MIB: u64 = 1024 * 1024;
 
 /// `launch.*` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
     /// 命名 java（名字 → 可执行文件），由 `search-java` 填充。
     pub java_configs: JavaConfigs,
@@ -77,7 +77,7 @@ impl Default for LaunchConfig {
 
 /// `account.*` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AccountConfig {
     /// 仍未使用的配置项：账号目前只有离线实现。
     pub online_mode: bool,
@@ -95,7 +95,7 @@ impl Default for AccountConfig {
 
 /// `download.*` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DownloadConfig {
     /// 同时进行的下载连接数上限。
     pub max_tasks: usize,
@@ -128,7 +128,7 @@ impl Default for DownloadConfig {
 
 /// `cli.*` 段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CliConfig {
     pub default_command: String,
 }
@@ -143,7 +143,7 @@ impl Default for CliConfig {
 
 /// 整份配置文档。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub launch: LaunchConfig,
     pub account: AccountConfig,
@@ -162,6 +162,7 @@ impl Config {
     pub fn path() -> PathBuf {
         match dirs::config_dir() {
             Some(base) => absolute(base.join("dmcl.json")),
+            // 极端环境下拿不到平台配置目录时，回落到当前目录下的 dmcl.json
             None => absolute("dmcl.json"),
         }
     }
@@ -172,7 +173,11 @@ impl Config {
         let mut config = match tokio::fs::read_to_string(&path).await {
             Ok(text) => serde_json::from_str(&text)
                 .with_context(|| format!("无法解析配置文件 {}", path.display()))?,
-            Err(_) => Config::default(),
+            // 文件不存在就用默认值；其它读错误（权限等）要报出来
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Config::default(),
+            Err(err) => {
+                return Err(err).with_context(|| format!("无法读取配置文件 {}", path.display()))
+            }
         };
         config.launch.minecraft_root_path = absolute(&config.launch.minecraft_root_path);
         Ok(config)
@@ -183,7 +188,9 @@ impl Config {
         let path = Self::path();
         let text = serde_json::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
         }
         tokio::fs::write(&path, text)
             .await

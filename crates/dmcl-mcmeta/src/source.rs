@@ -33,8 +33,7 @@ pub const DEFAULT_USER_AGENT: &str = concat!("dmcl/", env!("CARGO_PKG_VERSION"))
 ///
 /// 类型化之后，`--mirror` 的候选值由 clap 生成，代码里不再到处拿字符串比较。
 ///
-/// 解析是**有损的**：`dmcl.json` 里写错的值会退化成 [`Mirror::Official`]，
-/// 而不是让整份配置加载失败。
+/// `dmcl.json` 里写错的值会**直接报错**（见 `FromStr`），不会静默退化。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Mirror {
@@ -63,14 +62,17 @@ impl fmt::Display for Mirror {
 }
 
 impl FromStr for Mirror {
-    type Err = std::convert::Infallible;
+    type Err = anyhow::Error;
 
-    /// 有损：不认识的值一律当作 `official`。
+    /// 不认识的值直接报错（配置文件写错时能立刻发现）。
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "bmclapi" => Mirror::Bmclapi,
-            _ => Mirror::Official,
-        })
+        match s {
+            "official" => Ok(Mirror::Official),
+            "bmclapi" => Ok(Mirror::Bmclapi),
+            other => Err(anyhow!(
+                "不认识的镜像源：{other}（可选 official / bmclapi）"
+            )),
+        }
     }
 }
 
@@ -82,9 +84,8 @@ impl Serialize for Mirror {
 
 impl<'de> Deserialize<'de> for Mirror {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(String::deserialize(deserializer)?
-            .parse()
-            .unwrap_or(Mirror::Official))
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -550,12 +551,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mirror_names_round_trip_and_typos_are_tolerated() {
+    fn mirror_names_round_trip_and_typos_are_rejected() {
         assert_eq!(Mirror::Official.as_str(), "official");
         assert_eq!(Mirror::Bmclapi.to_string(), "bmclapi");
         assert_eq!("bmclapi".parse::<Mirror>().unwrap(), Mirror::Bmclapi);
-        // 配置里写错的值退化成 official
-        assert_eq!("typo".parse::<Mirror>().unwrap(), Mirror::Official);
+        // 配置里写错的值直接报错
+        assert!("typo".parse::<Mirror>().is_err());
+        assert!(serde_json::from_str::<Mirror>("\"typo\"").is_err());
         assert_eq!(
             serde_json::to_string(&Mirror::Bmclapi).unwrap(),
             "\"bmclapi\""

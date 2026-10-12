@@ -60,10 +60,9 @@ impl GameLauncher {
 
     /// 拼 classpath。
     ///
-    /// classpath 只算一次。
-    /// classpath 本身是**命令行值**，所以这里仍然用平台分隔符拼成 `String`，
-    /// 只有每个条目是路径。
-    pub async fn get_libraries(&self) -> Result<String> {
+    /// classpath 只算一次。它是**命令行值**，所以这里用平台分隔符拼成 `String`，
+    /// 只有每个条目是路径。版本号无法比较时经 `ctx` 上报一条警告。
+    pub async fn get_libraries(&self, ctx: &TaskContext) -> Result<String> {
         if self.java.is_none() {
             return Err(anyhow!("还没有选择 java"));
         }
@@ -84,7 +83,15 @@ impl GameLauncher {
             // 版本号解析不出来时保留已有的那一项
             let better = match libs.get(&name) {
                 None => true,
-                Some((existing, _)) => compare_to(&version, existing, Cmp::Gt).unwrap_or(false),
+                Some((existing, _)) => match compare_to(&version, existing, Cmp::Gt) {
+                    Ok(better) => better,
+                    Err(()) => {
+                        ctx.log(format!(
+                            "警告：{name} 的版本号无法比较（{version} vs {existing}），保留先到的"
+                        ));
+                        false
+                    }
+                },
             };
 
             match lib.downloads.as_ref() {
@@ -154,8 +161,8 @@ impl GameLauncher {
             match arg {
                 Argument::Plain(value) => args.push(value.clone()),
                 Argument::Ruled(ruled) => {
-                    // 有 rules 且命中时才加上 value
-                    if ruled.rules.is_some() && rules_allow(&ruled.rules, &rules) {
+                    // 没有 rules 视为无条件；有 rules 则命中了才加上
+                    if rules_allow(&ruled.rules, &rules) {
                         if let Some(value) = &ruled.value {
                             value.push_into(&mut args);
                         }
@@ -248,7 +255,7 @@ impl GameLauncher {
         );
 
         // 模板替换：这些都是要拼进命令行的值，因此必须是字符串
-        let classpath = self.get_libraries().await?;
+        let classpath = self.get_libraries(ctx).await?;
         let natives_directory = self.natives_path.to_string_lossy().into_owned();
         let library_directory = self
             .option
@@ -440,7 +447,10 @@ mod tests {
         .unwrap();
 
         let launcher = launcher_with(json, root.clone());
-        let classpath = launcher.get_libraries().await.unwrap();
+        let classpath = launcher
+            .get_libraries(&TaskContext::detached("t"))
+            .await
+            .unwrap();
 
         assert!(classpath.contains("lwjgl-3.3.2.jar"), "{classpath}");
         assert!(!classpath.contains("lwjgl-3.3.1.jar"), "{classpath}");

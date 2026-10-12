@@ -14,16 +14,7 @@ async fn main() {
 }
 
 async fn real_main() -> anyhow::Result<()> {
-    debug_snapshot();
     let cli = Cli::parse_localized();
     let mut config = Config::load(None).await?;
     run(cli, &mut config).await
 }
-
-#[cfg(debug_assertions)]
-fn debug_snapshot() {
-    println!("!!! DMCL SNAPSHOT !!!\n");
-}
-
-#[cfg(not(debug_assertions))]
-fn debug_snapshot() {}

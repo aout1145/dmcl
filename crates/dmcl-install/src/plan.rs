@@ -182,10 +182,6 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
             }),
             // 自带仓库地址的"困难库"
             None => {
-                if coord.starts_with("net.minecraftforge:forge:") {
-                    // `net.minecraftforge:forge:` 的库拿不到下载地址，由安装器本地产出
-                    continue;
-                }
                 let base = lib.url.as_deref().unwrap_or("").trim_end_matches('/');
                 planned.push(PlannedFile {
                     url: format!("{base}/{lib_path}"),
@@ -355,7 +351,13 @@ mod tests {
         let names: Vec<&str> = planned.iter().map(|file| file.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["lib-1.jar", "lib-2.jar", "lib-3.jar", "lib-4.jar"]
+            vec![
+                "lib-1.jar",
+                "lib-2.jar",
+                "lib-3.jar",
+                "forge-1.20.1-47.2.0.jar",
+                "lib-4.jar"
+            ]
         );
 
         // 普通库：用文档里的（已模板化的）地址
@@ -371,14 +373,17 @@ mod tests {
             planned[2].url,
             "https://maven.example.com/repo/reposed/lib/3/lib-3.jar"
         );
-        // forge 那个下不下来的文件被跳过（即使它有 ${FORGE_MAVEN} 模板）
-        assert!(!names.contains(&"forge-1.20.1-47.2.0.jar"));
+        // forge 的困难库同样按 {url}/{lib_path} 下载（不再跳过）
+        assert_eq!(
+            planned[3].url,
+            "${FORGE_MAVEN}/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0.jar"
+        );
         // 规则不通过的库不下
         assert!(!names.iter().any(|name| name.contains("lib-9")));
         // 只给了 url 没给 path 的 artifact：按 maven 坐标推导路径
-        assert_eq!(planned[3].url, "https://example.com/x.jar");
+        assert_eq!(planned[4].url, "https://example.com/x.jar");
         assert_eq!(
-            planned[3].save_to,
+            planned[4].save_to,
             PathBuf::from("/mc/libraries/old/lib/4/lib-4.jar")
         );
     }
