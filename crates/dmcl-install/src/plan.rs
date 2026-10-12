@@ -282,6 +282,27 @@ pub fn plan_asset_objects(
     planned
 }
 
+/// 这个版本需要下载的全部文件：客户端 jar + 库 + 资源索引文件（+ 给了 `index` 时的资源对象）。
+pub fn plan_game_files(
+    plan: &PlanContext,
+    json: &VersionJson,
+    version_name: &str,
+    index: Option<&AssetIndexFile>,
+) -> Vec<PlannedFile> {
+    let mut files = Vec::new();
+    if let Some(client) = plan_client_jar(plan, json, version_name) {
+        files.push(client);
+    }
+    files.extend(plan_libraries(plan, json));
+    if let Some(index_file) = plan_assets_index(plan, json) {
+        files.push(index_file);
+    }
+    if let Some(index) = index {
+        files.extend(plan_asset_objects(plan, json, index));
+    }
+    files
+}
+
 /// `*.ogg` 就是音乐 / 音效。
 fn is_music(key: &str) -> bool {
     Path::new(key)
