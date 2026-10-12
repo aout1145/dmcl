@@ -283,8 +283,9 @@ where
 
     /// 把整条子链当成一个步骤来跑。
     ///
-    /// 子链有自己的事件通道，这里会把它的事件**转发**到父上下文，
-    /// 所以"链套链"时父链的订阅者仍然能看到每一步的进度。
+    /// 子链有自己的事件通道，这里会把它的事件**原样转发**到父上下文（链级的
+    /// 开始 / 结束除外），所以「链套链」时父链的订阅者能看到嵌套的每一步 —— 前端
+    /// 据此用栈还原层级（进入 `StepStarted` push、`StepFinished` pop）。
     fn run<'a>(&'a self, input: I, ctx: TaskContext) -> BoxFuture<'a, Result<O>> {
         Box::pin(async move {
             let mut rx = self.events.subscribe();
@@ -297,32 +298,17 @@ where
                     biased;
                     result = &mut running => {
                         while let Ok(event) = rx.try_recv() {
-                            forward_progress(&ctx, event);
+                            ctx.forward(event);
                         }
                         return result;
                     }
                     event = rx.recv(), if !closed => match event {
-                        Ok(event) => forward_progress(&ctx, event),
+                        Ok(event) => ctx.forward(event),
                         Err(_) => closed = true,
                     },
                 }
             }
         })
-    }
-}
-
-/// 只转发步骤内部上报的事件（日志 / 进度 / 警告）：链路结构（开始 / 结束）由父链自己产生。
-fn forward_progress(ctx: &TaskContext, event: TaskEvent) {
-    match event {
-        TaskEvent::Log { name, message, .. } => ctx.child(name).log(message),
-        TaskEvent::Progress { name, progress, .. } => ctx.child(name).report(progress),
-        TaskEvent::Warning {
-            name,
-            message,
-            decision,
-            ..
-        } => ctx.child(name).report_warning(message, decision),
-        _ => {}
     }
 }
 
@@ -487,6 +473,35 @@ mod tests {
         assert_eq!(progress.len(), 1, "{events:?}");
         assert_eq!(progress[0].0, "下载");
         assert_eq!(progress[0].1.current, 1);
+
+        // 子链的步骤边界也要转发：前端据此用栈还原嵌套层级
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                TaskEvent::StepStarted { name, .. } if name == "下载"
+            )),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                TaskEvent::StepFinished { name, .. } if name == "下载"
+            )),
+            "{events:?}"
+        );
+        // 但子链自身的「开始 / 结束」不转发（否则会被前端当成新的一层）
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TaskEvent::Started { name, .. } if name == "子链")),
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TaskEvent::Finished { name } if name == "子链")),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]

@@ -69,7 +69,9 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 - `TaskContext`：任务用它上报进度（`progress`，可原地刷新的量化进度）与日志（`log`，
   一次性文字）；
 - `TaskEvent`（`broadcast` 事件流）：前端通过 `subscribe()` 实时消费，一个任务可以上报
-  任意多次，也可以被多个前端同时消费；链套链时子链的事件会转发到父链；
+  任意多次，也可以被多个前端同时消费；链套链时子链的**步骤级**事件会原样转发到父链
+  （含 `StepStarted` / `StepFinished`，只有链级的 `Started` / `Finished` 丢弃），前端据此
+  用**栈**还原嵌套层级：进入 `StepStarted` push、`StepFinished` pop；
 - `CancelHandle`：可从任意线程取消；
 - `CommandTask`：跑外部程序，默认把它的输出**逐行变成进度事件**（Forge 的安装器
   processor 就是这么跑的）；取消时子进程被 `kill_on_drop` 杀掉。

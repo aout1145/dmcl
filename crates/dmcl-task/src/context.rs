@@ -232,15 +232,17 @@ impl TaskContext {
         self.check_cancelled()
     }
 
-    /// 以当前上下文的名字重新上报一条警告（供链转发嵌套链的警告）。
-    pub(crate) fn report_warning(&self, message: impl Into<String>, decision: WarningDecision) {
-        let _ = self.events.send(TaskEvent::Warning {
-            step: self.step,
-            steps: self.steps,
-            name: self.name.to_string(),
-            message: message.into(),
-            decision,
-        });
+    /// 把一条子链的**步骤级**事件原样转发给本上下文的订阅者（供链转发嵌套链的事件）。
+    ///
+    /// 链级事件（`Started` / `Finished`）描述的是子链自身、已由父链自己的结构事件代表，
+    /// 因此直接丢弃 —— 否则前端会把子链的「开始 / 结束」误当成新的一层。
+    pub(crate) fn forward(&self, event: TaskEvent) {
+        match event {
+            TaskEvent::Started { .. } | TaskEvent::Finished { .. } => {}
+            event => {
+                let _ = self.events.send(event);
+            }
+        }
     }
 }
 
