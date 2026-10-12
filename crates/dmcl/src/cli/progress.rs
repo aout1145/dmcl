@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use dialoguer::console::Term;
+use dialoguer::console::{Style, Term};
 use dmcl_task::TaskEvent;
 
 /// 一层内容的缩进（与 `[i/n] ` 等宽）。
@@ -18,22 +18,20 @@ const NESTED: &str = "  ";
 /// 安装 1.20.1（共 4 步）
 /// [1/4] 获取原版元数据
 ///       查询版本列表并保存 1.20.1.json
-///       完成
 /// [4/4] 下载游戏文件
 ///       获取资源索引
 ///         100.0% (403.4 KiB / 403.4 KiB) 1/1 个文件
 ///       下载库文件
 ///         41.2% (34.9 MiB / 84.7 MiB) 35/120 个文件
-///       完成
 /// 安装 1.20.1 完成
 /// ```
 ///
-/// 层级由 [`Layout`] 用**栈**还原：嵌套链的 `StepStarted` 入栈、`StepFinished` 出栈，
-/// 栈深即层级，内容按层级缩进，所以嵌套步骤名只作标题出现一次、不再逐行重复。
-///
-/// 事件分两类：**进度**（`TaskEvent::Progress`）是"可原地刷新"的行——交互式终端上
-/// 反复覆盖同一行，管道里跨 5% 刻度才打一行；**日志**（`TaskEvent::Log`）是"最终行"
-/// ——逐条输出、不覆盖、不去重（命令行输出、缺件清单等）。
+/// * **层级**由 [`Layout`] 用**栈**还原：嵌套链的 `StepStarted` 入栈、`StepFinished`
+///   出栈，栈深即层级，嵌套步骤名只作标题出现一次、不再逐行重复。
+/// * **日志弱化**：`TaskEvent::Log` 变暗（`dim`），步骤头 / 进度保持正常，突出进度。
+/// * **多行内容**（含换行的消息）整块再缩进一级，成一目了然的子块。
+/// * 交互式终端上，**日志打在“当前进度行”上方，进度行始终钉在最下面一行**；管道里
+///   则逐行输出、跨 5% 刻度才打一条进度。
 pub struct ProgressPrinter {
     term: Term,
     interactive: bool,
@@ -43,10 +41,8 @@ pub struct ProgressPrinter {
     last_line: String,
     /// 层级状态（栈 + 懒标签）。
     layout: Layout,
-    /// 交互模式：当前悬着那一行的前缀（判断要不要先换行）。
-    live_subject: String,
-    /// 交互模式：当前行是否"悬着"（还没换行，等着被覆盖 / 收尾）。
-    mid_line: bool,
+    /// 交互式：当前钉在底部的那行进度（纯文本，不含换行）。
+    live: Option<String>,
 }
 
 impl Default for ProgressPrinter {
@@ -65,8 +61,7 @@ impl ProgressPrinter {
             last_bucket: None,
             last_line: String::new(),
             layout: Layout::default(),
-            live_subject: String::new(),
-            mid_line: false,
+            live: None,
         }
     }
 
@@ -87,17 +82,19 @@ impl ProgressPrinter {
             }
         }
 
-        for line in self.layout.render(event) {
-            self.print(&line.text, line.end_line, &line.subject);
+        let lines = self.layout.render(event);
+        if self.interactive {
+            self.draw_interactive(&lines);
+        } else {
+            self.draw_plain(&lines);
         }
     }
 
-    /// 收尾：交互式下若还有一行悬着，补一个换行，别让后续输出接在进度后面。
+    /// 收尾：交互式下给底部进度行补一个换行，别让后续输出接在进度后面。
     pub fn finish(&mut self) {
-        if self.interactive && self.mid_line {
+        if self.interactive && self.live.take().is_some() {
             let _ = writeln!(self.term);
             let _ = self.term.flush();
-            self.mid_line = false;
         }
     }
 
@@ -106,33 +103,48 @@ impl ProgressPrinter {
         self.interactive
     }
 
-    /// `end_line=true` 是最终行（两模式都换行）；`false` 是进度行（交互式原地刷新）。
-    ///
-    /// `subject` 是交互式下判断"换不换行"的前缀：同一步骤 / 同一子步骤的进度
-    /// 前缀不变就覆盖，换了才先换行。日志、步骤头等都走 `end_line=true`。
-    fn print(&mut self, text: &str, end_line: bool, subject: &str) {
-        if self.interactive {
-            if self.mid_line && (end_line || subject != self.live_subject) {
-                let _ = writeln!(self.term);
+    /// 非交互：行式输出；只有"可原地刷新"的进度行去重。
+    fn draw_plain(&mut self, lines: &[Line]) {
+        for line in lines {
+            if !line.end_line && line.text == self.last_line {
+                continue;
             }
-            let _ = self.term.clear_line();
-            if end_line {
-                let _ = writeln!(self.term, "{text}");
-                self.mid_line = false;
-            } else {
-                let _ = write!(self.term, "\r{text}");
-                self.mid_line = true;
-                self.live_subject = subject.to_string();
-            }
-            let _ = self.term.flush();
-        } else {
-            // 非交互：只有"可原地刷新"的进度行去重；日志 / 结构行逐条输出
-            if !end_line && text == self.last_line {
-                return;
-            }
-            println!("{text}");
-            self.last_line = text.to_string();
+            println!("{}", styled(line));
+            self.last_line = line.text.clone();
         }
+    }
+
+    /// 交互式：日志等最终行打在底部进度行**上方**，进度行始终留在最下面。
+    fn draw_interactive(&mut self, lines: &[Line]) {
+        for line in lines {
+            if line.end_line {
+                // 擦掉底部进度行，把最终行打在它原来的位置
+                if self.live.is_some() {
+                    let _ = self.term.clear_line();
+                }
+                let _ = writeln!(self.term, "{}", styled(line));
+                if !line.keep_live {
+                    self.live = None;
+                }
+            } else {
+                self.live = Some(line.text.clone());
+            }
+        }
+        // 把当前进度重新画到最下面一行
+        if let Some(text) = self.live.clone() {
+            let _ = self.term.clear_line();
+            let _ = write!(self.term, "{text}");
+        }
+        let _ = self.term.flush();
+    }
+}
+
+/// 按标记把一行渲染成终端字符串（日志变暗；管道 / 不支持颜色时自动降级为纯文本）。
+fn styled(line: &Line) -> String {
+    if line.dim {
+        Style::new().dim().apply_to(&line.text).to_string()
+    } else {
+        line.text.clone()
     }
 }
 
@@ -141,17 +153,20 @@ struct Line {
     text: String,
     /// 最终行（两模式都换行）还是可原地刷新的进度行。
     end_line: bool,
-    /// 交互模式下判断"换不换行"的前缀。
-    subject: String,
+    /// 日志弱化：用暗色渲染。
+    dim: bool,
+    /// 打完之后是否保留底部进度行（日志 = true；警告 / 步骤头 / 完成 / 失败 = false）。
+    keep_live: bool,
 }
 
 impl Line {
-    /// 一条最终行（步骤头 / 日志 / 完成 / 失败等）。
-    fn final_line(text: String) -> Self {
+    /// 一条最终行（步骤头 / 完成 / 失败等），不弱化、且丢弃底部进度行。
+    fn header_line(text: String) -> Self {
         Self {
             text,
             end_line: true,
-            subject: String::new(),
+            dim: false,
+            keep_live: false,
         }
     }
 }
@@ -168,7 +183,7 @@ struct Layout {
 }
 
 impl Layout {
-    /// 把一条事件渲染成要打印的行（零行到两行）。
+    /// 把一条事件渲染成要打印的行（零行到多行）。
     fn render(&mut self, event: TaskEvent) -> Vec<Line> {
         match event {
             TaskEvent::Started { name, steps } => {
@@ -179,7 +194,7 @@ impl Layout {
                 } else {
                     format!("{name}（共 {steps} 步）")
                 };
-                vec![Line::final_line(text)]
+                vec![Line::header_line(text)]
             }
             TaskEvent::StepStarted { step, steps, name } => {
                 self.stack.push(name.clone());
@@ -191,24 +206,21 @@ impl Layout {
                 } else {
                     format!("{}{name}", header_indent(level))
                 };
-                vec![Line::final_line(text)]
+                vec![Line::header_line(text)]
             }
-            TaskEvent::Log { name, message, .. } => self.content(&name, &message, true),
+            TaskEvent::Log { name, message, .. } => self.content(&name, &message, true, true, true),
             TaskEvent::Warning { name, message, .. } => {
-                self.content(&name, &format!("⚠ 警告：{message}"), true)
+                self.content(&name, &format!("⚠ 警告：{message}"), true, false, false)
             }
             TaskEvent::Progress { name, progress, .. } => {
-                self.content(&name, &progress.to_string(), false)
+                self.content(&name, &progress.to_string(), false, false, false)
             }
             TaskEvent::StepFinished { .. } => {
+                // 只出栈，不打「完成」：每个步骤都打一行太吵，链尾的 `Finished` 已经
+                // 给出了总的完成提示
                 self.stack.pop();
                 self.label = None;
-                // 只有顶层步骤结束才打「完成」，嵌套步骤靠下一个标题分隔
-                if self.stack.is_empty() {
-                    vec![Line::final_line(format!("{INDENT}完成"))]
-                } else {
-                    Vec::new()
-                }
+                Vec::new()
             }
             TaskEvent::Failed { step, steps, name } => {
                 let level = self.stack.len().max(1);
@@ -217,49 +229,71 @@ impl Layout {
                 } else {
                     format!("{}{name} 失败", header_indent(level))
                 };
-                vec![Line::final_line(text)]
+                vec![Line::header_line(text)]
             }
             TaskEvent::Finished { name } => {
                 self.stack.clear();
                 self.label = None;
-                vec![Line::final_line(format!("{name} 完成"))]
+                vec![Line::header_line(format!("{name} 完成"))]
             }
         }
     }
 
-    /// 渲染一条内容行（日志 / 警告 / 进度）。
+    /// 渲染一条内容（日志 / 警告 / 进度）。
     ///
     /// 名字等于当前步骤名时按当前层缩进；不等时（`ctx.child(名字)` 这类同层改名子
-    /// 任务）先补一行标签标题，内容再深一级。
-    fn content(&mut self, name: &str, body: &str, end_line: bool) -> Vec<Line> {
+    /// 任务）先补一行标签标题，内容再深一级。**含换行的消息整块再缩进一级**。
+    fn content(
+        &mut self,
+        name: &str,
+        body: &str,
+        end_line: bool,
+        dim: bool,
+        keep_live: bool,
+    ) -> Vec<Line> {
         let level = self.stack.len();
         let direct = level == 0 || self.stack.last().map(String::as_str) == Some(name);
-        if direct {
-            self.label = None;
-            let indent = content_indent(level);
-            return vec![Line {
-                text: format!("{indent}{body}"),
-                end_line,
-                subject: indent,
-            }];
-        }
-
         let mut lines = Vec::new();
-        if self.label.as_deref() != Some(name) {
-            let indent = content_indent(level);
+        let indent = if direct {
+            self.label = None;
+            content_indent(level)
+        } else {
+            if self.label.as_deref() != Some(name) {
+                let label_indent = content_indent(level);
+                lines.push(Line {
+                    text: format!("{label_indent}{name}"),
+                    end_line: true,
+                    dim,
+                    keep_live,
+                });
+                self.label = Some(name.to_string());
+            }
+            content_indent(level + 1)
+        };
+
+        // 多行内容整块再缩进一级；单行按当前缩进
+        let indent = if body.contains('\n') {
+            content_indent(level + 1)
+        } else {
+            indent
+        };
+        if body.is_empty() {
             lines.push(Line {
-                text: format!("{indent}{name}"),
-                end_line: true,
-                subject: indent,
+                text: indent,
+                end_line,
+                dim,
+                keep_live,
             });
-            self.label = Some(name.to_string());
+        } else {
+            for text in body.lines() {
+                lines.push(Line {
+                    text: format!("{indent}{text}"),
+                    end_line,
+                    dim,
+                    keep_live,
+                });
+            }
         }
-        let indent = content_indent(level + 1);
-        lines.push(Line {
-            text: format!("{indent}{body}"),
-            end_line,
-            subject: indent,
-        });
         lines
     }
 }
@@ -353,13 +387,18 @@ mod tests {
         });
         assert_eq!(lines[0].text, format!("{INDENT}完成"));
 
-        // 顶层步骤结束：出栈到空，打印「完成」
+        // 顶层步骤结束：出栈，不打「完成」（完成只在链尾由 `Finished` 打一次）
         let lines = layout.render(TaskEvent::StepFinished {
             step: 0,
             steps: 1,
             name: "下载游戏文件".into(),
         });
-        assert_eq!(lines[0].text, format!("{INDENT}完成"));
+        assert!(lines.is_empty());
+
+        let lines = layout.render(TaskEvent::Finished {
+            name: "启动".into(),
+        });
+        assert_eq!(lines[0].text, "启动 完成");
     }
 
     /// `ctx.child(名字)` 这类同层改名子任务：首次补一行标签，内容深一级；同名字不重复。
@@ -400,6 +439,55 @@ mod tests {
             message: "done".into(),
         });
         assert_eq!(lines[0].text, format!("{INDENT}done"));
+    }
+
+    /// 含换行的日志整块再缩进一级，且每一行都变暗。
+    #[test]
+    fn a_multi_line_log_becomes_an_indented_block() {
+        let mut layout = Layout::default();
+        layout.render(TaskEvent::StepStarted {
+            step: 0,
+            steps: 1,
+            name: "检查".into(),
+        });
+        let lines = layout.render(TaskEvent::Log {
+            step: 0,
+            steps: 1,
+            name: "检查".into(),
+            message: "第一行\n第二行".into(),
+        });
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, format!("{INDENT}  第一行"));
+        assert_eq!(lines[1].text, format!("{INDENT}  第二行"));
+        assert!(lines.iter().all(|line| line.dim && line.end_line));
+    }
+
+    /// 日志弱化（dim），进度与步骤头保持正常。
+    #[test]
+    fn logs_are_dimmed_but_headers_and_progress_are_not() {
+        let mut layout = Layout::default();
+        let header = layout.render(TaskEvent::StepStarted {
+            step: 0,
+            steps: 1,
+            name: "下载".into(),
+        });
+        assert!(!header[0].dim);
+
+        let log = layout.render(TaskEvent::Log {
+            step: 0,
+            steps: 1,
+            name: "下载".into(),
+            message: "hello".into(),
+        });
+        assert!(log[0].dim);
+
+        let progress = layout.render(TaskEvent::Progress {
+            step: 0,
+            steps: 1,
+            name: "下载".into(),
+            progress: Progress::new(1, Some(2), "1/2 个文件"),
+        });
+        assert!(!progress[0].dim);
     }
 
     /// 纯文字进度（current=0、无总量）不带没意义的 `(0 B)`。
