@@ -160,7 +160,7 @@ pub async fn fabric_loaders(
     source.fetch_fabric_loaders(mc_version).await
 }
 
-/// 最新的**稳定** Fabric loader；没有稳定版时取列表第一个（与原实现一致）。
+/// 最新的**稳定** Fabric loader；没有稳定版时取列表第一个。
 pub async fn latest_fabric_loader(source: &DownloadSource, mc_version: &str) -> Result<String> {
     let list = fabric_loaders(source, mc_version).await?;
     for entry in list.iter().rev() {

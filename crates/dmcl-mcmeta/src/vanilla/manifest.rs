@@ -59,7 +59,7 @@ impl VersionManifest {
         changed
     }
 
-    /// 找出某个版本 —— 与原来的"从后往前找"一致（清单是按新到旧排的）。
+    /// 找出某个版本（清单按新到旧排列，因此从后往前找）。
     pub fn find(&self, version_id: &str) -> Option<&VersionManifestEntry> {
         self.versions.iter().rev().find(|ver| ver.id == version_id)
     }

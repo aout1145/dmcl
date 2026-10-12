@@ -46,11 +46,7 @@ impl Account for OfflineAccount {
     }
 }
 
-/// `std.uuid.sha1UUID(name).toString()`：由 `sha1(name)` 前 16 字节构造的
-/// 基于名字的（version 5）RFC-4122 uuid。
-///
-/// 原 D 实现手工翻转 version / variant 位并手拼十六进制；这里交给
-/// `uuid::Builder::from_sha1_bytes`，对任何名字产生的字符串都逐字节相同。
+/// 由 `sha1(name)` 前 16 字节构造的、基于名字的（version 5）RFC-4122 uuid。
 pub fn sha1_uuid(name: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(name.as_bytes());
@@ -81,10 +77,9 @@ mod tests {
         assert_ne!(uuid, sha1_uuid("other"));
     }
 
-    /// 原 D 算法（`sha1(name)[0..16]` 再加 version/variant 位）留下的黄金值，
-    /// 用来证明换成 `uuid::Builder` 之后逐字节没变。
+    /// 固定期望值（`sha1(name)[0..16]` 再加 version/variant 位），用来锁定实现不漂移。
     #[test]
-    fn offline_uuid_matches_the_d_implementation_byte_for_byte() {
+    fn offline_uuid_matches_fixed_expected_values() {
         assert_eq!(sha1_uuid("player"), "889c6853-a117-5ca8-bef9-d6523335dc06");
         assert_eq!(sha1_uuid("Steve"), "2121f63f-a284-5c8a-9ce4-00bb6f83824f");
         assert_eq!(sha1_uuid(""), "da39a3ee-5e6b-5b0d-b255-bfef95601890");

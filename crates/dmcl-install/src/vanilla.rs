@@ -11,10 +11,10 @@ use crate::io::{write_json_safe, write_safe};
 use crate::options::InstallOptions;
 
 /// 新建 `.minecraft` 时写入的 `launcher_profiles.json`
-/// —— 与官方启动器 / 原实现逐字节一致。
+/// —— 与官方启动器逐字节一致。
 pub const LAUNCHER_PROFILES_JSON: &str = r#"{"selectedProfile": "(Default)","profiles": {"(Default)": {"name": "(Default)"}},"clientToken": "88888888-8888-8888-8888-888888888888"}"#;
 
-/// `generateLauncherProfiles` —— 文件不存在时才创建。
+/// 文件不存在时才创建 `launcher_profiles.json`。
 pub async fn generate_launcher_profiles(root_path: impl AsRef<std::path::Path>) -> Result<()> {
     let path = absolute(root_path).join("launcher_profiles.json");
     if tokio::fs::metadata(&path).await.is_err() {
@@ -23,7 +23,7 @@ pub async fn generate_launcher_profiles(root_path: impl AsRef<std::path::Path>) 
     Ok(())
 }
 
-/// `downloadVanilla` —— 在版本列表里找到 `version_id`，把它的版本 JSON 存成
+/// 在版本列表里找到 `version_id`，把它的版本 JSON 存成
 /// `versions/<version_name>/<version_name>.json`。
 ///
 /// 写盘前会把 URL 模板解析成**官方**地址（而不是当前镜像的地址），

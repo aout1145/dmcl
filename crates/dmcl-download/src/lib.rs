@@ -25,7 +25,7 @@
 //! * **分块**：已知大小且超过 [`DownloadOptions::chunk_threshold`] 的文件按
 //!   `Range` 请求切成若干块并发下载，单文件并发块数由
 //!   [`DownloadOptions::max_chunks_per_file`] 限制。
-//! * **先写 `.part` 再改名**：只有 sha1 校验通过才改名为最终文件，
+//! * **先写 `.part` 再改名**：校验通过（给了校验值就比对摘要，否则比对大小）才改名为最终文件，
 //!   因此中断 / 失败不会留下一个"看起来完整"的坏文件。
 //! * **不做断点续传**：失败即整份重来（最多 [`DownloadOptions::max_attempts`] 次）。
 

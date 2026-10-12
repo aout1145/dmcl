@@ -88,7 +88,7 @@ pub async fn download_game_files(
 
 /// 把 natives jar 解压到该版本的临时目录，返回解压了几个。
 ///
-/// 这个目录在启动时由 [`dmcl_mcmeta::layout::natives_dir`] 给出，启动流程不再自己解压。
+/// 解压到的目录与启动时引用的是同一个（[`dmcl_mcmeta::layout::natives_dir`]）。
 pub async fn extract_natives(
     options: &InstallOptions,
     version_name: &str,

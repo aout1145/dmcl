@@ -2,17 +2,16 @@
 
 use std::path::Path;
 
-/// `escapeShellCommand` —— 把 argv 渲染成给人看的命令行。
+/// 把 argv 渲染成给人看的命令行。
 ///
-/// 交给 `shell_words::join`，它产生的 POSIX 单引号形式与原实现手写的一致。
+/// 交给 `shell_words::join`，产生 POSIX 单引号形式。
 pub fn escape_shell_command(args: &[String]) -> String {
     shell_words::join(args)
 }
 
-/// `driveName` —— 路径的 Windows 盘符前缀（`"C:"`），没有则返回 `""`。
+/// 路径的 Windows 盘符前缀（`"C:"`），没有则返回 `""`。
 ///
-/// 只用来回显 `cd <盘符>` 那一段；匹配 `Component::Prefix` 之后就不需要
-/// 判断平台了。
+/// 只用来回显 `cd <盘符>` 那一段；匹配 `Component::Prefix` 就不需要判断平台。
 pub fn drive_name(path: &Path) -> String {
     match path.components().next() {
         Some(std::path::Component::Prefix(prefix)) => {

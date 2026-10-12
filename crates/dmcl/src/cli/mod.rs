@@ -1,12 +1,9 @@
-//! 命令行前端（原 `dmcl.cli`）。
+//! 命令行前端。
 //!
-//! 两处 D 手写代码换成了成熟库：
+//! 参数解析 / `--help` 交给 [`clap`] derive；交互式菜单交给 [`dialoguer`]。
 //!
-//! * 参数解析 / `--help` —— UDA + `__traits` 反射解析器没了，交给 [`clap`] derive；
-//! * 终端菜单 —— 原生 `getch()` + ANSI 界面没了，交给 [`dialoguer`]。
-//!
-//! 命令语义保持原样。前端的职责只有三件：把配置翻译成各 crate 的 `*Options`、
-//! 打印事件流、显示结果 —— 业务逻辑都在 `dmcl-*` 里。
+//! 前端的职责只有三件：把配置翻译成各 crate 的 `*Options`、打印事件流、显示结果
+//! —— 业务逻辑都在 `dmcl-*` 里。
 
 mod progress;
 mod prompt;
@@ -33,7 +30,7 @@ use crate::config::Config;
 use progress::ProgressPrinter;
 pub use prompt::prompt_interactive;
 
-/// 非官方 Minecraft 启动器（由原 D 语言版本迁移而来）。
+/// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
 #[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
 pub struct Cli {
@@ -179,7 +176,7 @@ fn localized_command() -> clap::Command {
     root
 }
 
-/// 原 `DmclCli` 的全部命令。
+/// 全部子命令。
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// 启动游戏
@@ -292,10 +289,9 @@ pub enum Commands {
 
 /// 命令行前端的入口。
 pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
-    // `preProcessArguments`：`--java` 与 `--mirror` 在命令执行前生效
-    // （和原来一样，只改内存里的配置）
+    // `--java` 与 `--mirror` 在命令执行前生效（只改内存里的配置）
     if let Some(java) = cli.java.clone() {
-        // java 的**路径**同时充当配置项的名字，与原 `preProcessArguments` 一致
+        // java 的**路径**同时充当配置项的名字
         config
             .launch
             .java_configs
@@ -373,7 +369,7 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
 
         Commands::ListMc { r#type } => {
             let manifest = source.fetch_version_manifest().await?;
-            // 与原实现一致：从新到旧
+            // 从新到旧输出
             for version in manifest.filter_kinds(&r#type).rev() {
                 println!("{} {}", version.kind, version.id);
             }

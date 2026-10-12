@@ -13,8 +13,7 @@
 //! [`Mirror`] 决定换成官方地址还是镜像地址，于是"下什么"和"从哪儿下"彻底分开：
 //! 安装流程只跟模板打交道，换镜像不需要改一行安装逻辑。
 //!
-//! 识别不出来的地址（第三方仓库等）保持原样，也就是**不可镜像**——
-//! 与原实现"镜像表里没有的 host 原样返回"的行为一致。
+//! 识别不出来的地址（第三方仓库等）保持原样，也就是**不可镜像**。
 
 use std::fmt;
 use std::str::FromStr;
@@ -32,11 +31,10 @@ pub const DEFAULT_USER_AGENT: &str = concat!("dmcl/", env!("CARGO_PKG_VERSION"))
 
 /// 使用哪个镜像源。
 ///
-/// 原实现把它当作裸字符串、在好几处用 `match` 比较、遇到不认识的值静默按 `official`
-/// 处理。类型化之后这些比较都消失了，`--mirror` 的候选值也能由 clap 生成。
+/// 类型化之后，`--mirror` 的候选值由 clap 生成，代码里不再到处拿字符串比较。
 ///
-/// 解析仍然是**有损的**：`dmcl.json` 里写错的值会退化成 [`Mirror::Official`]，
-/// 而不是让整份配置加载失败——这与原实现一致。
+/// 解析是**有损的**：`dmcl.json` 里写错的值会退化成 [`Mirror::Official`]，
+/// 而不是让整份配置加载失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Mirror {
@@ -168,7 +166,7 @@ impl Root {
     }
 
     /// `mirror` 下该根的 base url；该镜像没有对应地址时回落到官方地址
-    /// （也就是"这个根不被镜像"，与原实现的镜像表一致）。
+    /// （也就是"这个根不被镜像"）。
     pub fn bases(self, mirror: Mirror) -> &'static [&'static str] {
         match mirror {
             Mirror::Official => self.official_bases(),
@@ -180,7 +178,7 @@ impl Root {
                 Root::NeoForgeMaven => &["https://bmclapi2.bangbang93.com/maven"],
                 Root::FabricMeta => &["https://bmclapi2.bangbang93.com/fabric-meta"],
                 Root::FabricMaven => &["https://bmclapi2.bangbang93.com/maven"],
-                // bmclapi 不镜像这两个根（与原实现一致：不改写）
+                // bmclapi 不镜像这两个根（不改写）
                 Root::McData | Root::McLauncher => self.official_bases(),
             },
         }
@@ -556,7 +554,7 @@ mod tests {
         assert_eq!(Mirror::Official.as_str(), "official");
         assert_eq!(Mirror::Bmclapi.to_string(), "bmclapi");
         assert_eq!("bmclapi".parse::<Mirror>().unwrap(), Mirror::Bmclapi);
-        // 配置里写错的值退化成 official，与原实现一致
+        // 配置里写错的值退化成 official
         assert_eq!("typo".parse::<Mirror>().unwrap(), Mirror::Official);
         assert_eq!(
             serde_json::to_string(&Mirror::Bmclapi).unwrap(),

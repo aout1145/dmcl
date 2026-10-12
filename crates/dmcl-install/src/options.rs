@@ -149,7 +149,7 @@ impl InstallOptions {
 
 /// 默认的 `natives_arch`：本进程的位宽。
 ///
-/// 原实现用的是"所选 java"的位宽；本 crate 不负责选 java，因此默认按本机位宽，
+/// 本 crate 不负责选 java，因此默认按本机位宽；
 /// 需要时由调用者用 [`InstallOptions::with_natives_arch`] 覆盖。
 pub fn default_natives_arch() -> u32 {
     (std::mem::size_of::<usize>() * 8) as u32

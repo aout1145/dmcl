@@ -22,7 +22,7 @@ use crate::options::InstallOptions;
 use crate::plan::{base_name, plan_libraries, PlannedFile};
 use crate::zip::{main_class_of, open_archive, zip_has_entry, zip_read_entry};
 
-/// `installNeoForge`（薄封装：顺序跑各阶段）。
+/// 顺序跑各阶段（薄封装）。
 pub async fn install_neoforge(
     options: &InstallOptions,
     version_name: &str,
@@ -135,7 +135,7 @@ async fn run_installer_processors(
     // 3) 需要哪个 java 由版本 JSON 决定，怎么找到 java 由调用者决定
     let java = options.java_for(mc_json.required_java_major()).await?;
 
-    // `getArg`：解析 `{占位符}`、lzma 路径、`[maven:坐标]` 以及外面的单引号
+    // 解析 `{占位符}`、lzma 路径、`[maven:坐标]` 以及外面的单引号
     let get_arg = |arg: &str| -> String {
         let mut arg = arg.to_string();
         if arg.len() >= 2 && arg.starts_with('{') && arg.ends_with('}') {

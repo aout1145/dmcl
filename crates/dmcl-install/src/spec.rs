@@ -174,8 +174,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
 
 /// 在**已有**的版本上装一个加载器，然后补齐文件。
 ///
-/// 对应原来的 `install-forge` / `install-neoforge` 命令。客户端 jar 同样先
-/// 确保就位（如果版本已经装过，这一步会被"已是最新"跳过）。
+/// 客户端 jar 同样先确保就位（如果版本已经装过，这一步会被「已是最新」跳过）。
 pub fn install_loader_task(
     options: Arc<InstallOptions>,
     version_name: String,

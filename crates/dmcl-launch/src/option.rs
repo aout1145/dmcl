@@ -19,8 +19,7 @@ pub const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户用 `Arc<dyn Account>`（而不是裸接口引用）保存，结构体因此仍是
-/// `Send + Sync`，可以交给 GUI 的另一个线程；java 的选择也在这里，
-/// 不再从全局配置里读。
+/// `Send + Sync`，可以交给 GUI 的另一个线程；java 的选择也在这里。
 #[derive(Clone)]
 pub struct LaunchOption {
     pub account: Arc<dyn Account>,
@@ -62,7 +61,7 @@ impl fmt::Debug for LaunchOption {
 }
 
 impl LaunchOption {
-    /// 除三个必填项外，其余字段与原 D 结构体的默认值一致。
+    /// 除三个必填项外，其余字段取各自的默认值。
     pub fn new(
         account: Arc<dyn Account>,
         root_path: impl Into<PathBuf>,

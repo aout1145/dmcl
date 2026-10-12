@@ -1,11 +1,10 @@
-//! maven 坐标处理
-//! （`libNameToPath` / `libNameGetName` / `libNameGetVersion`）。
+//! maven 坐标处理。
 //!
 //! 刻意手写：crates.io 上没有维护良好、又能处理
 //! `group:artifact:version[:classifier][@ext]` 这种自由形式的库，
 //! 而这三段逻辑各只有十几行纯字符串处理。
 
-/// `libNameToPath` —— maven 坐标转成仓库里的相对路径。
+/// maven 坐标转成仓库里的相对路径。
 ///
 /// ```text
 /// com.example:demo:1.0                  -> com/example/demo/1.0/demo-1.0.jar
@@ -40,7 +39,7 @@ pub fn lib_name_to_path(libname: &str) -> String {
     path
 }
 
-/// `libNameGetName` —— `group:artifact[:classifier...]`（去掉版本）。
+/// `group:artifact[:classifier...]`（去掉版本）。
 pub fn lib_name_get_name(libname: &str) -> String {
     let rawname: Vec<&str> = libname.split(':').collect();
     let mut name = format!(
@@ -57,7 +56,7 @@ pub fn lib_name_get_name(libname: &str) -> String {
     name
 }
 
-/// `libNameGetVersion` —— maven 坐标里的版本部分。
+/// maven 坐标里的版本部分。
 pub fn lib_name_get_version(libname: &str) -> String {
     libname
         .split('@')

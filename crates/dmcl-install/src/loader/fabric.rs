@@ -11,7 +11,7 @@ use crate::io::write_json_safe;
 use crate::loader::common::finish_version_json;
 use crate::options::InstallOptions;
 
-/// `installFabric` —— Fabric 的自动安装非常简单，比 Forge 简单多了（薄封装）。
+/// Fabric 的自动安装：把 loader profile 合并进原版版本 JSON 即可。
 pub async fn install_fabric(
     options: &InstallOptions,
     version_name: &str,

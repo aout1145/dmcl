@@ -157,7 +157,7 @@ impl Rule {
     }
 }
 
-/// `checkRules` —— 标准 Mojang 语义：
+/// 标准 Mojang 语义：
 ///
 /// * 空列表 → 允许；
 /// * 否则按顺序评估，**最后一条命中的规则的 `action`** 决定结果；
@@ -175,7 +175,7 @@ pub fn check_rules(rules: &[Rule], ctx: &RuleContext) -> bool {
     allowed
 }
 
-/// `Option<Vec<Rule>>` 的语法糖，对应 `if ("rules" !in lib || checkRules(...))`。
+/// `Option<Vec<Rule>>` 的语法糖：没有 `rules` 视为允许。
 pub fn rules_allow(rules: &Option<Vec<Rule>>, ctx: &RuleContext) -> bool {
     match rules {
         None => true,

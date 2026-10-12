@@ -413,7 +413,7 @@ pub struct VersionJson {
     /// 所有未建模的字段，原样保留。
     ///
     /// 真实文档里通常只剩 Forge 写在 `version.json` 顶部的 `_comment_` / `_comment`
-    /// 注释字段。详见 [`crate::vanilla`] 的说明。
+    /// 注释字段。
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -440,7 +440,7 @@ impl UrlFields for VersionJson {
 }
 
 impl VersionJson {
-    /// 按原 `mergeJSON` 的语义把 `child` 合并到 `self` 上。
+    /// 把 `child` 递归合并进 `self`（对象逐键合并、数组拼接、标量由子覆盖）。
     pub fn merge(&mut self, child: &VersionJson) -> anyhow::Result<()> {
         crate::merge::merge_typed(self, child)
     }

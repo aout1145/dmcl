@@ -1,11 +1,11 @@
-//! 写文件的小助手（`writeSafe` / `write_json_safe`）。
+//! 写文件的小助手。
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use dmcl_mcmeta::layout::absolute;
 
-/// `writeSafe` —— 先建父目录再写文件。
+/// 先建父目录再写文件。
 pub async fn write_safe(path: impl AsRef<Path>, context: &[u8]) -> Result<()> {
     let path = absolute(path);
     if let Some(parent) = path.parent() {
@@ -17,7 +17,7 @@ pub async fn write_safe(path: impl AsRef<Path>, context: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// 序列化 + 写文件，与原来的紧凑格式（`json.toString()`）一致。
+/// 序列化 + 写文件（紧凑格式，不缩进）。
 pub async fn write_json_safe<T: serde::Serialize>(path: impl AsRef<Path>, value: &T) -> Result<()> {
     let text = serde_json::to_string(value)?;
     write_safe(path, text.as_bytes()).await
@@ -40,7 +40,7 @@ mod tests {
         write_json_safe(&json_path, &serde_json::json!({"a": 1}))
             .await
             .unwrap();
-        // 紧凑格式（没有多余空格），与原实现一致
+        // 紧凑格式（没有多余空格）
         assert_eq!(
             tokio::fs::read_to_string(&json_path).await.unwrap(),
             r#"{"a":1}"#

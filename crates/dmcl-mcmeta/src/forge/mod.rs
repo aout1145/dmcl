@@ -8,7 +8,7 @@ use crate::source::{DownloadSource, Root};
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallEntry, InstallProfile, Processor, Side};
 
-/// Forge 的版本列表接口 —— **只有 bmclapi 提供**（原实现同样写死 bmclapi）。
+/// Forge 的版本列表接口 —— **只有 bmclapi 提供**。
 pub const FORGE_VERSION_LIST: &str = "https://bmclapi2.bangbang93.com/forge/minecraft";
 
 /// `bmclapi .../forge/minecraft/<mcver>` 的一项。
@@ -49,7 +49,7 @@ pub struct ForgeFile {
 }
 
 impl ForgeVersionEntry {
-    /// `bmclapiGetForgeVersionName` —— `<mcversion>-<version>[-<branch>]`。
+    /// `<mcversion>-<version>[-<branch>]`。
     pub fn full_name(&self) -> String {
         let mut name = format!("{}-{}", self.mcversion, self.version);
         if let Some(branch) = self.branch.as_deref() {
@@ -75,7 +75,7 @@ pub fn forge_version_list_url(mc_version: &str) -> String {
 }
 
 impl DownloadSource {
-    /// 取 Forge 版本列表 —— 只有 bmclapi 提供，与原实现一致。
+    /// 取 Forge 版本列表（只有 bmclapi 提供）。
     pub async fn fetch_forge_versions(&self, mc_version: &str) -> Result<Vec<ForgeVersionEntry>> {
         self.get_json(&forge_version_list_url(mc_version)).await
     }

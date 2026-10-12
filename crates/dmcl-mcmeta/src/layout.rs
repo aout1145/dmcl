@@ -35,12 +35,10 @@ pub fn version_jar_path(root_path: &Path, version_name: &str) -> PathBuf {
     version_dir(root_path, version_name).join(format!("{version_name}.jar"))
 }
 
-/// `libraries`。
 pub fn libraries_dir(root_path: &Path) -> PathBuf {
     root_path.join("libraries")
 }
 
-/// `assets`。
 pub fn assets_dir(root_path: &Path) -> PathBuf {
     root_path.join("assets")
 }
@@ -82,7 +80,7 @@ pub async fn read_version_json(path: &Path) -> Result<VersionJson> {
     Ok(json)
 }
 
-/// `readVersionJSONSafe` —— 读版本 JSON，并解析 `inheritsFrom`。
+/// 读版本 JSON，并解析 `inheritsFrom`。
 pub async fn read_version_json_safe(root_path: &Path, version_name: &str) -> Result<VersionJson> {
     let path = version_json_path(root_path, version_name);
     let mut json = read_version_json(&path).await?;

@@ -45,12 +45,12 @@
 //! # }
 //! ```
 //!
-//! # 与原实现的关系
+//! # 设计要点
 //!
-//! * `download_libraries` / `download_assets` 拆成"**规划**"（[`plan`]，纯函数、可单测）与
-//!   "**下载**"（[`files`]，构造 [`dmcl_download::DownloadTask`]）两半；
-//! * natives 的解压从"启动时"挪到了这里 —— 它本质上是"把文件铺好"，
-//!   这样 `dmcl-launch` 就不需要 zip 代码；
+//! * 把「这个版本需要哪些文件」的**规划**（[`plan`]，纯函数、可单测）与**下载**
+//!   （[`files`]，构造 [`dmcl_download::DownloadTask`]）分开；
+//! * natives 的解压归这里做 —— 它本质上就是「把文件铺好」，这样 `dmcl-launch`
+//!   就不需要 zip 代码；
 //! * Forge / NeoForge 的 processor 用 [`dmcl_task::CommandTask`] 跑，
 //!   因此安装器的输出会作为进度事件流出来。
 

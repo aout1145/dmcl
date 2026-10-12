@@ -1,13 +1,10 @@
-//! 配置（原 `dmcl.config`）。
+//! 配置。
 //!
-//! 原实现用 D 的编译期反射（`__traits(allMembers, Config)` + `replaceFirst("_", ".")`）
-//! 把扁平字段名映射成点分 JSON 键，并手搓解析与合并；这里全部交给 `serde`：
-//! 嵌套结构体直接对应嵌套 JSON（正好就是点分键展开后的样子），
-//! `#[serde(default)]` 复现"缺键保留默认值"的语义。配置文件的键名与原版兼容。
+//! 解析与合并全交给 `serde`：嵌套结构体直接对应嵌套 JSON，`#[serde(default)]`
+//! 表示"缺键保留默认值"。
 //!
-//! 与原实现的另一个区别：**不再有全局 `config` 变量**。
-//! [`Config`] 就是一个普通值，由 [`crate::cli::run`] 持有并传下去；
-//! 各业务 crate 更是一点都不知道配置文件的存在（见各自的 `*Options`）。
+//! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由 [`crate::cli::run`]
+//! 持有并传下去；各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
 //!
 //! ```json
 //! {
@@ -155,14 +152,13 @@ pub struct Config {
 }
 
 impl Config {
-    /// `getConfigPath` —— `<平台配置目录>/dmcl.json`。
+    /// 配置文件路径：`<平台配置目录>/dmcl.json`。
     ///
-    /// 基准目录来自 [`dirs`]，不再手挑 `%APPDATA%` / `$HOME/.config`：
+    /// 基准目录来自 [`dirs`]：
     ///
-    /// * Linux —— `$XDG_CONFIG_HOME` 或 `~/.config` → 与原版同一个文件
-    /// * Windows —— `%APPDATA%` → 与原版同一个文件
-    /// * macOS —— `~/Library/Application Support` → **原来是 `~/.config`**，
-    ///   这是唯一一个文件位置变了的平台
+    /// * Linux —— `$XDG_CONFIG_HOME` 或 `~/.config`
+    /// * Windows —— `%APPDATA%`
+    /// * macOS —— `~/Library/Application Support`
     pub fn path() -> PathBuf {
         match dirs::config_dir() {
             Some(base) => absolute(base.join("dmcl.json")),
@@ -170,7 +166,7 @@ impl Config {
         }
     }
 
-    /// `readConfig` —— 读配置（文件不存在就用默认值），并把 `.minecraft` 路径补成绝对路径。
+    /// 读配置（文件不存在就用默认值），并把 `.minecraft` 路径补成绝对路径。
     pub async fn load(path: Option<&Path>) -> Result<Self> {
         let path = path.map(Path::to_path_buf).unwrap_or_else(Self::path);
         let mut config = match tokio::fs::read_to_string(&path).await {
@@ -182,9 +178,7 @@ impl Config {
         Ok(config)
     }
 
-    /// `saveConfig` —— 持久化整份配置。
-    ///
-    /// 原实现只把指定字段合并进已有文件；因为**所有**字段都会被读出来，整体序列化是等价的。
+    /// 持久化整份配置。
     pub async fn save(&self) -> Result<()> {
         let path = Self::path();
         let text = serde_json::to_string_pretty(self)?;
@@ -197,7 +191,7 @@ impl Config {
         Ok(())
     }
 
-    /// `showConfig` —— 人类可读的转储（字段名与 D 版一致）。
+    /// 人类可读的配置转储（字段名与 `dmcl.json` 的键一致）。
     pub fn show(&self) {
         // 下面这些字段名刻意保持与 dmcl.json 的键一致（它们是配置键，不是文案），
         // 只有标题行是给人看的说明。
@@ -370,7 +364,7 @@ mod tests {
             &PathBuf::from("/usr/bin/java")
         );
         assert_eq!(config.download.mirror, Mirror::Bmclapi);
-        // 缺键保留默认值，与原来的读取逻辑一致
+        // 缺键保留默认值
         assert_eq!(config.launch.window_height, 480);
         assert_eq!(config.launch.min_memory, 512);
         assert_eq!(config.download.max_tasks, 64);

@@ -1,8 +1,7 @@
-//! 交互式菜单（原 `dmcl.cli.prompt`）。
+//! 交互式菜单。
 //!
-//! 原实现自己写了一套终端界面：原生 `getch()`、手搓 ANSI 清屏、手拼 USAGE 字符串。
-//! 这里由 [`dialoguer`] 提供菜单与输入（终端控制则用它再导出的 `console`），
-//! 命令与参数元数据则由 `clap` 的内省给出 —— 一行手写界面代码都没有了。
+//! 由 [`dialoguer`] 提供菜单与输入（终端控制用它再导出的 `console`），
+//! 命令与参数元数据则由 `clap` 的内省给出。
 //!
 //! # 结构
 //!
@@ -16,8 +15,7 @@
 //!
 //! # 行为
 //!
-//! 与原实现一致（循环展示命令、回车选择、逐参数提问、通过启动器自己重新执行），
-//! 另外修了几个体验问题：
+//! 行为：循环展示命令、回车选择、逐参数提问、再用启动器自己重新执行。几个体验细节：
 //!
 //! * **提示语全中文**：包括 dialoguer 自带的英文渲染（`[y/N]`、`error: …`），
 //!   见 [`ChineseTheme`]；
@@ -293,7 +291,7 @@ impl Theme for ChineseTheme {
 // 主循环
 // ---------------------------------------------------------------------------
 
-/// `clrscr()` —— 交给终端库，不再手写 ANSI 转义。
+/// 清屏（交给终端库，不手写 ANSI 转义）。
 fn clear_screen() {
     let _ = Term::stdout().clear_screen();
 }
@@ -358,7 +356,7 @@ pub async fn prompt_interactive() -> Result<()> {
         clear_screen();
         println!("执行：{}", escape_shell_command(&argv));
 
-        // 用拼好的参数重新执行自己，与原 `spawnProcess([thisExePath(), cmd.name, ...])` 一致
+        // 用拼好的参数重新执行自己
         let exe = std::env::current_exe()?;
         let _status = tokio::process::Command::new(exe)
             .args(&argv)

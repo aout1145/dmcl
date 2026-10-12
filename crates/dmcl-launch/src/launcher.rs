@@ -1,10 +1,10 @@
 //! 生成启动命令行，并启动游戏。
 //!
-//! 与原来的 `GameLauncher` 相比有两点变化：
+//! 两条设计要点：
 //!
-//! * **不再解压 natives** —— 那是"把文件铺好"，由 [`dmcl_install`] 负责，
+//! * **这里不解压 natives** —— 那是"把文件铺好"，由 [`dmcl_install`] 负责，
 //!   这里只引用 [`LaunchOption::natives_dir`]；启动逻辑因此与安装解耦。
-//! * **java 的选择来自 [`LaunchOption`]**，不再读全局配置。
+//! * **java 的选择来自 [`LaunchOption`]**。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -58,9 +58,9 @@ impl GameLauncher {
         check_integrity(&self.option.plan(), &self.option.version_name).await
     }
 
-    /// `getLibraries` —— 拼 classpath。
+    /// 拼 classpath。
     ///
-    /// 结果只算一次（原实现每替换一个参数就重算一遍）。
+    /// classpath 只算一次。
     /// classpath 本身是**命令行值**，所以这里仍然用平台分隔符拼成 `String`，
     /// 只有每个条目是路径。
     pub async fn get_libraries(&self) -> Result<String> {
@@ -142,7 +142,7 @@ impl GameLauncher {
         Ok(result)
     }
 
-    /// `getArguments`。
+    /// 展开 `arguments.<key>`：套用每条参数的 rules，拼出命中项。
     pub fn get_arguments(&self, key: &str) -> Vec<String> {
         let mut args = Vec::new();
         let Some(json_args) = self.json.arguments_for(key) else {
@@ -154,7 +154,7 @@ impl GameLauncher {
             match arg {
                 Argument::Plain(value) => args.push(value.clone()),
                 Argument::Ruled(ruled) => {
-                    // `else if ("rules" in arg && checkRules(arg["rules"]))`
+                    // 有 rules 且命中时才加上 value
                     if ruled.rules.is_some() && rules_allow(&ruled.rules, &rules) {
                         if let Some(value) = &ruled.value {
                             value.push_into(&mut args);
@@ -167,7 +167,7 @@ impl GameLauncher {
         args
     }
 
-    /// `genArgs`。
+    /// 生成完整启动参数（java 可执行文件在最前）。
     pub async fn gen_args(&mut self) -> Result<Vec<String>> {
         self.gen_args_in(&TaskContext::detached("生成启动参数"))
             .await
@@ -207,7 +207,7 @@ impl GameLauncher {
             args.push("${classpath}".to_string());
         }
 
-        // 额外的 jvm 参数（原 D 的 `split(" ")`，去掉了连续空格产生的空参数）
+        // 额外的 jvm 参数（按空白切分，连续空格不产生空参数）
         args.extend(
             self.option
                 .additional_jvm
@@ -305,14 +305,14 @@ impl GameLauncher {
         Ok(args)
     }
 
-    /// `generateCommand` —— 转义后的命令行，给"只想显示 / 交给别人执行"的前端用。
+    /// 转义后的命令行，给「只想显示 / 交给别人执行」的前端用。
     pub async fn generate_command(&mut self) -> Result<String> {
         Ok(escape_shell_command(&self.gen_args().await?))
     }
 
-    /// `launchGame` —— 启动游戏进程。
+    /// 启动游戏进程。
     ///
-    /// 与 D 版本不同，这里让子进程继承 stdio，因此玩家能看到游戏自己的日志；
+    /// 子进程继承 stdio，因此玩家能看到游戏自己的日志；
     /// 返回的 [`GameMonitor`] 可以等待退出，也可以被停掉。
     pub async fn launch_game(&mut self) -> Result<GameMonitor> {
         let args = self.gen_args().await?;
@@ -377,17 +377,16 @@ mod tests {
         assert!(compare_to("1.20.1", "1.20.1", Cmp::Eq).unwrap());
         // forge 那种带 build 号的坐标
         assert!(compare_to("1.20.1-47.3.0", "1.20.1-47.2.0", Cmp::Gt).unwrap());
-        // 结尾的 0 不会让版本变大（"1.0" == "1.0.0"），与原 D 实现结论一致
+        // 结尾的 0 不会让版本变大（"1.0" == "1.0.0"）
         assert!(compare_to("1.0", "1.0.0", Cmp::Eq).unwrap());
         // ……但多出来的非零部分会
         assert!(compare_to("1.0", "1.0.1", Cmp::Lt).unwrap());
     }
 
-    /// `split_whitespace` 取代手写的 `split_space`：空输入这一情形（唯一真正
-    /// 重要的，因为 `launch.additional_game` 默认就是 `""`）与原 D 的 `split`
-    /// 一致，而连续空格不再产生空参数。
+    /// `split_whitespace` 切分参数串：空输入得到空列表（`launch.additional_game`
+    /// 默认就是 `""`），连续空格不产生空参数。
     #[test]
-    fn argument_strings_split_like_d_split() {
+    fn argument_strings_split_on_whitespace() {
         let split = |text: &str| {
             text.split_whitespace()
                 .map(str::to_string)
@@ -396,7 +395,7 @@ mod tests {
         assert!(split("").is_empty());
         assert_eq!(split("a b"), vec!["a", "b"]);
         assert_eq!(split("  a   b  "), vec!["a", "b"]);
-        // 原 D 的 `split(" ")` 在这里会给出 `["a", "", "b"]`
+        // 连续两个空格也不产生空参数
         assert_eq!(split("a  b"), vec!["a", "b"]);
     }
 
@@ -489,7 +488,7 @@ mod tests {
         let mut launcher = launcher_with(json, root);
         let args = launcher.gen_args().await.unwrap();
 
-        // gen_args 自己会选一次 java（原实现如此），因此只要求第一个参数是 java 可执行文件
+        // 第一个参数是已选定的 java 可执行文件
         assert!(args[0].contains("java"), "{}", args[0]);
         assert!(args.contains(&"-XstartOnFirstThread".to_string()));
         assert!(args.contains(&"com.example.Main".to_string()));
@@ -502,7 +501,7 @@ mod tests {
         assert!(args.contains(&"-Xmn512m".to_string()));
         // 窗口尺寸在最前面（走命令行参数）
         assert!(args.contains(&"--width".to_string()));
-        // 没有加载器时 additional_jvm 的默认值也会带上（与原实现一致）
+        // 没有加载器时 additional_jvm 的默认值也会带上
         assert!(args
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));

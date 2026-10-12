@@ -75,7 +75,7 @@ pub fn neoforge_version_list_url_bmclapi(mc_version: &str) -> String {
     format!("{NEOFORGE_VERSION_LIST_BMCLAPI}/{mc_version}")
 }
 
-/// 按镜像选择 NeoForge 版本列表地址 —— 对应原实现里 `list_for_mirror` 的穷尽 `match`。
+/// 按镜像选择 NeoForge 版本列表地址。
 pub fn neoforge_version_list_url(mc_version: &str, mirror: Mirror) -> String {
     match mirror {
         Mirror::Official => neoforge_version_list_url_official(mc_version),
@@ -119,7 +119,7 @@ pub async fn neoforge_versions(source: &DownloadSource, mc_version: &str) -> Res
     source.fetch_neoforge_versions(mc_version).await
 }
 
-/// 最新 NeoForge —— 原实现取列表的**最后一个**元素。
+/// 最新 NeoForge —— 取列表的**最后一个**元素。
 pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
     let versions = neoforge_versions(source, mc_version).await?;
     Ok(versions.last().cloned().unwrap_or_default())

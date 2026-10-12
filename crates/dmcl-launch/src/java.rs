@@ -1,8 +1,6 @@
 //! Java 探测与选择。
 //!
-//! 与原实现最大的区别：**这里不碰配置**。
-//! 原来的 `findJava` 会把结果写进全局配置、`selectJava` 会从全局配置里读，
-//! 现在则是一进一出：配置表由调用者传入 / 接收（见 [`JavaConfigs`]）。
+//! **这里不碰配置**：配置表由调用者传入 / 接收（见 [`JavaConfigs`]）。
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -15,7 +13,7 @@ use walkdir::WalkDir;
 /// java 配置表：名字 → 可执行文件。
 pub type JavaConfigs = BTreeMap<String, PathBuf>;
 
-/// 原实现用来表示"自动选择"的哨兵字符串。
+/// 表示「自动选择」的哨兵字符串。
 pub const JAVA_AUTOSELECT: &str = "autoselect";
 
 /// 默认扫描的目录（仅 posix）。
@@ -23,8 +21,7 @@ pub const DEFAULT_JAVA_ROOTS: &[&str] = &["/lib/jvm/"];
 
 /// `launch.java` —— 要么自动选择，要么是 [`JavaConfigs`] 里的一个键。
 ///
-/// 原实现把它当裸字符串、在好几处跟 `"autoselect"` 比较；类型化之后哨兵值不可能
-/// 拼错，而序列化形式仍是原来的普通字符串，所以老配置文件继续可用。
+/// 序列化成普通字符串（`"autoselect"` 或配置项名字），因此配置文件里直接写即可。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum JavaChoice {
     /// 写成 `"autoselect"`。
@@ -103,7 +100,7 @@ impl JavaOption {
             .await
             .with_context(|| format!("无法执行 {} -version", path.display()))?;
 
-        // `java -version` 把版本打印在 stderr；原实现也会读 stdout，两个都收着
+        // `java -version` 通常把版本打印在 stderr，但有的实现写在 stdout，两个都收着
         let mut raw = String::from_utf8_lossy(&output.stderr).into_owned();
         raw.push_str(&String::from_utf8_lossy(&output.stdout));
         let raw = raw.replace('"', "").replace('\n', " ");
@@ -139,16 +136,15 @@ impl JavaOption {
         self.major_version > 0
     }
 
-    /// 探测结果对应的配置项名字（原实现 `findJava` 里拼的那个名字）。
+    /// 探测结果对应的配置项名字（`{type}-{arch}-bit-{version}`）。
     pub fn config_name(&self) -> String {
         format!("{}-{}-bit-{}", self.type_, self.arch, self.version_str)
     }
 }
 
-/// `findJava` —— 扫描目录里的 `java` 可执行文件。
+/// 扫描目录里的 `java` 可执行文件。
 ///
-/// 与原实现的区别：**只返回结果，不写配置**（原来它会直接改全局配置并落盘）。
-/// Windows 上仍按原逻辑报"不支持"。
+/// **只返回结果，不写配置**；Windows 上暂不支持自动搜索。
 pub async fn find_java(roots: &[impl AsRef<Path>]) -> Result<JavaConfigs> {
     if cfg!(target_os = "windows") {
         return Err(anyhow!("Windows 上暂不支持自动搜索 java"));
@@ -166,8 +162,7 @@ pub async fn find_java(roots: &[impl AsRef<Path>]) -> Result<JavaConfigs> {
             if !entry.file_type().is_file() || entry.file_name() != "java" {
                 continue;
             }
-            // 原实现遇到坏的可执行文件会中断整个扫描；跳过它更稳（一个野文件
-            // 不应该让整次搜索失败）
+            // 跳过探测失败或版本不可用的文件：一个野文件不该让整次搜索失败
             match JavaOption::probe(entry.path().to_path_buf()).await {
                 Ok(java) if java.is_usable() => {
                     configs.insert(java.config_name(), java.path.clone());
@@ -184,7 +179,7 @@ pub async fn find_java_in_default_roots() -> Result<JavaConfigs> {
     find_java(DEFAULT_JAVA_ROOTS).await
 }
 
-/// `selectJava` —— 按调用者给的选择挑一个 java。
+/// 按调用者给的选择挑一个 java。
 ///
 /// * [`JavaChoice::Named`]：直接用配置表里的那一项；
 /// * [`JavaChoice::Auto`]：找与 `required_major` 最接近的（优先完全相等）。

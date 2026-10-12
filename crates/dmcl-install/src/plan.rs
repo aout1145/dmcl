@@ -1,7 +1,7 @@
 //! 规划：给定版本 JSON，算出"这个版本需要哪些文件"。
 //!
-//! 这一层是**纯函数**：不碰网络、不碰磁盘，所以原实现里那些绕来绕去的判断
-//! （规则过滤、困难库、natives 分类器、虚拟资源目录、跳过音乐）都能被穷举单测覆盖。
+//! 这一层是**纯函数**：不碰网络、不碰磁盘，所以规则过滤、困难库、natives 分类器、
+//! 虚拟资源目录、跳过音乐这些判断都能被穷举单测覆盖。
 //!
 //! 产出的 [`PlannedFile::url`] 仍然是**模板**，真正下载时才由
 //! [`InstallOptions::resolve`] 解析成具体镜像地址。
@@ -188,7 +188,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
             // 自带仓库地址的"困难库"
             None => {
                 if coord.starts_with("net.minecraftforge:forge:") {
-                    // 这个文件就是下不下来（原实现的原话）
+                    // `net.minecraftforge:forge:` 的库拿不到下载地址，由安装器本地产出
                     continue;
                 }
                 let base = lib.url.as_deref().unwrap_or("").trim_end_matches('/');
@@ -205,7 +205,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
         // natives 分类器
         if let Some(artifact) = native_artifact(lib, plan.natives_arch) {
             let (Some(url), Some(path)) = (artifact.url.clone(), artifact.path.clone()) else {
-                // 文档里没给地址的 natives 直接跳过（原实现会拿空 url 去请求然后报错）
+                // 文档里没给地址的 natives 直接跳过
                 continue;
             };
             planned.push(PlannedFile {

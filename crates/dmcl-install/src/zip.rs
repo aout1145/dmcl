@@ -1,14 +1,13 @@
 //! jar / zip 处理。
 //!
 //! `zip` crate 是同步的，因此解压放到阻塞线程里跑。
-//! 与原实现相比工具本身没变，只是从 `utils` 搬到了真正用得着它的地方。
 
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// `extractZip` —— 解压一个 jar / zip。
+/// 解压一个 jar / zip。
 pub async fn extract_zip(
     filename: impl AsRef<Path> + Send + 'static,
     extract_to: impl AsRef<Path> + Send + 'static,
@@ -46,7 +45,7 @@ fn extract_zip_blocking(filename: &Path, extract_to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 读一个内存里归档的条目（原 `zip.expand(zip.directory[name])`）。
+/// 读一个内存里归档的条目。
 pub fn zip_read_entry<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
@@ -59,7 +58,7 @@ pub fn zip_read_entry<R: Read + Seek>(
     Ok(buffer)
 }
 
-/// 原 `name in zip.directory`。
+/// 归档里是否有这一项。
 pub fn zip_has_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str) -> bool {
     archive.by_name(name).is_ok()
 }
@@ -84,7 +83,7 @@ pub fn open_archive(bytes: Vec<u8>) -> Result<zip::ZipArchive<Cursor<Vec<u8>>>> 
     Ok(zip::ZipArchive::new(Cursor::new(bytes))?)
 }
 
-/// 在 `PATH` 上找一个可执行文件（原实现没有，为了 [`crate::PathJava`] 补的）。
+/// 在 `PATH` 上找一个可执行文件（供 [`crate::PathJava`] 使用）。
 pub fn find_on_path(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

@@ -1,9 +1,9 @@
-//! `mergeJSON` —— 递归合并两份 JSON。
+//! 递归合并两份 JSON。
 
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 
-/// `mergeJSON` —— 对象逐键递归合并，数组拼接，其它情况由 `source` 覆盖。
+/// 对象逐键递归合并，数组拼接，其它情况由 `source` 覆盖。
 pub fn merge_value(target: &mut Value, source: &Value) {
     match (target, source) {
         (Value::Object(t), Value::Object(s)) => {
@@ -24,11 +24,11 @@ pub fn merge_value(target: &mut Value, source: &Value) {
     }
 }
 
-/// [`merge_value`] 的强类型版本：`base` 按 `mergeJSON` 的语义合并 `child`，
+/// [`merge_value`] 的强类型版本：`base` 按同样的语义合并 `child`，
 /// 实现方式是两边都走一遍 `serde_json`。
 ///
-/// 因为序列化时会跳过不存在的可选字段，"子文档里没提到某个键"就等价于原实现的
-/// "保留父文档的值"；未建模的字段都待在结构体的 `extra` 里，所以它们同样参与合并。
+/// 因为序列化时会跳过不存在的可选字段，"子文档里没提到某个键"就等于"保留父文档的值"；
+/// 未建模的字段都待在结构体的 `extra` 里，所以它们同样参与合并。
 pub fn merge_typed<T>(base: &mut T, child: &T) -> anyhow::Result<()>
 where
     T: Serialize + DeserializeOwned,
