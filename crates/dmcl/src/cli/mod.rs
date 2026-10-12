@@ -465,7 +465,7 @@ fn handle_event(printer: &mut ProgressPrinter, event: TaskEvent) {
 
 /// `launch` —— 检查完整性 →（缺件则补全）→ 生成启动参数 → 启动子进程，等游戏退出。
 ///
-/// 整条「准备 → 补全 → 启动」链由 `dmcl-launch` 的 [`dmcl_launch::launch_chain`] 组装，
+/// 整条「检查并补全 → 生成参数 → 启动」链由 `dmcl-launch` 的 [`dmcl_launch::launch_chain`] 组装，
 /// 这里负责显示进度，并在拿到**未 wait** 的 `GameMonitor` 后等它退出。
 async fn launch(vername: &str, config: &mut Config) -> Result<()> {
     let source = config.download_source();

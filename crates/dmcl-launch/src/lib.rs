@@ -8,7 +8,7 @@
 //! 2. **不读全局配置**。java 的选择（[`JavaChoice`] + [`JavaConfigs`]）、
 //!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
 //!
-//! 一站式启动把「准备 → 补全 → 启动」串成一条任务链（见 [`crate::prepare`]）：
+//! 一站式启动把「检查并补全 → 生成参数 → 启动」串成一条任务链（见 [`crate::prepare`]）：
 //! [`launch_chain`] 返回 `TaskChain<(), GameMonitor>`，由调用者运行、订阅事件，
 //! 并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
 //!
@@ -45,5 +45,5 @@ pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 pub use prepare::{
-    launch_chain, EnsureGameFilesTask, LaunchTask, PrepareLaunchTask, PreparedLaunch,
+    launch_chain, GenerateArgsTask, LaunchTask, PrepareLaunchFilesTask, PreparedLaunch,
 };

@@ -327,7 +327,7 @@ impl GameLauncher {
         self.launch_with_args(&args)
     }
 
-    /// 用**已经生成好的参数**启动游戏（参数可由 [`crate::PrepareLaunchTask`] 产出，
+    /// 用**已经生成好的参数**启动游戏（参数可由 [`crate::GenerateArgsTask`] 产出，
     /// 省得再选一次 java、重拼一遍命令行）。
     ///
     /// 命令行会先打印出来。放进任务链时改用 [`crate::LaunchTask`]：它走进度事件流

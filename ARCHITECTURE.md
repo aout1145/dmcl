@@ -230,8 +230,8 @@ monitor.wait().await?;
 - 它**不下载任何东西**：修复由调用者执行 `dmcl-install`；
 - Java 选择不读全局配置：`find_java(roots)` 只返回结果，`select_java(required_major,
 &choice, &configs)` 接收配置表；
-- 一站式流程 `launch_chain(option, install)` 把「准备 → 补全 → 启动」串成一条
-  `TaskChain<(), GameMonitor>`。
+- 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 生成参数 → 启动」串成一条
+  `TaskChain<(), GameMonitor>`；参数只在文件齐备后才生成。
 
 ### 6. 加载器安装
 
