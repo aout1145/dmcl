@@ -3,14 +3,14 @@
 //! 两条设计要点：
 //!
 //! * **这里不解压 natives** —— 那是"把文件铺好"，由 [`dmcl_install`] 负责，
-//!   这里只引用 [`LaunchOption::natives_dir`]；启动逻辑因此与安装解耦。
+//!   这里只引用 natives 目录（[`dmcl_mcmeta::layout::natives_dir`]）；启动逻辑因此与安装解耦。
 //! * **java 的选择来自 [`LaunchOption`]**。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use dmcl_mcmeta::layout::{read_version_json_safe, version_dir};
+use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
 use dmcl_mcmeta::os::classpath_separator;
 use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
@@ -39,7 +39,7 @@ impl GameLauncher {
     /// `this(LaunchOption)`。
     pub async fn new(option: LaunchOption) -> Result<Self> {
         let version_path = version_dir(&option.root_path, &option.version_name);
-        let natives_path = option.natives_dir();
+        let natives_path = natives_dir(&option.version_name);
         let json = read_version_json_safe(&option.root_path, &option.version_name).await?;
         Ok(Self {
             option,
@@ -86,9 +86,10 @@ impl GameLauncher {
                 Some((existing, _)) => match compare_to(&version, existing, Cmp::Gt) {
                     Ok(better) => better,
                     Err(()) => {
-                        ctx.log(format!(
-                            "警告：{name} 的版本号无法比较（{version} vs {existing}），保留先到的"
-                        ));
+                        ctx.confirm(format!(
+                            "库 {name} 的版本号无法比较（{version} vs {existing}），先到的保留。是否继续？"
+                        ))
+                        .await?;
                         false
                     }
                 },
@@ -409,7 +410,7 @@ mod tests {
     fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, "1.0");
         let version_path = version_dir(&root, "1.0");
-        let natives_path = option.natives_dir();
+        let natives_path = natives_dir(&option.version_name);
         GameLauncher {
             option,
             version_path,

@@ -4,7 +4,7 @@
 //! 虚拟资源目录、跳过音乐这些判断都能被穷举单测覆盖。
 //!
 //! 产出的 [`PlannedFile::url`] 仍然是**模板**，真正下载时才由
-//! [`InstallOptions::resolve`] 解析成具体镜像地址。
+//! [`dmcl_mcmeta::source::DownloadSource::resolve`] 解析成具体镜像地址。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -73,7 +73,7 @@ pub struct PlannedFile {
 impl PlannedFile {
     /// 变成真正的下载项：这里才把模板解析成具体地址。
     pub fn into_item(self, options: &InstallOptions) -> DownloadItem {
-        DownloadItem::new(options.resolve(&self.url), &self.save_to)
+        DownloadItem::new(options.source.resolve(&self.url), &self.save_to)
             .with_checksum(self.checksum)
             .with_size(self.size)
             .named(self.name)

@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dmcl_download::{DownloadItem, DownloadOptions, DownloadTask};
-use dmcl_mcmeta::layout::read_version_json_safe;
 use dmcl_mcmeta::source::DownloadSource;
-use dmcl_mcmeta::vanilla::VersionJson;
 
 use crate::zip::find_on_path;
 
@@ -111,16 +109,6 @@ impl InstallOptions {
     /// 用固定路径的 java。
     pub fn with_java_path(self, path: impl Into<PathBuf>) -> Self {
         self.with_java(Arc::new(FixedJava(path.into())))
-    }
-
-    /// 读取版本 JSON（含 `inheritsFrom` 合并），并归一化 url。
-    pub async fn version_json(&self, version_name: &str) -> Result<VersionJson> {
-        read_version_json_safe(&self.root_path, version_name).await
-    }
-
-    /// 用下载源把 URL 模板解析成真实链接。
-    pub fn resolve(&self, url: &str) -> String {
-        self.source.resolve(url)
     }
 
     /// 只跟"本地有哪些文件"有关的那部分配置。

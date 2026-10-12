@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_download::DownloadReport;
-use dmcl_mcmeta::layout::natives_dir;
+use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe};
 use dmcl_mcmeta::vanilla::{AssetIndexFile, VersionJson};
 use dmcl_task::{task_fn, TaskChain, TaskContext};
 
@@ -71,7 +71,7 @@ pub async fn download_game_files(
     version_name: &str,
     ctx: &TaskContext,
 ) -> Result<DownloadReport> {
-    let json = options.version_json(version_name).await?;
+    let json = read_version_json_safe(&options.root_path, version_name).await?;
     let index = ensure_asset_index(options, &json, ctx).await?;
 
     let mut planned = Vec::new();
@@ -94,7 +94,7 @@ pub async fn extract_natives(
     version_name: &str,
     ctx: &TaskContext,
 ) -> Result<usize> {
-    let json = options.version_json(version_name).await?;
+    let json = read_version_json_safe(&options.root_path, version_name).await?;
     let target = natives_dir(version_name);
     let mut extracted = 0;
 
@@ -123,7 +123,7 @@ pub fn client_jar_task(
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
-            let json = options.version_json(&version_name).await?;
+            let json = read_version_json_safe(&options.root_path, &version_name).await?;
             let mut planned = Vec::new();
             if let Some(client) = plan_client_jar(&options.plan(), &json, &version_name) {
                 planned.push(client);
@@ -162,7 +162,7 @@ fn index_step(
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
-            let json = options.version_json(&version_name).await?;
+            let json = read_version_json_safe(&options.root_path, &version_name).await?;
             ensure_asset_index(&options, &json, &ctx).await?;
             Ok(())
         }
@@ -177,7 +177,7 @@ fn libraries_step(
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
-            let json = options.version_json(&version_name).await?;
+            let json = read_version_json_safe(&options.root_path, &version_name).await?;
             let mut planned = Vec::new();
             if let Some(client) = plan_client_jar(&options.plan(), &json, &version_name) {
                 planned.push(client);
@@ -197,7 +197,7 @@ fn assets_step(
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
-            let json = options.version_json(&version_name).await?;
+            let json = read_version_json_safe(&options.root_path, &version_name).await?;
             // 索引通常已经在上一步下好了，这里再来一次只会被"已是最新"跳过
             let Some(index) = ensure_asset_index(&options, &json, &ctx).await? else {
                 return Ok(());

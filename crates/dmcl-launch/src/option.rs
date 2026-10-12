@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dmcl_install::PlanContext;
-use dmcl_mcmeta::layout::{natives_dir, version_dir};
 
 use crate::account::Account;
 use crate::java::{JavaChoice, JavaConfigs};
@@ -109,16 +108,6 @@ impl LaunchOption {
             natives_arch: self.natives_arch,
         }
     }
-
-    /// `versions/<version_name>`。
-    pub fn version_dir(&self) -> PathBuf {
-        version_dir(&self.root_path, &self.version_name)
-    }
-
-    /// natives 解压目录（由安装流程填充，启动只引用它）。
-    pub fn natives_dir(&self) -> PathBuf {
-        natives_dir(&self.version_name)
-    }
 }
 
 #[cfg(test)]
@@ -139,9 +128,11 @@ mod tests {
             .contains("ignoreInvalidMinecraftCertificates"));
         assert!(option.additional_game.is_empty());
         assert!(option.java.is_auto());
-        assert_eq!(option.version_dir(), PathBuf::from("/mc/versions/1.20.1"));
-        assert!(option
-            .natives_dir()
+        assert_eq!(
+            dmcl_mcmeta::layout::version_dir(&option.root_path, &option.version_name),
+            PathBuf::from("/mc/versions/1.20.1")
+        );
+        assert!(dmcl_mcmeta::layout::natives_dir(&option.version_name)
             .to_string_lossy()
             .contains("dmcl-natives-"));
     }

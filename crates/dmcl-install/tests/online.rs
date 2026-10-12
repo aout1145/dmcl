@@ -70,7 +70,9 @@ async fn planning_holds_for_a_real_version_json() {
         .await
         .expect("download_vanilla");
 
-    let json = options.version_json(VERSION).await.unwrap();
+    let json = dmcl_mcmeta::layout::read_version_json_safe(&options.root_path, VERSION)
+        .await
+        .unwrap();
     let planned = plan_libraries(&options.plan(), &json);
     assert!(!planned.is_empty());
 
@@ -100,7 +102,9 @@ async fn a_few_planned_libraries_really_download() {
         .await
         .expect("download_vanilla");
 
-    let json = options.version_json(VERSION).await.unwrap();
+    let json = dmcl_mcmeta::layout::read_version_json_safe(&options.root_path, VERSION)
+        .await
+        .unwrap();
     // 挑几个小文件，避免测试太重
     let small: Vec<_> = plan_libraries(&options.plan(), &json)
         .into_iter()
