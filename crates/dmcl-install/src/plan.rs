@@ -141,6 +141,23 @@ pub fn native_artifact(lib: &Library, arch: u32) -> Option<&Artifact> {
         .or_else(|| classifiers.get(raw.as_str()))
 }
 
+/// 文档给出的库级校验值里，取**最强**的一个（sha512 > sha256 > sha1 > md5）。
+///
+/// Fabric 之类的加载器会把校验值直接写在库条目上；Minecraft 自己的 `downloads`
+/// 只给 sha1。没有校验值就返回 `None`（交给大小 / 存在性判断）。
+fn lib_checksum(lib: &Library) -> Option<Checksum> {
+    if let Some(hex) = &lib.sha512 {
+        return Some(Checksum::sha512(hex.clone()));
+    }
+    if let Some(hex) = &lib.sha256 {
+        return Some(Checksum::sha256(hex.clone()));
+    }
+    if let Some(hex) = &lib.sha1 {
+        return Some(Checksum::sha1(hex.clone()));
+    }
+    lib.md5.clone().map(Checksum::md5)
+}
+
 /// 库文件（含 natives 分类器 jar）。
 pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile> {
     let libraries = libraries_dir(&plan.root_path);
@@ -176,7 +193,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
             None if lib.url.is_none() => planned.push(PlannedFile {
                 url: maven_library_url(&lib_path),
                 save_to: libraries.join(&lib_path),
-                checksum: lib.sha1.clone().map(Checksum::sha1),
+                checksum: lib_checksum(lib),
                 size: None,
                 name: base_name(&lib_path),
             }),
@@ -186,7 +203,7 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
                 planned.push(PlannedFile {
                     url: format!("{base}/{lib_path}"),
                     save_to: libraries.join(&lib_path),
-                    checksum: lib.sha1.clone().map(Checksum::sha1),
+                    checksum: lib_checksum(lib),
                     size: None,
                     name: base_name(&lib_path),
                 });

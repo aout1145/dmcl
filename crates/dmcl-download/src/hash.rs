@@ -1,7 +1,7 @@
-//! 摘要与校验：md5 / sha1 / sha256。
+//! 摘要与校验：md5 / sha1 / sha256 / sha512。
 //!
-//! Minecraft 自己的文档只提供 sha1，但下载层**不假设算法**：
-//! [`Checksum`] 表示"某个算法 + 某个十六进制摘要"，校验接口对三者一视同仁。
+//! Minecraft 自己的文档通常只提供 sha1（Fabric 给的是 sha512），但下载层**不假设算法**：
+//! [`Checksum`] 表示"某个算法 + 某个十六进制摘要"，校验接口对所有算法一视同仁。
 //! 因此需要 md5 / sha256 的场景（自建源、第三方清单、离线校验）不必再改调用方。
 //!
 //! ```no_run
@@ -28,14 +28,16 @@ pub enum HashAlgorithm {
     Md5,
     Sha1,
     Sha256,
+    Sha512,
 }
 
 impl HashAlgorithm {
     /// 全部算法。
-    pub const ALL: [HashAlgorithm; 3] = [
+    pub const ALL: [HashAlgorithm; 4] = [
         HashAlgorithm::Md5,
         HashAlgorithm::Sha1,
         HashAlgorithm::Sha256,
+        HashAlgorithm::Sha512,
     ];
 
     /// 规范名字（也是 [`Checksum`] 显示时的前缀）。
@@ -44,6 +46,7 @@ impl HashAlgorithm {
             HashAlgorithm::Md5 => "md5",
             HashAlgorithm::Sha1 => "sha1",
             HashAlgorithm::Sha256 => "sha256",
+            HashAlgorithm::Sha512 => "sha512",
         }
     }
 
@@ -53,6 +56,7 @@ impl HashAlgorithm {
             HashAlgorithm::Md5 => 16,
             HashAlgorithm::Sha1 => 20,
             HashAlgorithm::Sha256 => 32,
+            HashAlgorithm::Sha512 => 64,
         }
     }
 
@@ -67,6 +71,7 @@ impl HashAlgorithm {
             "md5" => Some(HashAlgorithm::Md5),
             "sha1" => Some(HashAlgorithm::Sha1),
             "sha256" => Some(HashAlgorithm::Sha256),
+            "sha512" => Some(HashAlgorithm::Sha512),
             _ => None,
         }
     }
@@ -113,10 +118,14 @@ impl Checksum {
         Self::new(HashAlgorithm::Sha256, hex)
     }
 
+    pub fn sha512(hex: impl Into<String>) -> Self {
+        Self::new(HashAlgorithm::Sha512, hex)
+    }
+
     /// 解析一个校验值。
     ///
     /// * 带算法前缀：`sha256:abcd…`、`sha-1=abcd…`；
-    /// * 不带前缀：按十六进制长度推断（32 → md5，40 → sha1，64 → sha256）。
+    /// * 不带前缀：按十六进制长度推断（32 → md5，40 → sha1，64 → sha256，128 → sha512）。
     ///
     /// 摘要必须是十六进制且长度与算法相符，否则报错 —— 写错的校验值应该立刻被发现，
     /// 而不是静默地"永远校验失败"。
@@ -136,7 +145,7 @@ impl Checksum {
             None => {
                 let algorithm = HashAlgorithm::from_hex_len(text.len()).ok_or_else(|| {
                     anyhow!(
-                        "无法从长度 {} 推断摘要算法（可用 md5/sha1/sha256）",
+                        "无法从长度 {} 推断摘要算法（可用 md5/sha1/sha256/sha512）",
                         text.len()
                     )
                 })?;
@@ -275,6 +284,7 @@ enum AnyHasher {
     Md5(md5::Md5),
     Sha1(sha1::Sha1),
     Sha256(sha2::Sha256),
+    Sha512(sha2::Sha512),
 }
 
 impl AnyHasher {
@@ -283,6 +293,7 @@ impl AnyHasher {
             HashAlgorithm::Md5 => AnyHasher::Md5(md5::Md5::new()),
             HashAlgorithm::Sha1 => AnyHasher::Sha1(sha1::Sha1::new()),
             HashAlgorithm::Sha256 => AnyHasher::Sha256(sha2::Sha256::new()),
+            HashAlgorithm::Sha512 => AnyHasher::Sha512(sha2::Sha512::new()),
         }
     }
 
@@ -291,6 +302,7 @@ impl AnyHasher {
             AnyHasher::Md5(hasher) => hasher.update(data),
             AnyHasher::Sha1(hasher) => hasher.update(data),
             AnyHasher::Sha256(hasher) => hasher.update(data),
+            AnyHasher::Sha512(hasher) => hasher.update(data),
         }
     }
 
@@ -299,6 +311,7 @@ impl AnyHasher {
             AnyHasher::Md5(hasher) => hex::encode(hasher.finalize()),
             AnyHasher::Sha1(hasher) => hex::encode(hasher.finalize()),
             AnyHasher::Sha256(hasher) => hex::encode(hasher.finalize()),
+            AnyHasher::Sha512(hasher) => hex::encode(hasher.finalize()),
         }
     }
 }
@@ -306,6 +319,14 @@ impl AnyHasher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha512_matches_its_known_digest() {
+        assert_eq!(
+            hash_bytes(HashAlgorithm::Sha512, b"abc"),
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        );
+    }
 
     #[test]
     fn every_algorithm_matches_its_known_digests() {
