@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_download::{file_matches, Checksum};
+use dmcl_download::{file_ok, Checksum};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::neoforge::{latest_neoforge_version, neoforge_installer_url, InstallProfile};
@@ -211,7 +211,7 @@ async fn run_installer_processors(
             for (key, value) in outputs {
                 let file = get_arg(key);
                 let expected = Checksum::sha1(get_arg(value));
-                if !file_matches(&file, Some(&expected), None).await {
+                if !file_ok(&file, Some(&expected), None).await {
                     return Err(anyhow!("{file}: sha1 校验失败"));
                 }
             }

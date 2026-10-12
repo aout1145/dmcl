@@ -256,12 +256,12 @@ async fn size_matches(path: &Path, size: Option<u64>) -> bool {
     }
 }
 
-/// 文件是否就是我们要的那一个。
+/// 本地这个文件是否已经「存在且完整」。
 ///
-/// * 给了 `checksum` —— 必须一致（用哪个算法由 [`Checksum`] 决定）；
+/// * 给了 `checksum` —— 摘要必须一致（算法由 [`Checksum`] 决定）；
 /// * 只给了 `size` —— 大小一致即可；
 /// * 两个都没给 —— 文件存在就算数。
-pub async fn file_matches(
+pub async fn file_ok(
     path: impl AsRef<Path>,
     checksum: Option<&Checksum>,
     size: Option<u64>,
@@ -438,20 +438,14 @@ mod tests {
 
         for algorithm in HashAlgorithm::ALL {
             let checksum = Checksum::new(algorithm, hash_bytes(algorithm, b"abc"));
-            assert!(
-                file_matches(&path, Some(&checksum), None).await,
-                "{algorithm}"
-            );
+            assert!(file_ok(&path, Some(&checksum), None).await, "{algorithm}");
             let wrong = Checksum::new(algorithm, "00".repeat(algorithm.digest_len()));
-            assert!(
-                !file_matches(&path, Some(&wrong), None).await,
-                "{algorithm}"
-            );
+            assert!(!file_ok(&path, Some(&wrong), None).await, "{algorithm}");
         }
-        assert!(file_matches(&path, None, None).await);
-        assert!(file_matches(&path, None, Some(3)).await);
-        assert!(!file_matches(&path, None, Some(4)).await);
-        assert!(!file_matches(dir.join("missing"), None, None).await);
+        assert!(file_ok(&path, None, None).await);
+        assert!(file_ok(&path, None, Some(3)).await);
+        assert!(!file_ok(&path, None, Some(4)).await);
+        assert!(!file_ok(dir.join("missing"), None, None).await);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

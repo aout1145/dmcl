@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 
 use dmcl_task::{human_bytes, BoxFuture, Cancelled, Task, TaskContext};
 
-use crate::hash::{file_matches, hash_file};
+use crate::hash::{file_ok, hash_file};
 use crate::item::DownloadItem;
 use crate::options::DownloadOptions;
 use crate::report::{DownloadFailure, DownloadReport};
@@ -114,7 +114,7 @@ impl DownloadTask {
         let mut pending: Vec<DownloadItem> = Vec::new();
         for item in &self.items {
             let save_to = absolute(&item.save_to);
-            if file_matches(&save_to, item.checksum.as_ref(), item.size).await {
+            if file_ok(&save_to, item.checksum.as_ref(), item.size).await {
                 report.lock().unwrap().skipped += 1;
             } else {
                 pending.push(item.clone());
