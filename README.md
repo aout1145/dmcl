@@ -9,7 +9,7 @@
 - **一键装模组加载器** —— `--fabric` / `--forge` / `--neoforge`，可指定加载器版本
   （默认取最新）。
 - **启动游戏** —— 自动挑选 Java、生成 JVM 与游戏参数、启动子进程并监控（可停止）。
-- **启动前完整性检查** —— 报告缺失 / 校验不符的文件；`launch` 默认「缺了就补」，
+- **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
   也可以只用 `check_integrity` 问「完整吗」再自行决定。
 - **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
   `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
@@ -26,8 +26,6 @@ cd dmcl-rs
 cargo build --release
 ./target/release/dmcl --help          # Windows: .\target\release\dmcl.exe --help
 ```
-
-调试构建会打印一行 `!!! DMCL SNAPSHOT !!!`。
 
 ## 快速开始
 
@@ -53,7 +51,7 @@ dmcl launch 1.20.1-fabric
 
 | 命令                                                                        | 说明                                  |
 | --------------------------------------------------------------------------- | ------------------------------------- |
-| `launch <version-name>`                                                     | 检查完整性 → 缺文件则补全 → 启动      |
+| `launch <version-name>`                                                     | 检查并补全文件 → 生成参数 → 启动      |
 | `install <mc-version-id> <version-name>`                                    | 安装原版                              |
 | `install … [--fabric] [--forge] [--neoforge]`                               | 顺便装加载器                          |
 | `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本（留空取最新）          |

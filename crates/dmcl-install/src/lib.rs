@@ -52,7 +52,7 @@
 //! * natives 的解压归这里做 —— 它本质上就是「把文件铺好」，这样 `dmcl-launch`
 //!   就不需要 zip 代码；
 //! * Forge / NeoForge 的 processor 用 [`dmcl_task::CommandTask`] 跑，
-//!   因此安装器的输出会作为进度事件流出来。
+//!   因此安装器的输出会作为日志事件流出来。
 
 pub mod files;
 pub mod integrity;

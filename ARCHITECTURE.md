@@ -16,8 +16,8 @@ dmcl-rs/
     ├── dmcl-task/             # 通用任务链 + 进度事件流（与 MC 无关）
     ├── dmcl-mcmeta/           # MC 元数据文档、下载源、URL 模板、本地目录布局
     ├── dmcl-download/         # 并发 / 分块下载（实现 dmcl-task 的 Task）
-    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge 安装
-    ├── dmcl-launch/           # 账号、java、命令行生成、启动、完整性检查
+    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge 安装、完整性检查
+    ├── dmcl-launch/           # 账号、java、命令行生成、启动
     └── dmcl/                  # 应用：config + cli（未来在这里加 gui）
 ```
 
@@ -66,14 +66,14 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 - `Task`：每个任务**接收一个输入、产出一个输出**；
 - `TaskChain`：用 `then(任务, 显示名)` 把上一个任务的输出接到下一个的输入上，
   **任一步失败即中止后续**并把错误原样返回；
-- `TaskContext`：任务用它上报进度（`progress`，可原地刷新的量化进度）与日志（`log`，
-  一次性文字）；
+- `TaskContext`：任务用它上报进度（`progress(current, total, message, percent)`，百分比由
+  任务自己算好、`None` 表示没有）与日志（`log`，一次性文字）；
 - `TaskEvent`（`broadcast` 事件流）：前端通过 `subscribe()` 实时消费，一个任务可以上报
   任意多次，也可以被多个前端同时消费；链套链时子链的**步骤级**事件会原样转发到父链
   （含 `StepStarted` / `StepFinished`，只有链级的 `Started` / `Finished` 丢弃），前端据此
   用**栈**还原嵌套层级：进入 `StepStarted` push、`StepFinished` pop；
 - `CancelHandle`：可从任意线程取消；
-- `CommandTask`：跑外部程序，默认把它的输出**逐行变成进度事件**（Forge 的安装器
+- `CommandTask`：跑外部程序，默认把它的输出**逐行变成日志事件**（Forge 的安装器
   processor 就是这么跑的）；取消时子进程被 `kill_on_drop` 杀掉。
 - `WarningDecision`：任务可以发出「警告」事件，让前端决定继续还是中止。
 
@@ -107,10 +107,11 @@ source / os / maven / merge / layout / json   —— 四个域共用的底座
 
 ### `dmcl-install` —— 安装
 
-只做「把文件写下去」，不做任何决策。内部把安装拆成：
+只做「把文件铺好」的事（写入 + 完整性检查），不做任何决策。内部把安装拆成：
 
 - `plan`：**纯函数**的「这个版本需要哪些文件」规划（库、资源、客户端 jar、natives）；
 - `files`：按规划构造 `DownloadTask` 并落盘；
+- `integrity`：完整性检查（「完整吗？缺什么？」），缺失判定与下载共用同一个 `file_ok`；
 - `vanilla`：原版元数据落盘、`launcher_profiles.json`；
 - `loader/{fabric,forge,neoforge,common}`：各加载器自己的安装步骤（Fabric 直接合并
   profile；Forge / NeoForge 解出 `install_profile.json`、跑 processor）；
@@ -188,16 +189,16 @@ handle.await??;
 
 ### 3. 下载
 
-| 关注点       | 做法                                                                                                                                  |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| 多文件并发   | `JoinSet` + 全局 `Semaphore(max_connections)`                                                                                         |
-| 大文件分块   | 已知大小且超过阈值时，先发 `bytes=0-0` 探针确认服务器支持 `Range`（返回 206 + `Content-Range`），再按块并发；单文件并发块数另有限制   |
-| 不支持 Range | 自动退回单连接                                                                                                                        |
-| 完整性       | 先写 `<文件>.part`，校验通过才 `rename`；失败删掉半成品并重试                                                                         |
-| 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256**（Minecraft 文档给的是 sha1；也接受 `sha256:…` 前缀或按摘要长度推断）                          |
-| 进度         | 文件数**先于**总量显示；总量按服务器实际大小（`Content-Length` / `Content-Range`）动态累加、失败项回滚；带节流                                                                              |
-| 断点续传     | 不做；失败即整份重来（最多 `max_attempts` 次）                                                                                        |
-| 失败处理     | 所有已排队项目都会跑完，失败项进 `DownloadReport`；默认「有失败就报错」，可用 `DownloadOptions::ignore_failures` 改成「只记录不报错」 |
+| 关注点       | 做法                                                                                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 多文件并发   | `JoinSet` + 全局 `Semaphore(max_connections)`                                                                                                                                                |
+| 大文件分块   | 已知大小且超过阈值时，先发 `bytes=0-0` 探针确认服务器支持 `Range`（返回 206 + `Content-Range`），再按块并发；单文件并发块数另有限制                                                          |
+| 不支持 Range | 自动退回单连接                                                                                                                                                                               |
+| 完整性       | 先写 `<文件>.part`，校验通过才 `rename`；失败删掉半成品并重试                                                                                                                                |
+| 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256 / sha512**（Minecraft 文档给的是 sha1、Fabric 给的是 sha512；也接受 `sha256:…` 前缀或按摘要长度推断） |
+| 进度         | 已知大小的项按字节、未知大小的项按数量（字节「下载多少算多少」），整体百分比按文件数占比加权；总量不预填，随服务器实际大小（`Content-Length` / `Content-Range`）动态累加、失败项回滚；带节流 |
+| 断点续传     | 不做；失败即整份重来（最多 `max_attempts` 次）                                                                                                                                               |
+| 失败处理     | 所有已排队项目都会跑完，失败项进 `DownloadReport`；默认「有失败就报错」，可用 `DownloadOptions::ignore_failures` 改成「只记录不报错」                                                        |
 
 `dmcl-install` 与 `dmcl-download` 共用同一个 `reqwest::Client`（复用连接池）。
 
@@ -226,7 +227,7 @@ monitor.wait().await?;
 ```
 
 - `check_integrity()` 返回 `IntegrityStatus { complete, missing, checked }`，
-  每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 校验不符 / 大小不符 / 尚未生成）；
+  每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符 / 尚未生成）；
 - 它**不下载任何东西**：修复由调用者执行 `dmcl-install`；
 - Java 选择不读全局配置：`find_java(roots)` 只返回结果，`select_java(required_major,
 &choice, &configs)` 接收配置表；

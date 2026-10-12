@@ -19,14 +19,14 @@
 
 `dmcl`：非官方 Minecraft 启动器，Rust。一个 cargo workspace，`crates/` 下六个 crate：
 
-| crate           | 职责                                          |
-| --------------- | --------------------------------------------- |
-| `dmcl-task`     | 通用任务链 + 进度事件流（与 MC 无关）         |
-| `dmcl-mcmeta`   | MC 元数据文档、下载源、URL 模板、本地目录布局 |
-| `dmcl-download` | 并发 / 分块下载（实现 `dmcl-task` 的 `Task`） |
-| `dmcl-install`  | 原版 + Fabric / Forge / NeoForge 安装         |
-| `dmcl-launch`   | 账号、java、命令行生成、启动、完整性检查      |
-| `dmcl`          | 应用层：config + cli（唯一读配置的地方）      |
+| crate           | 职责                                              |
+| --------------- | ------------------------------------------------- |
+| `dmcl-task`     | 通用任务链 + 进度事件流（与 MC 无关）             |
+| `dmcl-mcmeta`   | MC 元数据文档、下载源、URL 模板、本地目录布局     |
+| `dmcl-download` | 并发 / 分块下载（实现 `dmcl-task` 的 `Task`）     |
+| `dmcl-install`  | 原版 + Fabric / Forge / NeoForge 安装、完整性检查 |
+| `dmcl-launch`   | 账号、java、命令行生成、启动                      |
+| `dmcl`          | 应用层：config + cli（唯一读配置的地方）          |
 
 Rust edition 2021，MSRV **1.75**，许可 GPL-3.0-or-later。
 
