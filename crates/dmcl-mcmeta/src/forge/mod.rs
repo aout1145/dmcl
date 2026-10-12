@@ -8,7 +8,11 @@ use crate::source::{DownloadSource, Root};
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallEntry, InstallProfile, Processor, Side};
 
-/// Forge 的版本列表接口 —— **只有 bmclapi 提供**。
+/// Forge 的版本列表接口 —— 目前只有 bmclapi 提供。
+///
+/// TODO：官方 maven 也有 `maven-metadata.xml`（XML，形如 `1.21.1-52.1.16`，
+/// 但没有 `branch` / `build`），NeoForge 的官方 maven 同理。以后把两边官方源的
+/// 列表统一改用 XML 取，再决定要不要保留这里的 bmclapi 接口。
 pub const FORGE_VERSION_LIST: &str = "https://bmclapi2.bangbang93.com/forge/minecraft";
 
 /// `bmclapi .../forge/minecraft/<mcver>` 的一项。

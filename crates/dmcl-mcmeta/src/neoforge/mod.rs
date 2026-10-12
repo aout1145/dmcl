@@ -64,6 +64,9 @@ pub fn neoforge_installer_url(forge_version: &str) -> (String, &'static str) {
 }
 
 /// 官方 neoforged maven 的版本列表地址。
+///
+/// TODO：官方 maven 也有 `maven-metadata.xml`（`net/neoforged/neoforge` 与
+/// `net/neoforged/forge` 都有），以后与 Forge 一起把官方源列表改用 XML 取。
 pub fn neoforge_version_list_url_official(mc_version: &str) -> String {
     let repository = if mc_version == "1.20.1" {
         "forge"
