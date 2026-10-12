@@ -65,6 +65,13 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 4. 每个操作是一个 `dmcl_task::TaskChain`，进度走 `TaskEvent` 事件流。
    别用轮询或全局状态来汇报进度；别引入全局可变配置（原实现有过 `static RwLock<Config>`，已移除）。
 
+## 公开 API
+
+不追求公开 API（如 `dmcl-task` 的 `TaskEvent`、`Task`、各 `*Options`）绝对稳定。只要能让设计更
+清晰，就改动它 —— 新增 / 调整变体、字段、方法、签名都可以，把调用方一并改掉即可；不要为了
+「不动 API」把设计拧成别扭的样子。改动仍按「汇报与确认」办理：讲清现状、可选项、代价与取舍、
+以及推荐，等用户拍板。
+
 ## 代码约定
 
 - **强类型文档可往返**：`dmcl-mcmeta` 里凡是会被写回的文档结构体，都要带
