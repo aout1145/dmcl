@@ -32,7 +32,9 @@ async fn integrity_and_command_line_for_a_real_version() {
     let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
 
     // 只装了版本 JSON：显然还不完整，而且能指出缺的是哪个 jar
-    let status = launcher.check_integrity().await.expect("check_integrity");
+    let status = dmcl_install::check_integrity(&install_options.plan(), VERSION)
+        .await
+        .expect("check_integrity");
     assert!(!status.is_complete(), "只装了元数据，不该被认为完整");
     assert!(status.missing_count() > 0);
     assert!(

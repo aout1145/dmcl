@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use dmcl_install::{check_integrity, IntegrityStatus};
 use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
 use dmcl_mcmeta::os::classpath_separator;
@@ -47,14 +46,6 @@ impl GameLauncher {
             java: None,
             json,
         })
-    }
-
-    /// 检查这个版本在本地是否完整。
-    ///
-    /// **结果只返回给调用者**：由它决定要不要调 [`dmcl_install`] 补全，
-    /// 而不是像原来那样在启动流程里顺手把文件下了。
-    pub async fn check_integrity(&self) -> Result<IntegrityStatus> {
-        check_integrity(&self.option.plan(), &self.option.version_name).await
     }
 
     /// 拼 classpath。

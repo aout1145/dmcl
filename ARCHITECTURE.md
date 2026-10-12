@@ -217,18 +217,24 @@ natives 的解压也从「启动时」挪到了安装流程 —— 它本质就�
 ### 5. 启动与安装解耦
 
 ```rust
-let status = launcher.check_integrity().await?;   // 只回答"完整吗？缺什么？"
+// 完整性检查在 dmcl-install：只回答"完整吗？缺什么？"，不下载任何东西
+let status = dmcl_install::check_integrity(&install_options.plan(), version).await?;
 if !status.is_complete() {
     // 由调用者决定：跑一次 dmcl-install 补全（已存在的文件会被跳过）
-    game_files_task(install_options, version).run_with(printer).await?;
+    game_files_task(install_options, version)
+        .run_with((), |event| printer.handle(event))
+        .await?;
 }
+
+// dmcl-launch 只负责拼参数、起进程
+let mut launcher = GameLauncher::new(option).await?;
 let mut monitor = launcher.launch_game().await?;
 monitor.wait().await?;
 ```
 
-- `check_integrity()` 返回 `IntegrityStatus { complete, missing, checked }`，
+- `check_integrity(plan, version)`（`dmcl-install`）返回 `IntegrityStatus { complete, missing, checked }`，
   每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符 / 尚未生成）；
-- 它**不下载任何东西**：修复由调用者执行 `dmcl-install`；
+- 它**不下载任何东西**：修复由调用者跑 `dmcl-install` 的 `game_files_task`（已存在的文件会被跳过）；
 - Java 选择不读全局配置：`find_java(roots)` 只返回结果，`select_java(required_major,
 &choice, &configs)` 接收配置表；
 - 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 生成参数 → 启动」串成一条

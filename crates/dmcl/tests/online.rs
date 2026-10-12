@@ -55,7 +55,9 @@ async fn the_whole_chain_runs_from_a_config_document() {
     let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
 
     // 只装了元数据，完整性检查必须报告缺件，并且给出可用来修复的模板地址
-    let status = launcher.check_integrity().await.expect("check_integrity");
+    let status = dmcl_install::check_integrity(&install.plan(), VERSION)
+        .await
+        .expect("check_integrity");
     assert!(!status.is_complete());
     assert!(status.missing_count() > 0);
     assert!(status.summary().contains("需要修复"));

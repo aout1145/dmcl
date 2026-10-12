@@ -41,18 +41,15 @@ pub struct PreparedLaunch {
 ///
 /// 完整性只检查一次：结果既用来判断要不要补全，也原样传给下一步。
 pub struct PrepareLaunchFilesTask {
-    option: LaunchOption,
     install: Arc<InstallOptions>,
     version_name: String,
 }
 
 impl PrepareLaunchFilesTask {
-    pub fn new(option: LaunchOption, install: Arc<InstallOptions>) -> Self {
-        let version_name = option.version_name.clone();
+    pub fn new(install: Arc<InstallOptions>, version_name: impl Into<String>) -> Self {
         Self {
-            option,
             install,
-            version_name,
+            version_name: version_name.into(),
         }
     }
 }
@@ -64,8 +61,8 @@ impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
 
     fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<IntegrityStatus>> {
         Box::pin(async move {
-            let launcher = GameLauncher::new(self.option.clone()).await?;
-            let integrity = launcher.check_integrity().await?;
+            let integrity =
+                dmcl_install::check_integrity(&self.install.plan(), &self.version_name).await?;
             ctx.log(integrity.summary());
 
             // 缺件时才跑下载链（链内会跳过已存在的文件），进度转发到当前事件流
@@ -144,9 +141,10 @@ pub fn launch_chain(
     option: LaunchOption,
     install: Arc<InstallOptions>,
 ) -> TaskChain<(), GameMonitor> {
+    let version_name = option.version_name.clone();
     TaskChain::new("启动")
         .then(
-            PrepareLaunchFilesTask::new(option.clone(), install),
+            PrepareLaunchFilesTask::new(install, version_name),
             "检查并补全文件",
         )
         .then(GenerateArgsTask::new(option), "生成启动参数")
@@ -170,7 +168,7 @@ mod tests {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
         let install = install_options(std::path::Path::new("/mc"));
         assert_eq!(
-            PrepareLaunchFilesTask::new(option.clone(), install).name(),
+            PrepareLaunchFilesTask::new(install, "1.0").name(),
             "检查并补全文件"
         );
         assert_eq!(GenerateArgsTask::new(option).name(), "生成启动参数");
@@ -234,7 +232,7 @@ mod tests {
             LaunchOption::new(Arc::new(OfflineAccount::new("player")), root.clone(), "1.0")
                 .with_java(JavaChoice::Named("test".to_string()), configs);
 
-        let integrity = PrepareLaunchFilesTask::new(option.clone(), install_options(&root))
+        let integrity = PrepareLaunchFilesTask::new(install_options(&root), "1.0")
             .run((), TaskContext::detached("检查并补全文件"))
             .await
             .unwrap();

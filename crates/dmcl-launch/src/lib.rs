@@ -3,7 +3,7 @@
 //! 两条设计要点：
 //!
 //! 1. **底层启动与安装解耦**。[`GameLauncher`] 只负责拼命令行与启动进程，
-//!    文件完整性由 [`GameLauncher::check_integrity`] 报告，**是否修复交给调用者**。
+//!    文件完整性由 [`dmcl_install::check_integrity`] 负责，**是否修复交给调用者**。
 //!    想要「缺了就补」的一站式流程时，用 [`launch_chain`]。
 //! 2. **不读全局配置**。java 的选择（[`JavaChoice`] + [`JavaConfigs`]）、
 //!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
