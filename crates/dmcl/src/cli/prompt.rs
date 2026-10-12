@@ -31,8 +31,6 @@ use dialoguer::console::Term;
 use dialoguer::theme::Theme;
 use dialoguer::{Confirm, Input, Select};
 
-use dmcl_launch::escape_shell_command;
-
 use super::Cli;
 
 /// 全局参数，不值得逐个提问。
@@ -354,7 +352,7 @@ pub async fn prompt_interactive() -> Result<()> {
         let argv = build_argv(&subcommand, &prompter)?;
 
         clear_screen();
-        println!("执行：{}", escape_shell_command(&argv));
+        println!("执行：{}", shell_words::join(&argv));
 
         // 用拼好的参数重新执行自己
         let exe = std::env::current_exe()?;

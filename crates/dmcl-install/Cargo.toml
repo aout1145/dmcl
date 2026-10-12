@@ -16,5 +16,4 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
-path-clean.workspace = true
 anyhow.workspace = true

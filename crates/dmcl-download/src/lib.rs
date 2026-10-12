@@ -35,9 +35,7 @@ mod options;
 mod report;
 mod task;
 
-pub use hash::{
-    check_file, file_matches, hash_bytes, hash_file, sha1_hex, Checksum, HashAlgorithm,
-};
+pub use hash::{file_matches, hash_bytes, hash_file, Checksum, HashAlgorithm};
 pub use item::DownloadItem;
 pub use options::{DownloadOptions, DEFAULT_USER_AGENT};
 pub use report::{DownloadFailure, DownloadReport};

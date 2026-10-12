@@ -232,11 +232,6 @@ pub async fn hash_file(path: impl AsRef<Path>, algorithm: HashAlgorithm) -> Resu
     .context("计算文件摘要的任务失败")?
 }
 
-/// 一个字节串的 sha1（等价于 `hash_bytes(Sha1, data)`，保留是为了方便）。
-pub fn sha1_hex(data: &[u8]) -> String {
-    hash_bytes(HashAlgorithm::Sha1, data)
-}
-
 // ---------------------------------------------------------------------------
 // 本地文件判断
 // ---------------------------------------------------------------------------
@@ -270,11 +265,6 @@ pub async fn file_matches(
         Some(checksum) => checksum.verify_file(path).await.unwrap_or(false),
         None => size_matches(path, size).await,
     }
-}
-
-/// [`file_matches`] 的别名，语义上更贴近调用点（"这个文件已经好了吗"）。
-pub async fn check_file(path: impl AsRef<Path>, checksum: Option<&Checksum>) -> bool {
-    file_matches(path, checksum, None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +318,10 @@ mod tests {
             hash_bytes(HashAlgorithm::Md5, b"abc"),
             "900150983cd24fb0d6963f7d28e17f72"
         );
-        assert_eq!(sha1_hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(
+            hash_bytes(HashAlgorithm::Sha1, b""),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
         assert_eq!(
             hash_bytes(HashAlgorithm::Sha1, b"abc"),
             "a9993e364706816aba3e25717850c26c9cd0d89d"
@@ -424,14 +417,20 @@ mod tests {
 
         for algorithm in HashAlgorithm::ALL {
             let checksum = Checksum::new(algorithm, hash_bytes(algorithm, b"abc"));
-            assert!(check_file(&path, Some(&checksum)).await, "{algorithm}");
+            assert!(
+                file_matches(&path, Some(&checksum), None).await,
+                "{algorithm}"
+            );
             let wrong = Checksum::new(algorithm, "00".repeat(algorithm.digest_len()));
-            assert!(!check_file(&path, Some(&wrong)).await, "{algorithm}");
+            assert!(
+                !file_matches(&path, Some(&wrong), None).await,
+                "{algorithm}"
+            );
         }
-        assert!(check_file(&path, None).await);
+        assert!(file_matches(&path, None, None).await);
         assert!(file_matches(&path, None, Some(3)).await);
         assert!(!file_matches(&path, None, Some(4)).await);
-        assert!(!check_file(dir.join("missing"), None).await);
+        assert!(!file_matches(dir.join("missing"), None, None).await);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

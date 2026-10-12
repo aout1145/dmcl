@@ -114,14 +114,9 @@ impl DownloadSource {
     }
 }
 
-/// NeoForge 版本列表。
-pub async fn neoforge_versions(source: &DownloadSource, mc_version: &str) -> Result<Vec<String>> {
-    source.fetch_neoforge_versions(mc_version).await
-}
-
 /// 最新 NeoForge —— 取列表的**最后一个**元素。
 pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let versions = neoforge_versions(source, mc_version).await?;
+    let versions = source.fetch_neoforge_versions(mc_version).await?;
     Ok(versions.last().cloned().unwrap_or_default())
 }
 

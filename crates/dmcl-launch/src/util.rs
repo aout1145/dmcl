@@ -2,13 +2,6 @@
 
 use std::path::Path;
 
-/// 把 argv 渲染成给人看的命令行。
-///
-/// 交给 `shell_words::join`，产生 POSIX 单引号形式。
-pub fn escape_shell_command(args: &[String]) -> String {
-    shell_words::join(args)
-}
-
 /// 路径的 Windows 盘符前缀（`"C:"`），没有则返回 `""`。
 ///
 /// 只用来回显 `cd <盘符>` 那一段；匹配 `Component::Prefix` 就不需要判断平台。
@@ -24,18 +17,6 @@ pub fn drive_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shell_escaping_quotes_only_when_needed() {
-        assert_eq!(
-            escape_shell_command(&["java".to_string(), "-Xmx2048m".to_string()]),
-            "java -Xmx2048m"
-        );
-        assert_eq!(
-            escape_shell_command(&["-Dfoo=bar baz".to_string()]),
-            "'-Dfoo=bar baz'"
-        );
-    }
 
     #[test]
     fn drive_names_only_exist_on_windows_paths() {

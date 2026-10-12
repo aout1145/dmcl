@@ -25,8 +25,8 @@ use dmcl_install::{InstallOptions, JavaProvider};
 use dmcl_launch::{
     select_java, JavaChoice, JavaConfigs, LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION,
 };
+use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
-use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 
 /// 1 MiB。
@@ -329,19 +329,6 @@ impl JavaProvider for ConfigJava {
             Ok(java.path)
         })
     }
-}
-
-/// 把路径变成绝对路径并归一化。
-pub fn absolute(path: impl AsRef<Path>) -> PathBuf {
-    let path = path.as_ref();
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    };
-    absolute.clean()
 }
 
 #[cfg(test)]

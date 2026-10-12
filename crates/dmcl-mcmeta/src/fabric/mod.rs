@@ -152,17 +152,9 @@ impl DownloadSource {
     }
 }
 
-/// Fabric 的 loader 列表（远端顺序）。
-pub async fn fabric_loaders(
-    source: &DownloadSource,
-    mc_version: &str,
-) -> Result<Vec<FabricLoaderEntry>> {
-    source.fetch_fabric_loaders(mc_version).await
-}
-
 /// 最新的**稳定** Fabric loader；没有稳定版时取列表第一个。
 pub async fn latest_fabric_loader(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let list = fabric_loaders(source, mc_version).await?;
+    let list = source.fetch_fabric_loaders(mc_version).await?;
     for entry in list.iter().rev() {
         if entry.loader.is_stable() {
             return Ok(entry.loader.version.clone());

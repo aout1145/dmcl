@@ -21,7 +21,6 @@ use crate::integrity::IntegrityStatus;
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
-use crate::util::escape_shell_command;
 
 /// 「校验 → 生成参数」的产出。
 #[derive(Debug, Clone)]
@@ -63,7 +62,7 @@ impl Task<(), PreparedLaunch> for PrepareLaunchTask {
 
             ctx.log("生成启动参数");
             let args = launcher.gen_args_in(&ctx).await?;
-            let command = escape_shell_command(&args);
+            let command = shell_words::join(&args);
 
             ctx.log("启动参数已就绪");
             Ok(PreparedLaunch {

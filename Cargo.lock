@@ -369,9 +369,9 @@ dependencies = [
  "dmcl-launch",
  "dmcl-mcmeta",
  "dmcl-task",
- "path-clean",
  "serde",
  "serde_json",
+ "shell-words",
  "tokio",
 ]
 
@@ -398,7 +398,6 @@ dependencies = [
  "dmcl-download",
  "dmcl-mcmeta",
  "dmcl-task",
- "path-clean",
  "serde",
  "serde_json",
  "tokio",

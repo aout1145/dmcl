@@ -54,11 +54,6 @@ impl PlanContext {
         self.natives_arch = natives_arch;
         self
     }
-
-    /// 解压后 natives 应该待的目录。
-    pub fn natives_dir(&self, version_name: &str) -> PathBuf {
-        dmcl_mcmeta::layout::natives_dir(version_name)
-    }
 }
 
 /// 一个计划中的下载项。

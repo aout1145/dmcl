@@ -22,7 +22,7 @@ use crate::integrity::{check_integrity, IntegrityStatus};
 use crate::java::{select_java, JavaOption};
 use crate::monitor::GameMonitor;
 use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
-use crate::util::{drive_name, escape_shell_command};
+use crate::util::drive_name;
 
 /// 启动一个版本。
 pub struct GameLauncher {
@@ -307,7 +307,7 @@ impl GameLauncher {
 
     /// 转义后的命令行，给「只想显示 / 交给别人执行」的前端用。
     pub async fn generate_command(&mut self) -> Result<String> {
-        Ok(escape_shell_command(&self.gen_args().await?))
+        Ok(shell_words::join(&self.gen_args().await?))
     }
 
     /// 启动游戏进程。
@@ -337,12 +337,12 @@ impl GameLauncher {
 pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -> String {
     format!(
         "{} && {} && {}",
-        escape_shell_command(&["cd".to_string(), drive_name(version_path)]),
-        escape_shell_command(&[
+        shell_words::join(&["cd".to_string(), drive_name(version_path)]),
+        shell_words::join(&[
             "cd".to_string(),
             version_path.to_string_lossy().into_owned()
         ]),
-        escape_shell_command(args)
+        shell_words::join(args)
     )
 }
 

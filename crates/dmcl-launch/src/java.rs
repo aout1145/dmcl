@@ -174,11 +174,6 @@ pub async fn find_java(roots: &[impl AsRef<Path>]) -> Result<JavaConfigs> {
     Ok(configs)
 }
 
-/// 扫描默认目录（[`DEFAULT_JAVA_ROOTS`]）。
-pub async fn find_java_in_default_roots() -> Result<JavaConfigs> {
-    find_java(DEFAULT_JAVA_ROOTS).await
-}
-
 /// 按调用者给的选择挑一个 java。
 ///
 /// * [`JavaChoice::Named`]：直接用配置表里的那一项；
@@ -191,7 +186,7 @@ pub async fn select_java(
     configs: &JavaConfigs,
 ) -> Result<JavaOption> {
     let scanned = if choice.is_auto() && configs.is_empty() {
-        Some(find_java_in_default_roots().await?)
+        Some(find_java(DEFAULT_JAVA_ROOTS).await?)
     } else {
         None
     };

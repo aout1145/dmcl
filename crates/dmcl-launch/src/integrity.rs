@@ -279,7 +279,7 @@ mod tests {
 
         // 造一个哈希正确的库文件
         let content = b"library bytes";
-        let sha1 = dmcl_download::sha1_hex(content);
+        let sha1 = dmcl_download::hash_bytes(dmcl_download::HashAlgorithm::Sha1, content);
         let json = serde_json::json!({
             "id": "1.0",
             "libraries": [{

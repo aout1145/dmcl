@@ -81,19 +81,9 @@ impl DownloadSource {
     }
 }
 
-/// Forge 版本列表（bmclapi only），按 build 升序。
-pub async fn forge_versions(
-    source: &DownloadSource,
-    mc_version: &str,
-) -> Result<Vec<ForgeVersionEntry>> {
-    let mut versions = source.fetch_forge_versions(mc_version).await?;
-    versions.sort_by_key(|entry| entry.build);
-    Ok(versions)
-}
-
 /// 最新 Forge（build 号最大）。
 pub async fn latest_forge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let versions = forge_versions(source, mc_version).await?;
+    let versions = source.fetch_forge_versions(mc_version).await?;
     Ok(versions
         .iter()
         .max_by_key(|entry| entry.build)

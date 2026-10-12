@@ -19,9 +19,6 @@ use dialoguer::Confirm;
 
 use dmcl_install::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
-use dmcl_mcmeta::fabric::fabric_loaders;
-use dmcl_mcmeta::forge::forge_versions;
-use dmcl_mcmeta::neoforge::neoforge_versions;
 use dmcl_mcmeta::source::Mirror;
 use dmcl_task::TaskEvent;
 
@@ -377,21 +374,23 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
         }
 
         Commands::ListForge { verid } => {
-            for version in forge_versions(&source, &verid).await? {
+            let mut versions = source.fetch_forge_versions(&verid).await?;
+            versions.sort_by_key(|entry| entry.build);
+            for version in versions {
                 println!("{}", version.full_name());
             }
             Ok(())
         }
 
         Commands::ListNeoforge { verid } => {
-            for version in neoforge_versions(&source, &verid).await? {
+            for version in source.fetch_neoforge_versions(&verid).await? {
                 println!("{version}");
             }
             Ok(())
         }
 
         Commands::ListFabric { verid } => {
-            let loaders = fabric_loaders(&source, &verid).await?;
+            let loaders = source.fetch_fabric_loaders(&verid).await?;
             for entry in loaders.iter().rev() {
                 println!(
                     "{verid}/{}{}",

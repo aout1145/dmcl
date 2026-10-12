@@ -43,8 +43,8 @@ pub use integrity::{
     check_integrity, version_json_exists, IntegrityStatus, MissingFile, MissingReason,
 };
 pub use java::{
-    find_java, find_java_in_default_roots, select_java, JavaChoice, JavaConfigs, JavaOption,
-    DEFAULT_JAVA_ROOTS, JAVA_AUTOSELECT,
+    find_java, select_java, JavaChoice, JavaConfigs, JavaOption, DEFAULT_JAVA_ROOTS,
+    JAVA_AUTOSELECT,
 };
 pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;
@@ -52,4 +52,4 @@ pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 pub use prepare::{
     launch_chain, EnsureGameFilesTask, LaunchTask, PrepareLaunchTask, PreparedLaunch,
 };
-pub use util::{drive_name, escape_shell_command};
+pub use util::drive_name;
