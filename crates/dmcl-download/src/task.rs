@@ -1,7 +1,7 @@
 //! 下载任务本体。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,7 +11,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use dmcl_task::{human_bytes, BoxFuture, Cancelled, Task, TaskContext};
+use dmcl_task::{human_bytes, BoxFuture, Cancelled, Progress, Task, TaskContext};
 
 use crate::hash::{file_ok, hash_file};
 use crate::item::DownloadItem;
@@ -121,21 +121,15 @@ impl DownloadTask {
             }
         }
 
-        // 进度分母只统计「真正要下载、且知道大小」的文件 —— 跳过项不计入，
-        // 未知大小的项也不计入，重试期间会被回滚，因此 `done` 永远不会超过 `total`
-        let known_total = pending.iter().filter_map(|item| item.size).sum::<u64>();
-        let tracker = Arc::new(Tracker::new(
-            if known_total > 0 {
-                Some(known_total)
-            } else {
-                None
-            },
-            pending.len(),
-        ));
+        // 进度总量**不预填**：从 0 开始，随每个文件从服务器拿到的实际大小动态累加
+        // （见 `Tracker::record_size`）。跳过的项不计入。
+        let tracker = Arc::new(Tracker::new(pending.len()));
         let connections = Arc::new(Semaphore::new(options.max_connections));
 
         if !pending.is_empty() {
             ctx.log(format!("待下载 {} 个文件", pending.len()));
+            // 立刻显示文件数量，不用等拿到字节总量
+            tracker.initial_report(ctx);
         }
 
         let mut set: JoinSet<ItemOutcome> = JoinSet::new();
@@ -165,9 +159,12 @@ impl DownloadTask {
             };
             match outcome.result {
                 Ok(bytes) => {
-                    let mut report = report.lock().unwrap();
-                    report.downloaded += 1;
-                    report.bytes += bytes;
+                    {
+                        let mut report = report.lock().unwrap();
+                        report.downloaded += 1;
+                        report.bytes += bytes;
+                    }
+                    ctx.log(format!("{} 完成", outcome.item.name));
                 }
                 Err(err) if err.downcast_ref::<Cancelled>().is_some() => {
                     cancelled = true;
@@ -182,7 +179,7 @@ impl DownloadTask {
                 }
             }
             // 不管成败，这个文件都算"处理完一个"
-            tracker.file_finished(ctx);
+            tracker.file_finished(outcome.sized, ctx);
         }
 
         if cancelled {
@@ -218,6 +215,8 @@ impl Task<(), DownloadReport> for DownloadTask {
 
 struct ItemOutcome {
     item: DownloadItem,
+    /// 完成时是否已经知道实际大小（决定它算「已知」还是「未知」的完成）。
+    sized: bool,
     result: Result<u64>,
 }
 
@@ -235,29 +234,34 @@ impl Downloader<'_> {
     async fn download_one(&self, item: DownloadItem) -> ItemOutcome {
         let save_to = absolute(&item.save_to);
         let mut last_error: Option<anyhow::Error> = None;
+        // 这一项在进度里的份额：是否已知实际大小、记了多少。整项失败时回滚。
+        let share = Share::default();
 
         for attempt in 1..=self.options.max_attempts {
             if let Err(err) = self.ctx.check_cancelled() {
+                self.tracker.rollback_item(&share);
                 return ItemOutcome {
                     item,
+                    sized: share.is_sized(),
                     result: Err(err),
                 };
             }
             if attempt > 1 {
                 self.ctx.log(format!(
-                    "重试 {}/{}: {}",
-                    attempt, self.options.max_attempts, item.name
+                    "{} 重试（{}/{}）",
+                    item.name, attempt, self.options.max_attempts
                 ));
             }
             // 每次尝试单独记账：失败重试时把这一轮已经上报的字节数减回去，
             // 否则进度会变成"100% 了还在涨"。
             let recorder =
-                Recorder::new(self.tracker.clone(), self.ctx.clone(), item.size.is_some());
-            match self.attempt(&item, &save_to, &recorder).await {
+                Recorder::new(self.tracker.clone(), self.ctx.clone(), share.sized.clone());
+            match self.attempt(&item, &save_to, &recorder, &share).await {
                 Ok(bytes) => {
                     recorder.commit();
                     return ItemOutcome {
                         item,
+                        sized: share.is_sized(),
                         result: Ok(bytes),
                     };
                 }
@@ -273,8 +277,11 @@ impl Downloader<'_> {
             }
         }
 
+        // 全部尝试都失败：把这一项从进度里回滚掉
+        self.tracker.rollback_item(&share);
         ItemOutcome {
             item,
+            sized: share.is_sized(),
             result: Err(last_error.unwrap_or_else(|| anyhow!("下载失败"))),
         }
     }
@@ -285,6 +292,7 @@ impl Downloader<'_> {
         item: &DownloadItem,
         save_to: &Path,
         recorder: &Recorder,
+        share: &Share,
     ) -> Result<u64> {
         if let Some(parent) = save_to.parent() {
             tokio::fs::create_dir_all(parent).await.ok();
@@ -301,8 +309,12 @@ impl Downloader<'_> {
         };
 
         let bytes = match chunked_total {
-            Some(total) => self.chunked(item, &part, total, recorder).await?,
-            None => self.single(item, &part, recorder).await?,
+            Some(total) => {
+                // 分块的总量来自 `Content-Range`（服务器实际大小）
+                self.tracker.record_size(share, total);
+                self.chunked(item, &part, total, recorder).await?
+            }
+            None => self.single(item, &part, recorder, share).await?,
         };
 
         // 校验：校验值优先（用哪个算法由它决定），其次大小
@@ -328,11 +340,21 @@ impl Downloader<'_> {
     }
 
     /// 单连接下载。
-    async fn single(&self, item: &DownloadItem, part: &Path, recorder: &Recorder) -> Result<u64> {
+    async fn single(
+        &self,
+        item: &DownloadItem,
+        part: &Path,
+        recorder: &Recorder,
+        share: &Share,
+    ) -> Result<u64> {
         let _permit = self.connections.acquire().await?;
         let mut response = send_get(self.client, &item.url, None)
             .await?
             .error_for_status()?;
+        // 服务器给的实际大小：这一项转入「已知」组
+        if let Some(actual) = response.content_length() {
+            self.tracker.record_size(share, actual);
+        }
         let mut file = tokio::fs::File::create(part).await?;
         let mut written = 0u64;
         while let Some(chunk) = response.chunk().await? {
@@ -500,44 +522,135 @@ fn parse_content_range(value: &str) -> Option<u64> {
 // 进度记账
 // ---------------------------------------------------------------------------
 
+/// 一个文件在进度里的份额状态：是否已知实际大小、记了多少。
+///
+/// `sized` 用 `Arc` 是为了让 [`Recorder`]（分块下载时会克隆进各个分块任务）共享
+/// 同一个开关。
+struct Share {
+    sized: Arc<AtomicBool>,
+    recorded: AtomicU64,
+}
+
+impl Default for Share {
+    fn default() -> Self {
+        Self {
+            sized: Arc::new(AtomicBool::new(false)),
+            recorded: AtomicU64::new(0),
+        }
+    }
+}
+
+impl Share {
+    fn is_sized(&self) -> bool {
+        self.sized.load(Ordering::Relaxed)
+    }
+}
+
 /// 一次任务运行里所有文件共享的进度汇总。
 ///
-/// 与旧实现的关键区别：它用**步骤上下文**（而不是某个文件的名字）上报，因此
-/// 进度行会显示"下载库文件 41.2% (…/…) 35/120 个文件"，而不是把全局数字
-/// 挂到某个恰好触发上报的文件名下。
+/// 分两类分别记账：
+///
+/// * **已知大小**的项：字节进度 `KD / KB`（已下载 / 总量）；
+/// * **不知道大小**的项：数量进度 `UD / U`（已完成个数 / 未知项总数），字节按
+///   「下载多少算多少」——它的已下载字节同时进分子和分母。
+///
+/// 整体百分比按**文件数占比**加权两类各自的进度：
+///
+/// `percent = UD / N + (K / N) · (KD / KB)`
+///
+/// （`N` 总数，`U` 当前未知数，`K = N - U`）。当 `N == K`（都已知道大小）时退化成
+/// 纯字节百分比；当 `N == U` 时退化成纯数量百分比。字节显示为 `(KD+UB) / (KB+UB)`。
+///
+/// 总量**不预填**：从 0 开始，随每个文件从服务器实际拿到的 `Content-Length` /
+/// `Content-Range` 动态转入「已知」组（`record_size`），整项失败时回滚
+/// （`rollback_item`）。
 struct Tracker {
-    done: AtomicU64,
-    total: Option<u64>,
-    files_done: AtomicUsize,
     files_total: usize,
+    /// 所有处理完的文件（成功或失败），用于 `X/N 个文件`。
+    files_done: AtomicUsize,
+    /// 还不知道实际大小、也没处理完的项数 `U`（含还没开始下载的）。
+    unsized_files: AtomicUsize,
+    /// 未知大小且已处理完的项数 `UD`。
+    unsized_done_files: AtomicUsize,
+    /// 已知大小项的已下载字节 `KD`。
+    sized_done_bytes: AtomicU64,
+    /// 已知大小项的总字节 `KB`。
+    sized_total_bytes: AtomicU64,
+    /// 未知大小项的已下载字节（同时进分子分母）。
+    unsized_done_bytes: AtomicU64,
     last: Mutex<Instant>,
 }
 
 impl Tracker {
-    fn new(total: Option<u64>, files_total: usize) -> Self {
+    fn new(files_total: usize) -> Self {
         Self {
-            done: AtomicU64::new(0),
-            total,
-            files_done: AtomicUsize::new(0),
             files_total,
+            files_done: AtomicUsize::new(0),
+            unsized_files: AtomicUsize::new(files_total),
+            unsized_done_files: AtomicUsize::new(0),
+            sized_done_bytes: AtomicU64::new(0),
+            sized_total_bytes: AtomicU64::new(0),
+            unsized_done_bytes: AtomicU64::new(0),
             last: Mutex::new(Instant::now()),
         }
     }
 
-    /// 累计下载字节。只对"知道大小"的文件调用（`count_bytes` 由调用者把关）。
-    fn add(&self, bytes: u64, ctx: &TaskContext) {
-        self.done.fetch_add(bytes, Ordering::Relaxed);
+    /// 学到某一项的实际大小：把它记进「已知」组。
+    ///
+    /// 重复调用幂等，实际值变了就修正（重试 / 服务器前后不一致都安全）。转组发生在
+    /// 读取正文之前（`single` / `chunked` 都是先拿到大小再下字节），所以转组时这一项
+    /// 还没有字节记在「未知」组里。
+    fn record_size(&self, share: &Share, actual: u64) {
+        let prev = share.recorded.swap(actual, Ordering::Relaxed);
+        match actual.cmp(&prev) {
+            std::cmp::Ordering::Greater => {
+                self.sized_total_bytes
+                    .fetch_add(actual - prev, Ordering::Relaxed);
+            }
+            std::cmp::Ordering::Less => {
+                self.sized_total_bytes
+                    .fetch_sub(prev - actual, Ordering::Relaxed);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+        if !share.sized.swap(true, Ordering::Relaxed) {
+            self.unsized_files.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 某一项彻底失败：把它已记入「已知」组的字节从总量里回滚。
+    fn rollback_item(&self, share: &Share) {
+        let amount = share.recorded.swap(0, Ordering::Relaxed);
+        if amount > 0 {
+            self.sized_total_bytes.fetch_sub(amount, Ordering::Relaxed);
+        }
+    }
+
+    /// 累计下载字节：按这一项在「已知 / 未知」哪组分别记账。
+    fn add(&self, bytes: u64, sized: &AtomicBool, ctx: &TaskContext) {
+        if sized.load(Ordering::Relaxed) {
+            self.sized_done_bytes.fetch_add(bytes, Ordering::Relaxed);
+        } else {
+            self.unsized_done_bytes.fetch_add(bytes, Ordering::Relaxed);
+        }
         self.maybe_report(ctx);
     }
 
     /// 重试失败时把这一轮已经上报的字节减回去。
-    fn rollback(&self, bytes: u64) {
-        self.done.fetch_sub(bytes, Ordering::Relaxed);
+    fn rollback(&self, bytes: u64, sized: &AtomicBool) {
+        if sized.load(Ordering::Relaxed) {
+            self.sized_done_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        } else {
+            self.unsized_done_bytes.fetch_sub(bytes, Ordering::Relaxed);
+        }
     }
 
     /// 一个文件处理完（成功或失败）。
-    fn file_finished(&self, ctx: &TaskContext) {
+    fn file_finished(&self, sized: bool, ctx: &TaskContext) {
         self.files_done.fetch_add(1, Ordering::Relaxed);
+        if !sized {
+            self.unsized_done_files.fetch_add(1, Ordering::Relaxed);
+        }
         self.maybe_report(ctx);
     }
 
@@ -547,6 +660,38 @@ impl Tracker {
             self.files_done.load(Ordering::Relaxed),
             self.files_total
         )
+    }
+
+    /// 整体百分比（0.0~100.0），见类型文档的公式。
+    fn percent(&self) -> f64 {
+        if self.files_total == 0 {
+            return 0.0;
+        }
+        let total = self.files_total as f64;
+        let unsized_count = self.unsized_files.load(Ordering::Relaxed) as f64;
+        let sized = total - unsized_count;
+        let unsized_done = self.unsized_done_files.load(Ordering::Relaxed) as f64;
+        let sized_total = self.sized_total_bytes.load(Ordering::Relaxed) as f64;
+        let sized_done = self.sized_done_bytes.load(Ordering::Relaxed) as f64;
+        let sized_progress = if sized_total > 0.0 {
+            (sized_done / sized_total).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (((unsized_done + sized * sized_progress) / total) * 100.0).clamp(0.0, 100.0)
+    }
+
+    /// 当前进度快照（百分比用 [`Tracker::percent`]，字节按两类合并显示）。
+    fn snapshot(&self) -> Progress {
+        let unsized_bytes = self.unsized_done_bytes.load(Ordering::Relaxed);
+        let current = self.sized_done_bytes.load(Ordering::Relaxed) + unsized_bytes;
+        let total = self.sized_total_bytes.load(Ordering::Relaxed) + unsized_bytes;
+        Progress::new(current, Some(total), self.message(), Some(self.percent()))
+    }
+
+    /// 开跑时立刻上报一次，先把文件数量显示出来（此时总量可能还是 0）。
+    fn initial_report(&self, ctx: &TaskContext) {
+        ctx.report(self.snapshot());
     }
 
     fn maybe_report(&self, ctx: &TaskContext) {
@@ -562,16 +707,14 @@ impl Tracker {
             Err(_) => false,
         };
         if due {
-            let done = self.done.load(Ordering::Relaxed);
-            ctx.progress(done, self.total, self.message());
+            ctx.report(self.snapshot());
         }
     }
 
     /// 收尾时强制上报一次，并给出汇总。
     fn finish(&self, ctx: &TaskContext, report: &DownloadReport) {
         if self.files_total > 0 {
-            let done = self.done.load(Ordering::Relaxed);
-            ctx.progress(done, self.total, self.message());
+            ctx.report(self.snapshot());
         }
         ctx.log(format!(
             "下载完成：新下载 {} 个，跳过 {} 个，失败 {} 个（{}）",
@@ -589,26 +732,24 @@ impl Tracker {
 struct Recorder {
     tracker: Arc<Tracker>,
     ctx: TaskContext,
-    /// 这一项知道大小时才把字节计入分母（未知大小的项不该影响百分比）。
-    count_bytes: bool,
+    /// 这一项是否已经知道实际大小（共享给分块任务的同一个开关）。
+    sized: Arc<AtomicBool>,
     attempted: Arc<AtomicU64>,
 }
 
 impl Recorder {
-    fn new(tracker: Arc<Tracker>, ctx: TaskContext, count_bytes: bool) -> Self {
+    fn new(tracker: Arc<Tracker>, ctx: TaskContext, sized: Arc<AtomicBool>) -> Self {
         Self {
             tracker,
             ctx,
-            count_bytes,
+            sized,
             attempted: Arc::new(AtomicU64::new(0)),
         }
     }
 
     fn add(&self, bytes: u64) {
         self.attempted.fetch_add(bytes, Ordering::Relaxed);
-        if self.count_bytes {
-            self.tracker.add(bytes, &self.ctx);
-        }
+        self.tracker.add(bytes, &self.sized, &self.ctx);
     }
 
     /// 成功：这一轮的字节保留在整体进度里。
@@ -619,9 +760,7 @@ impl Recorder {
     /// 失败：把这一轮上报过的字节从整体进度里抹掉。
     fn discard(&self) {
         let bytes = self.attempted.swap(0, Ordering::Relaxed);
-        if self.count_bytes {
-            self.tracker.rollback(bytes);
-        }
+        self.tracker.rollback(bytes, &self.sized);
     }
 
     fn check_cancelled(&self) -> Result<()> {
@@ -651,6 +790,76 @@ mod tests {
         assert_eq!(parse_content_range("bytes 0-1023/2048"), Some(2048));
         assert_eq!(parse_content_range("garbage"), None);
         assert_eq!(parse_content_range("bytes 0-0/*"), None);
+    }
+
+    /// 混合「已知 / 未知大小」的进度模型：百分比按文件数占比加权两类。
+    #[test]
+    fn the_tracker_blends_known_and_unknown_sizes() {
+        let ctx = TaskContext::detached("下载");
+        // N=2：一个已知大小、一个未知
+        let tracker = Tracker::new(2);
+        let known = Share::default();
+        let unknown = Share::default();
+
+        // 未知项先下了 10 字节；已知项学到 100 字节、下了 40
+        tracker.add(10, &unknown.sized, &ctx);
+        tracker.record_size(&known, 100);
+        tracker.add(40, &known.sized, &ctx);
+
+        // percent = UD/N + (K/N)(KD/KB) = 0/2 + (1/2)(40/100) = 20%
+        assert!((tracker.percent() - 20.0).abs() < 1e-9);
+        let snapshot = tracker.snapshot();
+        // 字节 = (KD+UB) / (KB+UB) = (40+10) / (100+10)
+        assert_eq!(snapshot.current, 50);
+        assert_eq!(snapshot.total, Some(110));
+        assert_eq!(snapshot.percent, Some(20.0));
+
+        // 未知项完成 → UD=1 → percent = 1/2 + (1/2)(0.4) = 70%
+        tracker.file_finished(false, &ctx);
+        assert!((tracker.percent() - 70.0).abs() < 1e-9);
+        assert_eq!(tracker.message(), "1/2 个文件");
+    }
+
+    /// 已知项的字节累加幂等、可修正，失败可整项回滚；学到大小时从「未知」转组。
+    #[test]
+    fn record_size_is_idempotent_correctable_and_rollbackable() {
+        let tracker = Tracker::new(3);
+        let share = Share::default();
+
+        tracker.record_size(&share, 100);
+        tracker.record_size(&share, 100); // 重试重记：幂等
+        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 100);
+        assert_eq!(tracker.unsized_files.load(Ordering::Relaxed), 2);
+
+        tracker.record_size(&share, 130); // 服务器前后不一致：修正
+        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 130);
+        assert_eq!(tracker.unsized_files.load(Ordering::Relaxed), 2);
+
+        tracker.rollback_item(&share); // 整项失败：回滚
+        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    /// 纯未知大小的项：百分比只按数量走，字节「下载多少算多少」。
+    #[test]
+    fn unknown_size_progress_is_count_based_with_self_growing_bytes() {
+        let ctx = TaskContext::detached("下载");
+        let tracker = Tracker::new(1);
+        let share = Share::default();
+
+        assert_eq!(tracker.percent(), 0.0);
+        let snapshot = tracker.snapshot();
+        assert_eq!((snapshot.current, snapshot.total), (0, Some(0)));
+
+        // 下了 1 MiB 但还没完成：百分比仍是 0%，字节变成 1 MiB / 1 MiB
+        tracker.add(1024 * 1024, &share.sized, &ctx);
+        assert_eq!(tracker.percent(), 0.0);
+        let snapshot = tracker.snapshot();
+        assert_eq!(snapshot.current, 1024 * 1024);
+        assert_eq!(snapshot.total, Some(1024 * 1024));
+
+        // 完成 → 100%
+        tracker.file_finished(false, &ctx);
+        assert_eq!(tracker.percent(), 100.0);
     }
 
     #[test]
@@ -703,39 +912,30 @@ mod tests {
         let _ = task.client;
     }
 
-    /// 重试时进度要回滚：一次失败尝试把已上报的字节减回去，`done` 不会超过 `total`。
+    /// 重试时进度要回滚：一次失败尝试把已上报的字节减回去。
     #[test]
     fn a_recorder_rolls_back_a_discarded_attempt() {
         let ctx = TaskContext::detached("下载");
-        let tracker = Arc::new(Tracker::new(Some(100), 1));
-        let recorder = Recorder::new(tracker.clone(), ctx, true);
+        let tracker = Arc::new(Tracker::new(1));
+        let share = Share::default();
+        let recorder = Recorder::new(tracker.clone(), ctx, share.sized.clone());
 
         recorder.add(40);
         recorder.add(60);
-        assert_eq!(tracker.done.load(Ordering::Relaxed), 100);
+        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 100);
 
         // 这次尝试作废，字节要抹掉
         recorder.discard();
-        assert_eq!(tracker.done.load(Ordering::Relaxed), 0);
+        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 0);
 
         // 成功的尝试则保留
-        let recorder = Recorder::new(tracker.clone(), TaskContext::detached("下载"), true);
+        let recorder = Recorder::new(
+            tracker.clone(),
+            TaskContext::detached("下载"),
+            share.sized.clone(),
+        );
         recorder.add(50);
         recorder.commit();
-        assert_eq!(tracker.done.load(Ordering::Relaxed), 50);
-    }
-
-    /// 不知道大小的文件不影响字节进度（只推进"文件个数"）。
-    #[test]
-    fn unknown_sized_files_do_not_touch_the_byte_counter() {
-        let ctx = TaskContext::detached("下载");
-        let tracker = Arc::new(Tracker::new(Some(100), 2));
-        let recorder = Recorder::new(tracker.clone(), ctx.clone(), false);
-
-        recorder.add(999);
-        assert_eq!(tracker.done.load(Ordering::Relaxed), 0);
-
-        tracker.file_finished(&ctx);
-        assert_eq!(tracker.message(), "1/2 个文件");
+        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 50);
     }
 }

@@ -195,7 +195,7 @@ handle.await??;
 | 不支持 Range | 自动退回单连接                                                                                                                        |
 | 完整性       | 先写 `<文件>.part`，校验通过才 `rename`；失败删掉半成品并重试                                                                         |
 | 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256**（Minecraft 文档给的是 sha1；也接受 `sha256:…` 前缀或按摘要长度推断）                          |
-| 进度         | 跨文件累计字节数 + 「N/M 个文件」，带节流；失败重试时回滚这一轮已上报的字节数                                                         |
+| 进度         | 文件数**先于**总量显示；总量按服务器实际大小（`Content-Length` / `Content-Range`）动态累加、失败项回滚；带节流                                                                              |
 | 断点续传     | 不做；失败即整份重来（最多 `max_attempts` 次）                                                                                        |
 | 失败处理     | 所有已排队项目都会跑完，失败项进 `DownloadReport`；默认「有失败就报错」，可用 `DownloadOptions::ignore_failures` 改成「只记录不报错」 |
 
