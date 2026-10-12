@@ -87,6 +87,10 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
   （`install` / `versionInfo`）分支。
 - 异步 trait 用**装箱 future**（`dmcl_task::BoxFuture`）表达，**不要引入 `async-trait`**。
 - **不要引入日志框架**：直接用 `println!` / `eprintln!`。
+- 改了函数签名 / 实现 / 字段后，**把所有调用点一并改掉**；不要为了少改几处、或为了向后兼容，给
+  接口加**隐式的默认行为**（给新参数一个默认值、漏字段时用默认值补齐、留一个只转发旧签名的包装
+  / 重载…… 都不行）。宁可多改几个调用点，也别让接口藏一层没说清的默认语义。
+- 字段都 `pub` 的数据结构直接用结构体字面量即可；别写只读 / 只改单个字段的转发方法。
 - 依赖版本统一写在 workspace 根 `Cargo.toml` 的 `[workspace.dependencies]`，成员用
   `xxx.workspace = true`，别在成员里另写版本号。
 

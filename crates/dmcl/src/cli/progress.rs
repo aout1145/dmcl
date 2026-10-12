@@ -74,11 +74,13 @@ impl ProgressPrinter {
         // 非交互模式的节流：字节进度只在跨 5% 刻度时打
         if !self.interactive {
             if let TaskEvent::Progress { progress, .. } = &event {
-                let bucket = progress.percent().map(|percent| (percent / 5.0) as u64);
-                if progress.total.is_some() && bucket == self.last_bucket {
-                    return;
+                // 有百分比才按刻度节流；没有百分比的行靠 `last_line` 去重
+                if let Some(bucket) = progress.percent.map(|percent| (percent / 5.0) as u64) {
+                    if self.last_bucket == Some(bucket) {
+                        return;
+                    }
+                    self.last_bucket = Some(bucket);
                 }
-                self.last_bucket = bucket;
             }
         }
 
@@ -361,7 +363,7 @@ mod tests {
             step: 1,
             steps: 2,
             name: "下载资源".into(),
-            progress: Progress::new(1, Some(2), "1/2 个文件"),
+            progress: Progress::new(1, Some(2), "1/2 个文件", Some(50.0)),
         });
         assert_eq!(
             lines[0].text,
@@ -485,7 +487,7 @@ mod tests {
             step: 0,
             steps: 1,
             name: "下载".into(),
-            progress: Progress::new(1, Some(2), "1/2 个文件"),
+            progress: Progress::new(1, Some(2), "1/2 个文件", Some(50.0)),
         });
         assert!(!progress[0].dim);
     }
@@ -503,7 +505,7 @@ mod tests {
             step: 0,
             steps: 1,
             name: "解压 natives".into(),
-            progress: Progress::new(0, None, "解压 liblwjgl.so"),
+            progress: Progress::new(0, None, "解压 liblwjgl.so", None),
         });
         assert_eq!(lines[0].text, format!("{INDENT}解压 liblwjgl.so"));
     }

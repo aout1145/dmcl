@@ -205,8 +205,17 @@ impl TaskContext {
     }
 
     /// 上报一条带工作量的**进度**（同一个位置可反复更新、由前端原地刷新）。
-    pub fn progress(&self, current: u64, total: Option<u64>, message: impl Into<String>) {
-        self.report(Progress::new(current, total, message));
+    ///
+    /// `percent` 是显示用的百分比（0.0~100.0），**自己算好**传进来（有些任务的百分比
+    /// 不是 `current / total`）；`None` 表示这次进度没有有意义的百分比。
+    pub fn progress(
+        &self,
+        current: u64,
+        total: Option<u64>,
+        message: impl Into<String>,
+        percent: Option<f64>,
+    ) {
+        self.report(Progress::new(current, total, message, percent));
     }
 
     /// 上报一条需要前端决策的**警告**，并**阻塞等待**答复：
@@ -288,7 +297,7 @@ mod tests {
         let mut rx = ctx.subscribe();
 
         ctx.log("hello");
-        ctx.progress(1, Some(2), "half");
+        ctx.progress(1, Some(2), "half", Some(50.0));
 
         match rx.recv().await.unwrap() {
             TaskEvent::Log { message, .. } => assert_eq!(message, "hello"),

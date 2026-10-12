@@ -10,7 +10,7 @@ use crate::warning::WarningDecision;
 /// 事件是**只进不退**的单向流：链运行结束后发送方被丢弃，订阅者的 `recv()` 会返回
 /// `Err`，循环自然结束。失败时先发一条 [`TaskEvent::Failed`] 再结束（链本身的错误
 /// 仍由 `run()` 的返回值给出）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
     /// 整条链开始运行。
     Started { name: String, steps: usize },
@@ -160,7 +160,7 @@ mod tests {
             step: 0,
             steps: 1,
             name: "x".to_string(),
-            progress: Progress::new(1, Some(2), "f.jar"),
+            progress: Progress::new(1, Some(2), "f.jar", Some(50.0)),
         };
         assert_eq!(progress.progress().unwrap().current, 1);
         assert_eq!(progress.to_string(), "[1/1] x: 50.0% (1 B / 2 B) f.jar");

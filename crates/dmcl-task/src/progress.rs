@@ -4,44 +4,40 @@ use std::fmt;
 
 /// 一个任务步骤的进度快照。
 ///
-/// `current` / `total` 的单位由任务自己定义（字节数、文件个数、步骤个数……），
-/// 前端只负责把它们渲染成进度条或百分比。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// `current` / `total` 的单位由任务自己定义（字节数、文件个数……），前端只负责把它们
+/// 渲染成字节数；**百分比只看 [`Progress::percent`]**：它由任务自己算好（有些任务的
+/// 百分比不是 `current / total`），为 `None` 时表示这次进度没有有意义的百分比可显示。
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Progress {
-    /// 已完成的工作量。
+    /// 已完成的工作量（用于显示字节数）。
     pub current: u64,
-    /// 总工作量；服务端没有给出大小等情况下为 `None`。
+    /// 总工作量；未知时为 `None`。
     pub total: Option<u64>,
     /// 面向用户的说明，例如当前正在下载的文件名。
     pub message: String,
+    /// 有意义的百分比（0.0~100.0）；`None` 表示没有百分比可显示。
+    pub percent: Option<f64>,
 }
 
 impl Progress {
-    pub fn new(current: u64, total: Option<u64>, message: impl Into<String>) -> Self {
+    pub fn new(
+        current: u64,
+        total: Option<u64>,
+        message: impl Into<String>,
+        percent: Option<f64>,
+    ) -> Self {
         Self {
             current,
             total,
             message: message.into(),
+            percent,
         }
-    }
-
-    /// `current / total`，总量未知时为 `None`。
-    pub fn fraction(&self) -> Option<f64> {
-        match self.total {
-            Some(0) | None => None,
-            Some(total) => Some((self.current as f64 / total as f64).clamp(0.0, 1.0)),
-        }
-    }
-
-    /// 百分比（0.0 ~ 100.0），总量未知时为 `None`。
-    pub fn percent(&self) -> Option<f64> {
-        self.fraction().map(|f| f * 100.0)
     }
 }
 
 impl fmt::Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(percent) = self.percent() {
+        if let Some(percent) = self.percent {
             write!(
                 f,
                 "{percent:.1}% ({} / {})",
@@ -88,15 +84,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn percent_and_fraction_are_clamped_and_total_less_is_none() {
-        assert_eq!(Progress::new(1, Some(4), "").percent(), Some(25.0));
-        assert_eq!(Progress::new(9, Some(4), "").percent(), Some(100.0));
-        assert_eq!(Progress::new(9, None, "").percent(), None);
-        assert_eq!(Progress::new(9, Some(0), "").percent(), None);
-        assert_eq!(Progress::new(0, None, "hi").fraction(), None);
-    }
-
-    #[test]
     fn bytes_are_formatted_in_binary_units() {
         assert_eq!(human_bytes(0), "0 B");
         assert_eq!(human_bytes(1023), "1023 B");
@@ -104,16 +91,37 @@ mod tests {
         assert_eq!(human_bytes(1024 * 1024 * 3 / 2), "1.5 MiB");
     }
 
+    /// 百分比只由 `percent` 字段决定：没给就显示不出百分比。
     #[test]
-    fn display_combines_percent_and_message() {
+    fn display_uses_the_percent_field() {
+        // 没给百分比：只显示字节
         assert_eq!(
-            Progress::new(512, Some(1024), "a.jar").to_string(),
+            Progress::new(512, Some(1024), "a.jar", None).to_string(),
+            "(512 B) a.jar"
+        );
+        assert_eq!(
+            Progress::new(512, Some(1024), "a.jar", Some(50.0)).to_string(),
             "50.0% (512 B / 1.0 KiB) a.jar"
         );
+        // 起点：百分比 0 也照样显示成 0.0%
+        assert_eq!(
+            Progress::new(0, Some(0), "0/35 个文件", Some(0.0)).to_string(),
+            "0.0% (0 B / 0 B) 0/35 个文件"
+        );
+    }
+
+    #[test]
+    fn display_without_a_percent_falls_back_to_bytes_or_message() {
         // 纯文字：不要出现 "(0 B)"
-        assert_eq!(Progress::new(0, None, "scanning").to_string(), "scanning");
+        assert_eq!(
+            Progress::new(0, None, "scanning", None).to_string(),
+            "scanning"
+        );
         // 有字节数但总量未知
-        assert_eq!(Progress::new(2048, None, "x").to_string(), "(2.0 KiB) x");
-        assert_eq!(Progress::new(0, None, "").to_string(), "…");
+        assert_eq!(
+            Progress::new(2048, None, "x", None).to_string(),
+            "(2.0 KiB) x"
+        );
+        assert_eq!(Progress::new(0, None, "", None).to_string(), "…");
     }
 }

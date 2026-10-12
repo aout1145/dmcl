@@ -403,8 +403,8 @@ mod tests {
     async fn events_describe_the_progress_of_each_step() {
         let chain = TaskChain::new("下载游戏").then(
             task_fn("download", |ctx| async move {
-                ctx.progress(50, Some(100), "a.jar");
-                ctx.progress(100, Some(100), "a.jar");
+                ctx.progress(50, Some(100), "a.jar", Some(50.0));
+                ctx.progress(100, Some(100), "a.jar", Some(100.0));
                 Ok(())
             }),
             "下载任务",
@@ -445,7 +445,7 @@ mod tests {
     async fn nested_chains_forward_their_progress_to_the_parent() {
         let inner = TaskChain::new("子链").then(
             task_fn("下载", |ctx| async move {
-                ctx.progress(1, Some(2), "a.jar");
+                ctx.progress(1, Some(2), "a.jar", Some(50.0));
                 Ok(())
             }),
             "下载",
