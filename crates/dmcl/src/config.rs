@@ -66,6 +66,8 @@ impl Default for LaunchConfig {
             min_memory: 512,
             max_memory: 2048,
             custom_info: LAUNCHER_NAME.to_string(),
+            // 历史默认：这两个 `-D` 是给 FML/OptiFine 兼容用的，从旧实现继承下来。
+            // 以后应改成空 / 更中性的默认，或交给用户配置。
             additional_jvm:
                 "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True"
                     .to_string(),
