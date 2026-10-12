@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
+use dmcl_install::{check_integrity, IntegrityStatus};
 use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
 use dmcl_mcmeta::os::classpath_separator;
@@ -18,11 +19,9 @@ use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
 
 use crate::account::Account;
-use crate::integrity::{check_integrity, IntegrityStatus};
 use crate::java::{select_java, JavaOption};
 use crate::monitor::GameMonitor;
 use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
-use crate::util::drive_name;
 
 /// 启动一个版本。
 pub struct GameLauncher {
@@ -313,9 +312,10 @@ impl GameLauncher {
         Ok(args)
     }
 
-    /// 转义后的命令行，给「只想显示 / 交给别人执行」的前端用。
+    /// 展示 / 可复制执行的命令行（进入工作目录 + 启动参数）。
     pub async fn generate_command(&mut self) -> Result<String> {
-        Ok(shell_words::join(&self.gen_args().await?))
+        let args = self.gen_args().await?;
+        Ok(command_preview(&self.version_path, &args))
     }
 
     /// 启动游戏进程。
@@ -341,17 +341,65 @@ impl GameLauncher {
     }
 }
 
-/// 展示用的命令行：`cd <盘符> && cd <版本目录> && <参数…>`。
+/// 展示用的命令行：进入工作目录 + 启动参数。可直接复制进当前平台的 shell 执行。
 pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -> String {
-    format!(
-        "{} && {} && {}",
-        shell_words::join(&["cd".to_string(), drive_name(version_path)]),
-        shell_words::join(&[
+    #[cfg(windows)]
+    {
+        let dir = quote_windows(&version_path.to_string_lossy());
+        let args = args
+            .iter()
+            .map(|arg| quote_windows(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("cd /D {dir} && {args}")
+    }
+    #[cfg(not(windows))]
+    {
+        let cd = shell_words::join(&[
             "cd".to_string(),
-            version_path.to_string_lossy().into_owned()
-        ]),
-        shell_words::join(args)
-    )
+            version_path.to_string_lossy().into_owned(),
+        ]);
+        format!("{cd} && {}", shell_words::join(args))
+    }
+}
+
+/// Windows（cmd / MSVCRT）单参数引号：需要时才包双引号，反斜杠靠近引号时按规则翻倍。
+#[cfg(windows)]
+fn quote_windows(arg: &str) -> String {
+    // 需要引号：空串、含空白、含 `"`、或含 cmd 元字符（放进引号里 cmd 就不再解释）
+    let needs = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| c.is_whitespace() || "\"&|<>^()%!".contains(c));
+    if !needs {
+        return arg.to_string();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                out.push('\\');
+            }
+            '"' => {
+                for _ in 0..backslashes * 2 + 1 {
+                    out.push('\\');
+                }
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                backslashes = 0;
+                out.push(ch);
+            }
+        }
+    }
+    for _ in 0..backslashes * 2 {
+        out.push('\\');
+    }
+    out.push('"');
+    out
 }
 
 /// 用给定的工作目录与命令行参数启动游戏子进程，返回**未 wait** 的 [`GameMonitor`]。
@@ -516,5 +564,22 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
+    }
+
+    #[test]
+    fn command_preview_uses_the_platform_shell_rules() {
+        let dir = std::path::Path::new("/mc/versions/1.0");
+        let args = vec!["java".to_string(), "-Dfoo=bar baz".to_string()];
+        let command = command_preview(dir, &args);
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(command, "cd /mc/versions/1.0 && java '-Dfoo=bar baz'");
+        }
+        #[cfg(windows)]
+        {
+            assert!(command.starts_with("cd /D "), "{command}");
+            assert!(command.contains("\"-Dfoo=bar baz\""), "{command}");
+        }
     }
 }

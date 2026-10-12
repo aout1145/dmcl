@@ -30,18 +30,13 @@
 //! ```
 
 pub mod account;
-pub mod integrity;
 pub mod java;
 pub mod launcher;
 pub mod monitor;
 pub mod option;
 pub mod prepare;
-pub mod util;
 
 pub use account::{sha1_uuid, Account, OfflineAccount};
-pub use integrity::{
-    check_integrity, version_json_exists, IntegrityStatus, MissingFile, MissingReason,
-};
 pub use java::{
     find_java, select_java, JavaChoice, JavaConfigs, JavaOption, DEFAULT_JAVA_ROOTS,
     JAVA_AUTOSELECT,
@@ -52,4 +47,3 @@ pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 pub use prepare::{
     launch_chain, EnsureGameFilesTask, LaunchTask, PrepareLaunchTask, PreparedLaunch,
 };
-pub use util::drive_name;

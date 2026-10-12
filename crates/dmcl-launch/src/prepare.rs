@@ -14,10 +14,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_install::InstallOptions;
+use dmcl_install::{InstallOptions, IntegrityStatus};
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
-use crate::integrity::IntegrityStatus;
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
@@ -62,7 +61,7 @@ impl Task<(), PreparedLaunch> for PrepareLaunchTask {
 
             ctx.log("生成启动参数");
             let args = launcher.gen_args_in(&ctx).await?;
-            let command = shell_words::join(&args);
+            let command = command_preview(&launcher.version_path, &args);
 
             ctx.log("启动参数已就绪");
             Ok(PreparedLaunch {
