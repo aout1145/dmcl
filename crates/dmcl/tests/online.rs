@@ -82,34 +82,26 @@ async fn the_whole_chain_runs_from_a_config_document() {
 
 #[tokio::test]
 #[ignore = "requires network access"]
-async fn mirror_policy_reaches_the_resolved_urls() {
+async fn mirror_policy_reaches_the_source_mirrors() {
+    use dmcl_mcmeta::source::{Mirror, MirrorPolicy};
+
     let root = work_dir();
     let mut config = config_for(root);
 
-    // 仅官方
-    config.download.mirror = dmcl_mcmeta::source::MirrorPolicy::OfficialOnly;
-    let official = config
-        .download_source()
-        .resolve(dmcl_mcmeta::vanilla::VERSION_MANIFEST);
-    assert_eq!(
-        official,
-        "https://piston-meta.mojang.com/mc/game/version_manifest.json"
-    );
+    // 策略 → 下载源的镜像优先级列表
+    config.download.mirror = MirrorPolicy::OfficialOnly;
+    assert_eq!(config.download_source().mirrors(), &[Mirror::Official]);
 
-    // 镜像优先：首选地址是 bmclapi
-    config.download.mirror = dmcl_mcmeta::source::MirrorPolicy::MirrorFirst;
-    let bmclapi = config
-        .download_source()
-        .resolve(dmcl_mcmeta::vanilla::VERSION_MANIFEST);
+    config.download.mirror = MirrorPolicy::MirrorFirst;
     assert_eq!(
-        bmclapi,
-        "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"
+        config.download_source().mirrors(),
+        &[Mirror::Bmclapi, Mirror::Official]
     );
 
     // 配置里的策略也确实能取到版本列表。
     // 注意：bmclapi 在部分网络环境下不可达（其跳转目标被代理拦截），
     // 因此这里用仅官方验证"配置 → 取数"这条链路。
-    config.download.mirror = dmcl_mcmeta::source::MirrorPolicy::OfficialOnly;
+    config.download.mirror = MirrorPolicy::OfficialOnly;
     let manifest = config
         .download_source()
         .fetch_version_manifest()

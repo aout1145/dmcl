@@ -255,10 +255,11 @@ impl Config {
         println!("cli.default_command = {}", self.cli.default_command);
     }
 
-    /// 按配置造一个下载源（镜像策略 + User-Agent）。
+    /// 按配置造一个下载源（镜像策略 + 重试次数 + User-Agent）。
     pub fn download_source(&self) -> DownloadSource {
         DownloadSource::from_policy(self.download.mirror)
             .with_user_agent(format!("{LAUNCHER_NAME}/{LAUNCHER_VERSION}"))
+            .with_max_attempts(self.download.max_attempts)
     }
 
     /// 配置文件里的下载策略 → [`dmcl_download::DownloadOptions`]。

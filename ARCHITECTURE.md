@@ -164,8 +164,9 @@ source.resolve("${MC_MAVEN}/a/b.jar");
 - `UrlFields` trait 统一遍历文档里的 url 字段，`templatize_urls` / `resolve_urls`
   对任何文档类型都通用，新增字段不会漏改；
 - 用哪种镜像由 `MirrorPolicy` 决定：`official-only`（仅官方）、`official-first`
-  （官方优先，默认）、`mirror-first`（镜像优先）；它展开成镜像**优先级列表**，前一个失败
-  自动试下一个，并且能直接按模板发请求：`source.get_json(VERSION_MANIFEST).await?`。
+  （官方优先，默认）、`mirror-first`（镜像优先）；各域取 meta 统一走 `fetch_meta(url)`
+  —— 内部按镜像优先级展开候选、轮换重试（A B A …）直到用满重试次数，
+  `fetch_json` 就是它的 JSON 版：`source.fetch_json("${MC_META}/mc/game/version_manifest.json").await?`。
 
 写回磁盘的版本 JSON 会把模板解析回**官方**地址，因此 `.minecraft` 里的文档与官方启动器
 完全通用。

@@ -120,7 +120,7 @@ pub struct FabricSidedMainClass {
 }
 
 /// Fabric 的 loader 版本列表：`${FABRIC_META}/v2/versions/loader/<mc>`。
-pub fn fabric_loader_list_url(mc_version: &str) -> String {
+fn fabric_loader_list_url(mc_version: &str) -> String {
     format!(
         "{}/v2/versions/loader/{mc_version}",
         Root::FabricMeta.placeholder()
@@ -128,7 +128,7 @@ pub fn fabric_loader_list_url(mc_version: &str) -> String {
 }
 
 /// Fabric 的版本 JSON：`${FABRIC_META}/v2/versions/loader/<mc>/<loader>/profile/json`。
-pub fn fabric_profile_url(mc_version: &str, loader_version: &str) -> String {
+fn fabric_profile_url(mc_version: &str, loader_version: &str) -> String {
     format!(
         "{}/v2/versions/loader/{mc_version}/{loader_version}/profile/json",
         Root::FabricMeta.placeholder()
@@ -138,7 +138,7 @@ pub fn fabric_profile_url(mc_version: &str, loader_version: &str) -> String {
 impl DownloadSource {
     /// 取 Fabric 的 loader 版本列表（从新到旧的顺序由调用者决定）。
     pub async fn fetch_fabric_loaders(&self, mc_version: &str) -> Result<Vec<FabricLoaderEntry>> {
-        self.get_json(&fabric_loader_list_url(mc_version)).await
+        self.fetch_json(&fabric_loader_list_url(mc_version)).await
     }
 
     /// 取 Fabric 的版本 JSON（需要合并进原版版本 JSON）。

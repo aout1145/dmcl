@@ -2,24 +2,14 @@
 
 use std::cmp::Ordering;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use version_compare::{compare, Cmp};
 
-use crate::source::{DownloadSource, Mirror, Root};
+use crate::source::{DownloadSource, Root};
 
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallProfile, Processor, Side};
-
-/// bmclapi 的 NeoForge 版本列表接口。
-pub const NEOFORGE_VERSION_LIST_BMCLAPI: &str = "https://bmclapi2.bangbang93.com/neoforge/list";
-
-/// 官方 neoforged maven 的版本列表接口。
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct NeoForgeVersionListing {
-    #[serde(default)]
-    pub versions: Vec<String>,
-}
 
 /// `bmclapi .../neoforge/list/<mcver>` 的一项。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -63,68 +53,23 @@ pub fn neoforge_installer_url(forge_version: &str) -> (String, &'static str) {
     )
 }
 
-/// 官方 neoforged maven 的版本列表地址。
+/// NeoForge 版本列表地址。
 ///
-/// TODO：官方 maven 也有 `maven-metadata.xml`（`net/neoforged/neoforge` 与
-/// `net/neoforged/forge` 都有），以后与 Forge 一起把官方源列表改用 XML 取。
-pub fn neoforge_version_list_url_official(mc_version: &str) -> String {
-    let repository = if mc_version == "1.20.1" {
-        "forge"
-    } else {
-        "neoforge"
-    };
-    format!("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/{repository}")
-}
-
-/// bmclapi 的 NeoForge 版本列表地址。
-pub fn neoforge_version_list_url_bmclapi(mc_version: &str) -> String {
-    format!("{NEOFORGE_VERSION_LIST_BMCLAPI}/{mc_version}")
-}
-
-/// 按镜像选择 NeoForge 版本列表地址。
-pub fn neoforge_version_list_url(mc_version: &str, mirror: Mirror) -> String {
-    match mirror {
-        Mirror::Official => neoforge_version_list_url_official(mc_version),
-        Mirror::Bmclapi => neoforge_version_list_url_bmclapi(mc_version),
-    }
+/// **占位**：借用 bmclapi 的 JSON 路径（`${MC_META}` 的 bmclapi 侧就是站点根），官方侧
+/// 解析出来是 `piston-meta` 下的地址、会 404 —— 靠 `fetch_json` 的候选轮换重试落到
+/// bmclapi。TODO：官方 neoforged maven 与 bmclapi 都有 `maven-metadata.xml`，以后两边
+/// 统一改用 XML 取，这里换成对应的模板。
+fn neoforge_version_list_url(mc_version: &str) -> String {
+    format!("{}/neoforge/list/{mc_version}", Root::McMeta.placeholder())
 }
 
 impl DownloadSource {
-    /// 取 NeoForge 版本列表；官方源与 bmclapi 的接口形态不同，这里统一成字符串列表。
+    /// 取 NeoForge 版本列表。
     pub async fn fetch_neoforge_versions(&self, mc_version: &str) -> Result<Vec<String>> {
-        Ok(match self.mirror() {
-            Mirror::Official => {
-                let listing: NeoForgeVersionListing = self
-                    .get_json(&neoforge_version_list_url_official(mc_version))
-                    .await?;
-                // 官方接口返回整个仓库的版本，按 mc 版本前缀过滤：
-                // 1.20.1 时代的前缀就是 "1.20.1"，之后是去掉前导 "1." 的 mc 版本号
-                //（1.21.1 → "21.1"）。按前两段精确比较，避免 "21.1" 误配 "21.10"。
-                let prefix = if mc_version == "1.20.1" {
-                    "1.20.1"
-                } else {
-                    mc_version.strip_prefix("1.").ok_or_else(|| {
-                        anyhow!("NeoForge 目前只支持 1.x 的 Minecraft 版本：{mc_version}")
-                    })?
-                };
-                let want: Vec<&str> = prefix.split('.').collect();
-                listing
-                    .versions
-                    .into_iter()
-                    .filter(|version| {
-                        let mut parts = version.split('.');
-                        parts.next() == want.first().copied()
-                            && parts.next() == want.get(1).copied()
-                    })
-                    .collect()
-            }
-            Mirror::Bmclapi => {
-                let listing: Vec<NeoForgeListEntry> = self
-                    .get_json(&neoforge_version_list_url_bmclapi(mc_version))
-                    .await?;
-                listing.into_iter().map(|entry| entry.version).collect()
-            }
-        })
+        let listing: Vec<NeoForgeListEntry> = self
+            .fetch_json(&neoforge_version_list_url(mc_version))
+            .await?;
+        Ok(listing.into_iter().map(|entry| entry.version).collect())
     }
 }
 
@@ -173,17 +118,17 @@ mod tests {
     }
 
     #[test]
-    fn neoforge_version_list_depends_on_the_mirror() {
+    fn neoforge_version_list_url_is_a_placeholder() {
         assert_eq!(
-            neoforge_version_list_url("1.20.1", Mirror::Official),
-            "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/forge"
+            neoforge_version_list_url("1.21.1"),
+            "${MC_META}/neoforge/list/1.21.1"
         );
+        // bmclapi 侧解析出来就是它真正的 JSON 地址；官方侧会 404（靠重试兜过去）
         assert_eq!(
-            neoforge_version_list_url("1.21.1", Mirror::Official),
-            "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
-        );
-        assert_eq!(
-            neoforge_version_list_url("1.21.1", Mirror::Bmclapi),
+            crate::source::resolve_url(
+                &neoforge_version_list_url("1.21.1"),
+                crate::source::Mirror::Bmclapi
+            ),
             "https://bmclapi2.bangbang93.com/neoforge/list/1.21.1"
         );
     }

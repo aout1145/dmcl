@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::de::DeserializeOwned;
@@ -501,17 +502,27 @@ pub fn resolve_urls<T: UrlFields>(value: &mut T, mirror: Mirror) -> usize {
 // 下载源
 // ---------------------------------------------------------------------------
 
-/// 一个下载源：**镜像优先级列表** + http 客户端。
+/// 一个下载源：**镜像优先级列表** + http 客户端 + 单次请求的重试次数。
 ///
-/// * 列表里第一个是首选镜像，请求失败（网络错误 / 404）时自动尝试下一个；
+/// * 列表里第一个是首选镜像，请求失败（网络错误 / 404）时轮换到下一个，直到用满
+///   [`DownloadSource::max_attempts`] 次；
 /// * 所有接受 url 的方法都同时接受"模板"与"普通 url"，
-///   因此可以直接 `source.get_json("${MC_META}/mc/game/version_manifest.json")`。
+///   因此可以直接 `source.fetch_json("${MC_META}/mc/game/version_manifest.json")`。
 #[derive(Debug, Clone)]
 pub struct DownloadSource {
     mirrors: Vec<Mirror>,
     client: reqwest::Client,
     user_agent: String,
+    max_attempts: u32,
 }
+
+/// 单个请求默认的重试次数（与下载侧 `max_attempts` 默认值一致）。
+const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+
+/// 建立连接的超时。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// 两次读取之间的空闲超时。
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl DownloadSource {
     /// 单一镜像。
@@ -553,11 +564,18 @@ impl DownloadSource {
         self
     }
 
+    /// 单次请求的最大尝试次数（至少 1 次）。
+    pub fn with_max_attempts(mut self, attempts: u32) -> Self {
+        self.max_attempts = attempts.max(1);
+        self
+    }
+
     fn build(mirrors: Vec<Mirror>, user_agent: &str) -> Self {
         Self {
             mirrors,
             client: build_client(user_agent),
             user_agent: user_agent.to_string(),
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
         }
     }
 
@@ -575,6 +593,11 @@ impl DownloadSource {
         &self.user_agent
     }
 
+    /// 单次请求的最大尝试次数。
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
     /// 复用的 http 客户端（连接池 / keep-alive）。
     pub fn client(&self) -> &reqwest::Client {
         &self.client
@@ -590,44 +613,45 @@ impl DownloadSource {
         resolve_url_candidates(url.as_ref(), &self.mirrors)
     }
 
-    /// GET 一个 url（可以是模板），依次尝试各镜像，返回响应体。
-    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+    /// 取一份 meta：`url` 可以是模板，按镜像优先级展开成候选、轮换重试（A B A …），
+    /// 第一个成功的响应体（UTF-8 文本）即返回；**解析由调用方自己做**。
+    pub async fn fetch_meta(&self, url: &str) -> Result<String> {
         let candidates = self.candidates(url);
         let mut last: Option<anyhow::Error> = None;
-        for candidate in &candidates {
-            match self.fetch_bytes(candidate).await {
-                Ok(bytes) => return Ok(bytes),
-                Err(err) => {
-                    last = Some(err.context(format!("GET {candidate} 失败")));
-                }
+        for attempt in 1..=self.max_attempts {
+            let candidate = &candidates[candidate_index(candidates.len(), attempt)];
+            match self.fetch_text(candidate).await {
+                Ok(body) => return Ok(body),
+                Err(err) => last = Some(err.context(format!("从 {candidate} 取数失败"))),
             }
         }
-        Err(last.unwrap_or_else(|| anyhow!("没有可用的下载地址: {url}")))
+        Err(last.unwrap_or_else(|| anyhow!("没有可用的下载地址：{url}")))
     }
 
-    /// GET 一个 url 并当作 UTF-8 文本返回。
-    pub async fn get_text(&self, url: &str) -> Result<String> {
-        let origin = self.candidates(url).into_iter().next().unwrap_or_default();
-        let bytes = self.get_bytes(url).await?;
-        String::from_utf8(bytes).with_context(|| format!("{origin} 的响应不是合法 UTF-8"))
+    /// 取一份 JSON：`fetch_meta` + 反序列化。
+    pub async fn fetch_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let body = self.fetch_meta(url).await?;
+        serde_json::from_str(&body).with_context(|| format!("解析 {url} 的 JSON 失败"))
     }
 
-    /// GET 一个 url 并按强类型反序列化 JSON。
-    pub async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
-        let text = self.get_text(url).await?;
-        serde_json::from_str(&text).with_context(|| format!("解析 {url} 的 JSON 失败"))
+    /// 单次 GET（响应体按 UTF-8 文本返回）；重试由 [`DownloadSource::fetch_meta`] 负责。
+    async fn fetch_text(&self, url: &str) -> Result<String> {
+        let response = self.client.get(url).send().await?.error_for_status()?;
+        let bytes = response.bytes().await?;
+        String::from_utf8(bytes.to_vec()).with_context(|| format!("{url} 的响应不是合法 UTF-8"))
     }
+}
 
-    async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.client.get(url).send().await?;
-        let response = response.error_for_status()?;
-        Ok(response.bytes().await?.to_vec())
-    }
+/// 候选轮换：第 `attempt` 次（从 1 开始）用第几个候选（A B A …）。
+fn candidate_index(len: usize, attempt: u32) -> usize {
+    (attempt.saturating_sub(1) as usize) % len
 }
 
 fn build_client(user_agent: &str) -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(user_agent)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }

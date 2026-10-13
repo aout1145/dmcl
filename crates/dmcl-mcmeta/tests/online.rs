@@ -5,7 +5,7 @@
 //! ```
 
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
-use dmcl_mcmeta::vanilla::{VersionJson, VERSION_MANIFEST};
+use dmcl_mcmeta::vanilla::VersionJson;
 
 #[tokio::test]
 #[ignore = "requires network access"]
@@ -25,10 +25,6 @@ async fn version_manifest_is_fetched_and_templatized() {
         // 模板能被解析回官方地址
         assert!(source.resolve(&entry.url).starts_with("https://"));
     }
-    assert_eq!(
-        source.resolve(VERSION_MANIFEST),
-        "https://piston-meta.mojang.com/mc/game/version_manifest.json"
-    );
 }
 
 #[tokio::test]

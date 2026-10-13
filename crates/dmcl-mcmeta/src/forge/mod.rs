@@ -8,13 +8,6 @@ use crate::source::{DownloadSource, Root};
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallEntry, InstallProfile, Processor, Side};
 
-/// Forge 的版本列表接口 —— 目前只有 bmclapi 提供。
-///
-/// TODO：官方 maven 也有 `maven-metadata.xml`（XML，形如 `1.21.1-52.1.16`，
-/// 但没有 `branch` / `build`），NeoForge 的官方 maven 同理。以后把两边官方源的
-/// 列表统一改用 XML 取，再决定要不要保留这里的 bmclapi 接口。
-pub const FORGE_VERSION_LIST: &str = "https://bmclapi2.bangbang93.com/forge/minecraft";
-
 /// `bmclapi .../forge/minecraft/<mcver>` 的一项。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ForgeVersionEntry {
@@ -73,15 +66,22 @@ pub fn forge_installer_url(forge_version: &str) -> String {
     )
 }
 
-/// Forge 版本列表地址（bmclapi only）。
-pub fn forge_version_list_url(mc_version: &str) -> String {
-    format!("{FORGE_VERSION_LIST}/{mc_version}")
+/// Forge 版本列表地址。
+///
+/// **占位**：借用 bmclapi 的 JSON 路径（`${MC_META}` 的 bmclapi 侧就是站点根），官方侧
+/// 会 404 —— 靠 `fetch_json` 的候选轮换重试落到 bmclapi。TODO：官方 maven 也有
+/// `maven-metadata.xml`，以后两边统一改用 XML 取。
+fn forge_version_list_url(mc_version: &str) -> String {
+    format!(
+        "{}/forge/minecraft/{mc_version}",
+        Root::McMeta.placeholder()
+    )
 }
 
 impl DownloadSource {
     /// 取 Forge 版本列表（只有 bmclapi 提供）。
     pub async fn fetch_forge_versions(&self, mc_version: &str) -> Result<Vec<ForgeVersionEntry>> {
-        self.get_json(&forge_version_list_url(mc_version)).await
+        self.fetch_json(&forge_version_list_url(mc_version)).await
     }
 }
 
@@ -146,9 +146,17 @@ mod tests {
     }
 
     #[test]
-    fn the_forge_version_list_is_bmclapi_only() {
+    fn the_forge_version_list_url_is_a_placeholder() {
         assert_eq!(
             forge_version_list_url("1.20.1"),
+            "${MC_META}/forge/minecraft/1.20.1"
+        );
+        // bmclapi 侧解析出来就是它真正的 JSON 地址；官方侧会 404（靠重试兜过去）
+        assert_eq!(
+            crate::source::resolve_url(
+                &forge_version_list_url("1.20.1"),
+                crate::source::Mirror::Bmclapi
+            ),
             "https://bmclapi2.bangbang93.com/forge/minecraft/1.20.1"
         );
     }

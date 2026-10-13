@@ -3,23 +3,8 @@
 use anyhow::{anyhow, Result};
 
 use crate::source::{DownloadSource, Root};
-use crate::vanilla::asset::AssetIndexFile;
 use crate::vanilla::manifest::{VersionManifest, VersionManifestEntry};
 use crate::vanilla::version::VersionJson;
-
-/// Minecraft 版本列表。
-pub const VERSION_MANIFEST: &str = "${MC_META}/mc/game/version_manifest.json";
-
-/// 带 sha1 的版本列表（v2）。
-pub const VERSION_MANIFEST_V2: &str = "${MC_META}/mc/game/version_manifest_v2.json";
-
-/// 资源索引：`${MC_META}/v1/packages/<sha1>/<id>.json`。
-pub fn asset_index_url(sha1: &str, id: &str) -> String {
-    format!(
-        "{}/v1/packages/{sha1}/{id}.json",
-        Root::McMeta.placeholder()
-    )
-}
 
 /// 一个资源对象：`${MC_ASSETS}/<hash 前两位>/<hash>`。
 pub fn asset_object_url(hash: &str) -> String {
@@ -38,14 +23,9 @@ pub fn maven_library_url(path: &str) -> String {
 impl DownloadSource {
     /// 取 Minecraft 版本列表。
     pub async fn fetch_version_manifest(&self) -> Result<VersionManifest> {
-        let mut manifest: VersionManifest = self.get_json(VERSION_MANIFEST).await?;
-        manifest.templatize_urls();
-        Ok(manifest)
-    }
-
-    /// 取带 sha1 的版本列表（v2）。
-    pub async fn fetch_version_manifest_v2(&self) -> Result<VersionManifest> {
-        let mut manifest: VersionManifest = self.get_json(VERSION_MANIFEST_V2).await?;
+        let mut manifest: VersionManifest = self
+            .fetch_json("${MC_META}/mc/game/version_manifest.json")
+            .await?;
         manifest.templatize_urls();
         Ok(manifest)
     }
@@ -65,16 +45,11 @@ impl DownloadSource {
         self.fetch_version_json(&entry.url).await
     }
 
-    /// 取一个版本 JSON。返回的文档里所有 url 都已经是模板形式。
-    pub async fn fetch_version_json(&self, url: &str) -> Result<VersionJson> {
-        let mut json: VersionJson = self.get_json(url).await?;
+    /// 取一个版本 JSON（`url` 是清单里的模板地址）。返回的文档里所有 url 都已经是模板形式。
+    pub(crate) async fn fetch_version_json(&self, url: &str) -> Result<VersionJson> {
+        let mut json: VersionJson = self.fetch_json(url).await?;
         json.templatize_urls();
         Ok(json)
-    }
-
-    /// 取资源索引（`assets/indexes/<id>.json` 的远程原文）。
-    pub async fn fetch_asset_index(&self, url: &str) -> Result<AssetIndexFile> {
-        self.get_json(url).await
     }
 }
 
@@ -85,11 +60,6 @@ mod tests {
 
     #[test]
     fn urls_are_built_as_templates() {
-        assert_eq!(VERSION_MANIFEST, "${MC_META}/mc/game/version_manifest.json");
-        assert_eq!(
-            asset_index_url("abc", "5"),
-            "${MC_META}/v1/packages/abc/5.json"
-        );
         assert_eq!(asset_object_url("abcdef"), "${MC_ASSETS}/abcdef");
         assert_eq!(
             maven_library_url("net/sf/jopt/a.jar"),
@@ -99,14 +69,6 @@ mod tests {
 
     #[test]
     fn resolved_urls_point_at_the_expected_mirror() {
-        assert_eq!(
-            DownloadSource::official().resolve(VERSION_MANIFEST),
-            "https://piston-meta.mojang.com/mc/game/version_manifest.json"
-        );
-        assert_eq!(
-            DownloadSource::new(Mirror::Bmclapi).resolve(asset_index_url("a", "5")),
-            "https://bmclapi2.bangbang93.com/v1/packages/a/5.json"
-        );
         assert_eq!(
             DownloadSource::new(Mirror::Bmclapi).resolve(maven_library_url("a.jar")),
             "https://bmclapi2.bangbang93.com/maven/a.jar"
