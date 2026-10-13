@@ -110,6 +110,13 @@ impl DownloadTask {
         let options = Arc::new(self.options.normalized());
         let report = Arc::new(Mutex::new(DownloadReport::default()));
 
+        // 候选项不能为空：没有候选地址就无从下载，直接报错
+        for item in &self.items {
+            if item.urls.is_empty() {
+                anyhow::bail!("下载项没有候选地址：{}", item.save_to.display());
+            }
+        }
+
         // 先做本地判断：已经是最新（校验值 / 大小一致）的文件不占用连接
         let mut pending: Vec<DownloadItem> = Vec::new();
         for item in &self.items {
@@ -173,7 +180,7 @@ impl DownloadTask {
                 Err(err) => {
                     report.lock().unwrap().failed.push(DownloadFailure {
                         path: outcome.item.save_to.clone(),
-                        url: outcome.item.url.clone(),
+                        url: outcome.url.clone(),
                         error: format!("{err:#}"),
                     });
                 }
@@ -217,6 +224,8 @@ struct ItemOutcome {
     item: DownloadItem,
     /// 完成时是否已经知道实际大小（决定它算「已知」还是「未知」的完成）。
     sized: bool,
+    /// 最后一次尝试用的地址（失败上报用）。
+    url: String,
     result: Result<u64>,
 }
 
@@ -230,12 +239,14 @@ struct Downloader<'a> {
 }
 
 impl Downloader<'_> {
-    /// 一个文件的完整流程（含重试）。
+    /// 一个文件的完整流程（含重试）。每次尝试**换用下一个候选地址**（A B A …）。
     async fn download_one(&self, item: DownloadItem) -> ItemOutcome {
         let save_to = absolute(&item.save_to);
         let mut last_error: Option<anyhow::Error> = None;
         // 这一项在进度里的份额：是否已知实际大小、记了多少。整项失败时回滚。
         let share = Share::default();
+        // 最后尝试过的地址（失败上报用）；还没试过就退回首选
+        let mut last_url = item.urls.first().cloned().unwrap_or_default();
 
         for attempt in 1..=self.options.max_attempts {
             if let Err(err) = self.ctx.check_cancelled() {
@@ -243,9 +254,13 @@ impl Downloader<'_> {
                 return ItemOutcome {
                     item,
                     sized: share.is_sized(),
+                    url: last_url,
                     result: Err(err),
                 };
             }
+            // 轮换候选源：第 n 次尝试用 urls[(n-1) % len]
+            let url = item.urls[candidate_index(&item.urls, attempt)].clone();
+            last_url = url.clone();
             if attempt > 1 {
                 self.ctx.log(format!(
                     "{} 重试（{}/{}）",
@@ -256,12 +271,13 @@ impl Downloader<'_> {
             // 否则进度会变成"100% 了还在涨"。
             let recorder =
                 Recorder::new(self.tracker.clone(), self.ctx.clone(), share.sized.clone());
-            match self.attempt(&item, &save_to, &recorder, &share).await {
+            match self.attempt(&item, &url, &save_to, &recorder, &share).await {
                 Ok(bytes) => {
                     recorder.commit();
                     return ItemOutcome {
                         item,
                         sized: share.is_sized(),
+                        url: last_url,
                         result: Ok(bytes),
                     };
                 }
@@ -270,8 +286,8 @@ impl Downloader<'_> {
                     // 失败后清掉半成品，下一轮从头来过
                     let _ = tokio::fs::remove_file(item.part_path()).await;
                     last_error = Some(err.context(format!(
-                        "第 {attempt}/{} 次下载 {} 失败",
-                        self.options.max_attempts, item.url
+                        "第 {attempt}/{} 次从 {url} 下载 {} 失败",
+                        self.options.max_attempts, item.name
                     )));
                 }
             }
@@ -282,6 +298,7 @@ impl Downloader<'_> {
         ItemOutcome {
             item,
             sized: share.is_sized(),
+            url: last_url,
             result: Err(last_error.unwrap_or_else(|| anyhow!("下载失败"))),
         }
     }
@@ -290,6 +307,7 @@ impl Downloader<'_> {
     async fn attempt(
         &self,
         item: &DownloadItem,
+        url: &str,
         save_to: &Path,
         recorder: &Recorder,
         share: &Share,
@@ -302,9 +320,7 @@ impl Downloader<'_> {
 
         // 已知大小且足够大 → 先探测服务器是否支持 Range，再决定分块还是单连接
         let chunked_total = match item.size {
-            Some(size) if self.options.should_chunk(size) => {
-                probe_range(self.client, &item.url).await
-            }
+            Some(size) if self.options.should_chunk(size) => probe_range(self.client, url).await,
             _ => None,
         };
 
@@ -312,9 +328,9 @@ impl Downloader<'_> {
             Some(total) => {
                 // 分块的总量来自 `Content-Range`（服务器实际大小）
                 self.tracker.record_size(share, total);
-                self.chunked(item, &part, total, recorder).await?
+                self.chunked(url, &part, total, recorder).await?
             }
-            None => self.single(item, &part, recorder, share).await?,
+            None => self.single(url, &part, recorder, share).await?,
         };
 
         // 校验：校验值优先（用哪个算法由它决定），其次大小
@@ -342,15 +358,13 @@ impl Downloader<'_> {
     /// 单连接下载。
     async fn single(
         &self,
-        item: &DownloadItem,
+        url: &str,
         part: &Path,
         recorder: &Recorder,
         share: &Share,
     ) -> Result<u64> {
         let _permit = self.connections.acquire().await?;
-        let mut response = send_get(self.client, &item.url, None)
-            .await?
-            .error_for_status()?;
+        let mut response = send_get(self.client, url, None).await?.error_for_status()?;
         // 服务器给的实际大小：这一项转入「已知」组
         if let Some(actual) = response.content_length() {
             self.tracker.record_size(share, actual);
@@ -368,13 +382,7 @@ impl Downloader<'_> {
     }
 
     /// 分块并发下载。
-    async fn chunked(
-        &self,
-        item: &DownloadItem,
-        part: &Path,
-        size: u64,
-        recorder: &Recorder,
-    ) -> Result<u64> {
+    async fn chunked(&self, url: &str, part: &Path, size: u64, recorder: &Recorder) -> Result<u64> {
         // 预分配出目标大小：各分块各自 seek 到自己的偏移写入，互不干扰
         {
             let file = tokio::fs::File::create(part).await?;
@@ -392,7 +400,7 @@ impl Downloader<'_> {
             let connections = self.connections.clone();
             let file_semaphore = file_semaphore.clone();
             let recorder = recorder.clone();
-            let url = item.url.clone();
+            let url = url.to_string();
             let part = part.to_path_buf();
             set.spawn(async move {
                 // 先占"单文件块数"名额，再占全局连接名额
@@ -516,6 +524,11 @@ async fn probe_range(client: &reqwest::Client, url: &str) -> Option<u64> {
 /// 从 `bytes 0-0/1234` 里取出总长度。
 fn parse_content_range(value: &str) -> Option<u64> {
     value.rsplit('/').next()?.trim().parse().ok()
+}
+
+/// 第 `attempt`（从 1 开始）次尝试该用哪个候选地址：按优先级轮换（A B A …）。
+fn candidate_index(urls: &[String], attempt: u32) -> usize {
+    (attempt.saturating_sub(1) as usize) % urls.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -888,13 +901,43 @@ mod tests {
     }
 
     #[test]
+    fn candidates_rotate_across_attempts() {
+        let two = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(candidate_index(&two, 1), 0); // A
+        assert_eq!(candidate_index(&two, 2), 1); // B
+        assert_eq!(candidate_index(&two, 3), 0); // 回到 A
+
+        let one = vec!["only".to_string()];
+        assert_eq!(candidate_index(&one, 1), 0);
+        assert_eq!(candidate_index(&one, 3), 0);
+    }
+
+    /// 没有候选地址的项直接报错，不会去碰网络。
+    #[tokio::test]
+    async fn an_item_without_candidates_fails_fast() {
+        let task = DownloadTask::new(DownloadOptions::default()).with_item(DownloadItem::new(
+            Vec::<String>::new(),
+            "/tmp/dmcl-no-candidate",
+        ));
+        let err = task
+            .execute(&TaskContext::detached("下载"))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("没有候选地址"), "{err:#}");
+    }
+
+    #[test]
     fn the_task_reports_its_items() {
         let mut task = DownloadTask::new(DownloadOptions::default())
             .named("下载游戏")
             .with_item(
-                DownloadItem::new("https://example.com/a.jar", "/tmp/a.jar").with_size(Some(10)),
+                DownloadItem::new(["https://example.com/a.jar".to_string()], "/tmp/a.jar")
+                    .with_size(Some(10)),
             );
-        task.push(DownloadItem::new("https://example.com/b.jar", "/tmp/b.jar"));
+        task.push(DownloadItem::new(
+            ["https://example.com/b.jar".to_string()],
+            "/tmp/b.jar",
+        ));
         assert_eq!(task.len(), 2);
         assert!(!task.is_empty());
         assert_eq!(task.name(), "下载游戏");

@@ -71,9 +71,9 @@ pub struct PlannedFile {
 }
 
 impl PlannedFile {
-    /// 变成真正的下载项：这里才把模板解析成具体地址。
+    /// 变成真正的下载项：这里才把模板按镜像策略展开成**候选地址**。
     pub fn into_item(self, options: &InstallOptions) -> DownloadItem {
-        DownloadItem::new(options.source.resolve(&self.url), &self.save_to)
+        DownloadItem::new(options.source.candidates(&self.url), &self.save_to)
             .with_checksum(self.checksum)
             .with_size(self.size)
             .named(self.name)
@@ -314,7 +314,7 @@ fn is_music(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::source::{DownloadSource, Mirror};
+    use dmcl_mcmeta::source::{DownloadSource, Mirror, MirrorPolicy};
 
     /// 规划只依赖 [`PlanContext`]（launch 做完整性检查时用的也是它）。
     fn options() -> PlanContext {
@@ -354,16 +354,16 @@ mod tests {
         assert_eq!(client.size, Some(100));
         // 不可镜像的地址解析后仍是官方地址
         assert_eq!(
-            client.into_item(&install).url,
-            "https://piston-data.mojang.com/v1/objects/x/client.jar"
+            client.into_item(&install).urls,
+            vec!["https://piston-data.mojang.com/v1/objects/x/client.jar".to_string()]
         );
 
         let index = plan_assets_index(&options, &json).unwrap();
         assert_eq!(index.url, "${MC_META}/v1/packages/beef/5.json");
         assert_eq!(index.save_to, PathBuf::from("/mc/assets/indexes/5.json"));
         assert_eq!(
-            index.into_item(&install).url,
-            "https://bmclapi2.bangbang93.com/v1/packages/beef/5.json"
+            index.into_item(&install).urls,
+            vec!["https://bmclapi2.bangbang93.com/v1/packages/beef/5.json".to_string()]
         );
     }
 
@@ -540,9 +540,35 @@ mod tests {
             name: "b.jar".to_string(),
         };
         let item = planned.into_item(&options);
-        assert_eq!(item.url, "https://bmclapi2.bangbang93.com/maven/a/b.jar");
+        assert_eq!(
+            item.urls,
+            vec!["https://bmclapi2.bangbang93.com/maven/a/b.jar".to_string()]
+        );
         assert_eq!(item.checksum.as_ref().map(|c| c.hex()), Some("abc"));
         assert_eq!(item.size, Some(7));
         assert_eq!(item.name, "b.jar");
+    }
+
+    /// 多镜像策略下，模板会展开成一串按优先级排列的候选地址。
+    #[test]
+    fn planned_files_expand_into_mirror_candidates() {
+        let options = InstallOptions::new(
+            "/mc",
+            DownloadSource::from_policy(MirrorPolicy::MirrorFirst),
+        );
+        let planned = PlannedFile {
+            url: "${MC_MAVEN}/a/b.jar".to_string(),
+            save_to: PathBuf::from("/mc/libraries/a/b.jar"),
+            checksum: None,
+            size: None,
+            name: "b.jar".to_string(),
+        };
+        assert_eq!(
+            planned.into_item(&options).urls,
+            vec![
+                "https://bmclapi2.bangbang93.com/maven/a/b.jar".to_string(),
+                "https://libraries.minecraft.net/a/b.jar".to_string(),
+            ]
+        );
     }
 }

@@ -34,7 +34,7 @@ async fn single_stream_download_writes_the_file() {
     let target = dir.join("manifest.json");
 
     let task = DownloadTask::new(DownloadOptions::default().without_chunking())
-        .with_item(DownloadItem::new(URL, &target));
+        .with_item(DownloadItem::new([URL.to_string()], &target));
 
     let report = execute(&task).await;
     assert!(report.is_success(), "{:?}", report.failed);
@@ -60,7 +60,7 @@ async fn chunked_download_matches_single_stream_byte_for_byte() {
     let chunked = dir.join("chunked.json");
 
     let first = DownloadTask::new(DownloadOptions::default().without_chunking())
-        .with_item(DownloadItem::new(URL, &single));
+        .with_item(DownloadItem::new([URL.to_string()], &single));
     assert!(execute(&first).await.is_success());
 
     let size = std::fs::metadata(&single).unwrap().len();
@@ -70,7 +70,7 @@ async fn chunked_download_matches_single_stream_byte_for_byte() {
     // 强制分块：把阈值和块大小都调小，让一个小文件也真的被切成好几段
     let options = DownloadOptions::default().with_chunking(1024, 4096);
     let second = DownloadTask::new(options).with_item(
-        DownloadItem::new(URL, &chunked)
+        DownloadItem::new([URL.to_string()], &chunked)
             .with_size(Some(size))
             .with_sha256(Some(sha256)),
     );
@@ -90,7 +90,7 @@ async fn progress_events_are_emitted_while_downloading() {
     let target = dir.join("manifest.json");
 
     let task = DownloadTask::new(DownloadOptions::default().without_chunking())
-        .with_item(DownloadItem::new(URL, &target));
+        .with_item(DownloadItem::new([URL.to_string()], &target));
     let chain = TaskChain::new("下载").then(task, "下载文件");
 
     let mut progress_events = 0usize;
@@ -118,9 +118,9 @@ async fn a_bad_url_is_reported_but_other_files_still_finish() {
             .without_chunking()
             .with_max_attempts(1),
     )
-    .with_item(DownloadItem::new(URL, &good));
+    .with_item(DownloadItem::new([URL.to_string()], &good));
     task.push(DownloadItem::new(
-        "https://piston-meta.mojang.com/mc/game/definitely-not-here.json",
+        ["https://piston-meta.mojang.com/mc/game/definitely-not-here.json".to_string()],
         &bad,
     ));
 

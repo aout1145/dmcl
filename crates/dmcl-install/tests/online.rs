@@ -80,17 +80,21 @@ async fn planning_holds_for_a_real_version_json() {
         let item = file.clone().into_item(&options);
         // 规划出来的地址必须是可用的具体链接
         assert!(
-            item.url.starts_with("https://"),
-            "{} -> {}",
+            item.urls.iter().all(|url| url.starts_with("https://")),
+            "{} -> {:?}",
             file.name,
-            item.url
+            item.urls
         );
         assert!(item.save_to.starts_with(root.join("libraries")));
         // 1.7.10 有 linux natives，必须规划到解压清单里
     }
     // 客户端 jar 也在计划里
     let client = dmcl_install::plan_client_jar(&options.plan(), &json, VERSION).unwrap();
-    assert!(client.into_item(&options).url.starts_with("https://"));
+    assert!(client
+        .into_item(&options)
+        .urls
+        .iter()
+        .all(|url| url.starts_with("https://")));
 }
 
 #[tokio::test]

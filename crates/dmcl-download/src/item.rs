@@ -7,8 +7,10 @@ use crate::hash::Checksum;
 /// 一个待下载项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DownloadItem {
-    /// 具体地址。**不含** URL 模板 —— 模板由上层（安装流程）解析好再传进来。
-    pub url: String,
+    /// 候选下载地址，**按优先级排列**（靠前的先试）；至少一个。
+    ///
+    /// 不含 URL 模板 —— 模板由上层（安装流程）按镜像解析成候选列表再传进来。
+    pub urls: Vec<String>,
     /// 目标文件路径。
     pub save_to: PathBuf,
     /// 期望的校验值（md5 / sha1 / sha256）；给了就必须一致。
@@ -20,14 +22,15 @@ pub struct DownloadItem {
 }
 
 impl DownloadItem {
-    pub fn new(url: impl Into<String>, save_to: impl Into<PathBuf>) -> Self {
+    /// 用**候选地址列表**构造（顺序即优先级）。候选为空时下载会直接报错。
+    pub fn new(urls: impl IntoIterator<Item = String>, save_to: impl Into<PathBuf>) -> Self {
         let save_to = save_to.into();
         let name = save_to
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| save_to.to_string_lossy().into_owned());
         Self {
-            url: url.into(),
+            urls: urls.into_iter().collect(),
             save_to,
             checksum: None,
             size: None,
@@ -86,8 +89,21 @@ mod tests {
     use crate::hash::HashAlgorithm;
 
     #[test]
-    fn items_default_their_name_to_the_file_name() {
-        let item = DownloadItem::new("https://example.com/a/b.jar", "/tmp/b.jar");
+    fn items_hold_their_candidate_urls_and_default_their_name() {
+        let item = DownloadItem::new(
+            [
+                "https://bmclapi2.bangbang93.com/a/b.jar".to_string(),
+                "https://libraries.minecraft.net/a/b.jar".to_string(),
+            ],
+            "/tmp/b.jar",
+        );
+        assert_eq!(
+            item.urls,
+            vec![
+                "https://bmclapi2.bangbang93.com/a/b.jar".to_string(),
+                "https://libraries.minecraft.net/a/b.jar".to_string(),
+            ]
+        );
         assert_eq!(item.name, "b.jar");
         assert_eq!(item.part_path(), PathBuf::from("/tmp/b.jar.part"));
         assert_eq!(item.clone().named("别的名字").name, "别的名字");
@@ -98,27 +114,28 @@ mod tests {
     #[test]
     fn checksums_can_be_attached_with_any_algorithm() {
         let hex = "ab".repeat(20);
-        let item = DownloadItem::new("u", "/tmp/a")
+        let item = DownloadItem::new(["u".to_string()], "/tmp/a")
             .with_sha1(Some(hex.clone()))
             .with_size(Some(1));
         let checksum = item.checksum.as_ref().unwrap();
         assert_eq!(checksum.algorithm(), HashAlgorithm::Sha1);
         assert_eq!(checksum.hex(), hex);
 
-        let item = DownloadItem::new("u", "/tmp/a").with_sha256(Some("cd".repeat(32)));
+        let item =
+            DownloadItem::new(["u".to_string()], "/tmp/a").with_sha256(Some("cd".repeat(32)));
         assert_eq!(
             item.checksum.as_ref().unwrap().algorithm(),
             HashAlgorithm::Sha256
         );
 
-        let item = DownloadItem::new("u", "/tmp/a").with_md5(Some("ef".repeat(16)));
+        let item = DownloadItem::new(["u".to_string()], "/tmp/a").with_md5(Some("ef".repeat(16)));
         assert_eq!(
             item.checksum.as_ref().unwrap().algorithm(),
             HashAlgorithm::Md5
         );
 
         // 显式传入 None 表示"不做校验"
-        assert!(DownloadItem::new("u", "/tmp/a")
+        assert!(DownloadItem::new(["u".to_string()], "/tmp/a")
             .with_sha1(None::<String>)
             .checksum
             .is_none());

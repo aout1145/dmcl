@@ -9,7 +9,10 @@
 //!
 //! # async fn run() -> anyhow::Result<()> {
 //! let mut downloads = DownloadTask::new(DownloadOptions::default());
-//! downloads.push(DownloadItem::new("https://example.com/a.jar", "/tmp/a.jar"));
+//! downloads.push(DownloadItem::new(
+//!     ["https://example.com/a.jar".to_string()],
+//!     "/tmp/a.jar",
+//! ));
 //!
 //! let chain = TaskChain::new("下载").then(downloads, "下载文件");
 //! // 这条链的最终输出就是 DownloadReport
@@ -27,6 +30,8 @@
 //!   [`DownloadOptions::max_chunks_per_file`] 限制。
 //! * **先写 `.part` 再改名**：校验通过（给了校验值就比对摘要，否则比对大小）才改名为最终文件，
 //!   因此中断 / 失败不会留下一个"看起来完整"的坏文件。
+//! * **换源重试**：每个下载项可带一串**候选地址**（按优先级），第 `n` 次尝试轮换一个
+//!   （A B A …）；全失败才记为该文件失败。
 //! * **不做断点续传**：失败即整份重来（最多 [`DownloadOptions::max_attempts`] 次）。
 
 mod hash;
