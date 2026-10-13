@@ -10,7 +10,7 @@
 //! {
 //!   "launch":   { "java": "autoselect", "minecraft_root_path": "/…/.minecraft", … },
 //!   "account":  { "online_mode": false, "username": "player" },
-//!   "download": { "max_tasks": 64, "mirror": "official", … },
+//!   "download": { "max_tasks": 64, "mirror": "official-first", … },
 //!   "cli":      { "default_command": "prompt" }
 //! }
 //! ```
@@ -26,7 +26,7 @@ use dmcl_launch::{
     select_java, JavaChoice, JavaConfigs, LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION,
 };
 use dmcl_mcmeta::layout::absolute;
-use dmcl_mcmeta::source::{DownloadSource, Mirror};
+use dmcl_mcmeta::source::{DownloadSource, MirrorPolicy};
 use serde::{Deserialize, Serialize};
 
 /// 1 MiB。
@@ -103,7 +103,8 @@ pub struct DownloadConfig {
     pub max_tasks: usize,
     /// 跳过 `*.ogg` 资源（音乐与音效）。
     pub i_dont_need_music: bool,
-    pub mirror: Mirror,
+    /// 镜像使用策略（仅官方 / 官方优先 / 镜像优先）。
+    pub mirror: MirrorPolicy,
     /// 超过这个大小（MiB）就分块下载。
     pub chunk_threshold_mib: u64,
     /// 每块大小（MiB）。
@@ -119,7 +120,7 @@ impl Default for DownloadConfig {
         Self {
             max_tasks: 64,
             i_dont_need_music: false,
-            mirror: Mirror::default(),
+            mirror: MirrorPolicy::default(),
             chunk_threshold_mib: 8,
             chunk_size_mib: 4,
             max_chunks_per_file: 8,
@@ -254,9 +255,9 @@ impl Config {
         println!("cli.default_command = {}", self.cli.default_command);
     }
 
-    /// 按配置造一个下载源（镜像 + User-Agent）。
+    /// 按配置造一个下载源（镜像策略 + User-Agent）。
     pub fn download_source(&self) -> DownloadSource {
-        DownloadSource::new(self.download.mirror)
+        DownloadSource::from_policy(self.download.mirror)
             .with_user_agent(format!("{LAUNCHER_NAME}/{LAUNCHER_VERSION}"))
     }
 
@@ -350,7 +351,7 @@ mod tests {
         let text = r#"{
             "launch": { "java": "myjdk", "window_width": 1280,
                         "java_configs": { "jdk": "/usr/bin/java" } },
-            "download": { "mirror": "bmclapi" }
+            "download": { "mirror": "mirror-first" }
         }"#;
         let config: Config = serde_json::from_str(text).unwrap();
         assert_eq!(config.launch.java, JavaChoice::Named("myjdk".to_string()));
@@ -359,7 +360,7 @@ mod tests {
             config.launch.java_configs.get("jdk").unwrap(),
             &PathBuf::from("/usr/bin/java")
         );
-        assert_eq!(config.download.mirror, Mirror::Bmclapi);
+        assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
         // 缺键保留默认值
         assert_eq!(config.launch.window_height, 480);
         assert_eq!(config.launch.min_memory, 512);
@@ -387,7 +388,7 @@ mod tests {
         let config: Config = serde_json::from_str("{}").unwrap();
         assert!(config.launch.java.is_auto());
         assert_eq!(config.launch.custom_info, LAUNCHER_NAME);
-        assert_eq!(config.download.mirror, Mirror::Official);
+        assert_eq!(config.download.mirror, MirrorPolicy::OfficialFirst);
     }
 
     #[test]
@@ -440,7 +441,7 @@ mod tests {
 
         let mut config = Config::default();
         config.account.username = "tester".to_string();
-        config.download.mirror = Mirror::Bmclapi;
+        config.download.mirror = MirrorPolicy::MirrorFirst;
         // 故意用相对路径：`load` 会把它补成绝对路径（平台无关）
         config.launch.minecraft_root_path = PathBuf::from("mc-root");
 
@@ -452,7 +453,7 @@ mod tests {
 
         let loaded = Config::load(Some(&path)).await.unwrap();
         assert_eq!(loaded.account.username, "tester");
-        assert_eq!(loaded.download.mirror, Mirror::Bmclapi);
+        assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
         // 相对路径会被补成绝对路径（相对于进程当前目录）
         assert_eq!(loaded.launch.minecraft_root_path, absolute("mc-root"));
         assert!(loaded.launch.minecraft_root_path.is_absolute());

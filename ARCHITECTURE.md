@@ -150,7 +150,7 @@ ${MC_MAVEN}/net/sf/jopt-simple/…/jopt-simple-5.0.4.jar
 `${MC_MAVEN}` 是一个「下载根」（`Root`），真正的地址由 `Mirror` 决定：
 
 ```rust
-let source = DownloadSource::new(Mirror::Bmclapi);
+let source = DownloadSource::from_policy(MirrorPolicy::MirrorFirst);
 source.resolve("${MC_MAVEN}/a/b.jar");
 // → https://bmclapi2.bangbang93.com/maven/a/b.jar
 ```
@@ -163,8 +163,9 @@ source.resolve("${MC_MAVEN}/a/b.jar");
 - 识别不出的 host 原样保留 = 不可镜像；
 - `UrlFields` trait 统一遍历文档里的 url 字段，`templatize_urls` / `resolve_urls`
   对任何文档类型都通用，新增字段不会漏改；
-- `DownloadSource` 支持镜像**优先级列表**，前一个失败自动试下一个，并且能直接按模板
-  发请求：`source.get_json(VERSION_MANIFEST).await?`。
+- 用哪种镜像由 `MirrorPolicy` 决定：`official-only`（仅官方）、`official-first`
+  （官方优先，默认）、`mirror-first`（镜像优先）；它展开成镜像**优先级列表**，前一个失败
+  自动试下一个，并且能直接按模板发请求：`source.get_json(VERSION_MANIFEST).await?`。
 
 写回磁盘的版本 JSON 会把模板解析回**官方**地址，因此 `.minecraft` 里的文档与官方启动器
 完全通用。
@@ -207,6 +208,7 @@ handle.await??;
 | 完整性       | 先写 `<文件>.part`，校验通过才 `rename`；失败删掉半成品并重试                                                                                                                                |
 | 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256 / sha512**（Minecraft 文档给的是 sha1、Fabric 给的是 sha512；也接受 `sha256:…` 前缀或按摘要长度推断） |
 | 进度         | 已知大小的项按字节、未知大小的项按数量（字节「下载多少算多少」），整体百分比按文件数占比加权；总量不预填，随服务器实际大小（`Content-Length` / `Content-Range`）动态累加、失败项回滚；带节流 |
+| 换源重试     | 每个下载项带一串**候选地址**（由 `dmcl-install` 按镜像策略展开）；第 `n` 次尝试轮换一个（A B A…），全失败才记为失败                                                                        |
 | 断点续传     | 不做；失败即整份重来（最多 `max_attempts` 次）                                                                                                                                               |
 | 失败处理     | 所有已排队项目都会跑完，失败项进 `DownloadReport`；默认「有失败就报错」，可用 `DownloadOptions::ignore_failures` 改成「只记录不报错」                                                        |
 

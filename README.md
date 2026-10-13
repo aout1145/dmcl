@@ -69,8 +69,7 @@ dmcl launch 1.20.1-fabric
 
 全局选项：
 
-- `--java <PATH>` —— 用这个 java，并把它记进命名 java 配置；
-- `--mirror <official|bmclapi>` —— 覆盖下载镜像（仅本次运行）。
+- `--java <PATH>` —— 用这个 java，并把它记进命名 java 配置。
 
 不带子命令时执行配置里的 `cli.default_command`（默认 `prompt`）。
 
@@ -100,7 +99,7 @@ macOS `~/Library/Application Support`）。
   "download": {
     "max_tasks": 64,
     "i_dont_need_music": false,
-    "mirror": "official",
+    "mirror": "official-first",
     "chunk_threshold_mib": 8,
     "chunk_size_mib": 4,
     "max_chunks_per_file": 8,
@@ -113,6 +112,10 @@ macOS `~/Library/Application Support`）。
 `launch.java` 可以是 `"autoselect"`，也可以是 `java_configs` 里的某个名字。
 `launch.natives_arch`（可省略）用来覆盖 natives 分类器里 `${arch}` 的取值，
 默认按本机位宽。
+
+`download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
+`"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
+失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
 
 ## 测试
 

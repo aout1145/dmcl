@@ -690,11 +690,9 @@ mod tests {
         assert_eq!(forge_version.get_long(), Some("forge-version"));
 
         // 被跳过的全局参数确实存在（`help` 由 clap 自动生成，不在 get_arguments 里）
-        for skipped in ["java", "mirror"] {
-            assert!(
-                root.get_arguments().any(|arg| arg.get_id() == skipped),
-                "{skipped} 应当确实存在"
-            );
-        }
+        assert!(
+            root.get_arguments().any(|arg| arg.get_id() == "java"),
+            "java 应当确实存在"
+        );
     }
 }

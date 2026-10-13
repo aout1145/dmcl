@@ -19,7 +19,6 @@ use dialoguer::Confirm;
 
 use dmcl_install::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
-use dmcl_mcmeta::source::Mirror;
 use dmcl_task::TaskEvent;
 
 use crate::config::Config;
@@ -34,15 +33,6 @@ pub struct Cli {
     /// 用这个 java，并把它记进命名 java 配置
     #[arg(long, global = true, value_name = "JAVA")]
     pub java: Option<String>,
-
-    /// 下载镜像源（official 或 bmclapi）
-    #[arg(
-        long,
-        global = true,
-        value_name = "MIRROR",
-        hide_possible_values = true
-    )]
-    pub mirror: Option<Mirror>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -286,7 +276,7 @@ pub enum Commands {
 
 /// 命令行前端的入口。
 pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
-    // `--java` 与 `--mirror` 在命令执行前生效（只改内存里的配置）
+    // `--java` 在命令执行前生效（只改内存里的配置）
     if let Some(java) = cli.java.clone() {
         // java 的**路径**同时充当配置项的名字
         config
@@ -294,9 +284,6 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
             .java_configs
             .insert(java.clone(), PathBuf::from(&java));
         config.launch.java = JavaChoice::Named(java);
-    }
-    if let Some(mirror) = cli.mirror {
-        config.download.mirror = mirror;
     }
 
     match cli.command {
@@ -551,17 +538,8 @@ mod tests {
 
     #[test]
     fn global_options_are_accepted_in_any_position() {
-        let cli = Cli::try_parse_from([
-            "dmcl",
-            "--mirror",
-            "bmclapi",
-            "launch",
-            "--java",
-            "/opt/java/bin/java",
-            "1.20.1",
-        ])
-        .unwrap();
-        assert_eq!(cli.mirror, Some(Mirror::Bmclapi));
+        let cli = Cli::try_parse_from(["dmcl", "launch", "--java", "/opt/java/bin/java", "1.20.1"])
+            .unwrap();
         assert_eq!(cli.java.as_deref(), Some("/opt/java/bin/java"));
         match cli.command {
             Some(Commands::Launch { vername }) => assert_eq!(vername, "1.20.1"),
