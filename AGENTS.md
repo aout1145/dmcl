@@ -17,16 +17,8 @@
 
 ## 这是什么
 
-`dmcl`：非官方 Minecraft 启动器，Rust。一个 cargo workspace，`crates/` 下六个 crate：
-
-| crate           | 职责                                              |
-| --------------- | ------------------------------------------------- |
-| `dmcl-task`     | 通用任务链 + 进度事件流（与 MC 无关）             |
-| `dmcl-mcmeta`   | MC 元数据文档、下载源、URL 模板、本地目录布局     |
-| `dmcl-download` | 并发 / 分块下载（实现 `dmcl-task` 的 `Task`）     |
-| `dmcl-install`  | 原版 + Fabric / Forge / NeoForge 安装、完整性检查 |
-| `dmcl-launch`   | 账号、java、命令行生成、启动                      |
-| `dmcl`          | 应用层：config + cli（唯一读配置的地方）          |
+`dmcl`：非官方 Minecraft 启动器，Rust。一个 cargo workspace —— crate 划分、依赖关系、
+各 crate 职责见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 Rust edition 2021，MSRV **1.75**，许可 GPL-3.0-or-later。
 
@@ -52,19 +44,6 @@ cargo doc --no-deps --workspace
 CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `cargo build --release`，
 所以**两边都得过、且 clippy 零警告**。
 
-## 架构约束（硬性，别破坏）
-
-1. **除 `dmcl` 外，任何 crate 都不读配置文件**。所有外部输入由调用者通过各自的
-   `*Options` 传入（`DownloadSource` / `DownloadOptions` / `InstallOptions` / `LaunchOption`）。
-2. **依赖方向**：`dmcl` → {install, launch, download, mcmeta, task}；
-   `dmcl-launch` → install / download / mcmeta / task；`dmcl-install` → download / mcmeta / task；
-   `dmcl-download` → task；`dmcl-task` 与 `dmcl-mcmeta` 是叶子、互不依赖。
-   不要引入反向或环形依赖，也不要为了「两个 crate 都要用」随手新建 common crate
-   （就近拆分，或各留一份小副本）。
-3. 业务逻辑都在库里；`dmcl` 只做「读配置 → 解析参数 → 分发」。
-4. 每个操作是一个 `dmcl_task::TaskChain`，进度走 `TaskEvent` 事件流。
-   别用轮询或全局状态来汇报进度；别引入全局可变配置（原实现有过 `static RwLock<Config>`，已移除）。
-
 ## 公开 API
 
 不追求公开 API（如 `dmcl-task` 的 `TaskEvent`、`Task`、各 `*Options`）绝对稳定。只要能让设计更
@@ -74,17 +53,9 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 
 ## 代码约定
 
-- **强类型文档可往返**：`dmcl-mcmeta` 里凡是会被写回的文档结构体，都要带
-  `#[serde(flatten)] extra: JsonMap`，未知字段原样保留。
-- 「已知取值 + 兜底」的字符串枚举用 `string_enum!` 宏，且**必须保留 `Other(String)`**
-  —— 否则回写时会丢掉不认识的取值。
-- 可选字段用 `#[serde(default, skip_serializing_if = "Option::is_none")]`，别写出 `null`。
-- `rules` 按**标准 Mojang 语义**判定（空规则允许；按顺序评估、最后一条命中者的 action 胜；
-  一条都不命中则不允许）。改之前先看 `vanilla/rules.rs`。
-- 加载器按域分文件（`mcmeta/{vanilla,fabric,forge,neoforge}`、
-  `install/loader/{fabric,forge,neoforge,common}`）。Forge 与 NeoForge 的 `install_profile`
-  **各一份、允许分化**：NeoForge 只有现代式（spec 1）安装器，别给它加 Forge 的经典式
-  （`install` / `versionInfo`）分支。
+模块级的设计约定（`dmcl-mcmeta` 的结构体、加载器目录布局、`rules` 语义等）见
+[ARCHITECTURE.md](ARCHITECTURE.md)；下面是通用编码约定。
+
 - 异步 trait 用**装箱 future**（`dmcl_task::BoxFuture`）表达，**不要引入 `async-trait`**。
 - **不要引入日志框架**：直接用 `println!` / `eprintln!`。
 - 改了函数签名 / 实现 / 字段后，**把所有调用点一并改掉**；不要为了少改几处、或为了向后兼容，给

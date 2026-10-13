@@ -42,6 +42,9 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
   文件组成」的纯函数做完整性检查）；
 - 只有 `dmcl` 知道配置文件的存在。
 
+不引入反向 / 环形依赖；也不要为了「两个 crate 都要用」随手新建 common crate —— 就近拆分，
+或各留一份小副本。
+
 ## 一条硬规则：crate 不读配置
 
 除 `dmcl` 外，**没有任何 crate 会去读配置文件**。所有外部输入都由调用者通过结构体传入：
@@ -82,7 +85,11 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 集中「描述游戏是什么」的东西，**不涉及把文件写到磁盘上**：
 
 - **强类型文档**：版本 JSON、版本清单、资源索引、安装器档案、模组加载器版本列表。
-  每个结构体都带 `#[serde(flatten)] extra`，回写时不会丢掉未建模的字段；
+  约定（文档会被写回，所以必须能往返）：
+  - 每个结构体都带 `#[serde(flatten)] extra: JsonMap`，未知字段原样保留；
+  - 「已知取值 + 兜底」的字符串枚举用 `string_enum!` 宏，且**必须保留 `Other(String)`**
+    —— 否则回写时会丢掉不认识的取值；
+  - 可选字段用 `#[serde(default, skip_serializing_if = "Option::is_none")]`，别写出 `null`；
 - **下载源与 URL 模板**：见下文；
 - **本地目录布局**：`versions/<name>/<name>.json` 之类的路径约定，以及读取版本 JSON
   （含 `inheritsFrom` 合并）。
@@ -187,6 +194,9 @@ handle.await??;
 `async fn` 用装箱 future 表达，因此 `Box<dyn Task>` 可以直接当 trait 对象用，
 **不需要 `async-trait` 依赖**。
 
+每个操作都是一个 `TaskChain`；进度**只走 `TaskEvent` 事件流**，不用轮询、也不用全局状态来汇报，
+**不引入全局可变配置**。
+
 ### 3. 下载
 
 | 关注点       | 做法                                                                                                                                                                                         |
@@ -250,7 +260,7 @@ monitor.wait().await?;
 - **Forge** —— 安装器分现代式（spec 0/1，包内有 `version.json`，`json` 字段指出位置）
   与经典式（≤1.11.2，profile 内联在 `versionInfo` 里、库在 `install.filePath` 指向的内嵌
   jar 中）两种；跑 processor 生成客户端 jar；
-- **NeoForge** —— 只有现代式（spec 1）。
+- **NeoForge** —— 只有现代式（spec 1）；**别给它加 Forge 的经典式**（`install` / `versionInfo`）分支。
 
 `read_installer_version_json` 的查找顺序：`json` 指向的条目 →（仅 Forge）内联
 `versionInfo` →（兜底）`install.filePath` 指向的内嵌 jar。
