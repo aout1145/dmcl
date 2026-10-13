@@ -90,6 +90,87 @@ impl<'de> Deserialize<'de> for Mirror {
 }
 
 // ---------------------------------------------------------------------------
+// 镜像使用策略
+// ---------------------------------------------------------------------------
+
+/// 下载源的镜像使用策略。
+///
+/// 只暴露三种固定选择，配置里不用写任意镜像列表：
+/// 仅官方、官方优先（失败再试镜像）、镜像优先（失败再回官方）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MirrorPolicy {
+    /// 仅使用官方源。
+    OfficialOnly,
+    /// 官方源优先，失败再试镜像源。
+    #[default]
+    OfficialFirst,
+    /// 镜像源优先，失败再回官方源。
+    MirrorFirst,
+}
+
+impl MirrorPolicy {
+    /// 全部策略。
+    pub const ALL: [MirrorPolicy; 3] = [
+        MirrorPolicy::OfficialOnly,
+        MirrorPolicy::OfficialFirst,
+        MirrorPolicy::MirrorFirst,
+    ];
+
+    /// 配置文件与命令行里使用的名字。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MirrorPolicy::OfficialOnly => "official-only",
+            MirrorPolicy::OfficialFirst => "official-first",
+            MirrorPolicy::MirrorFirst => "mirror-first",
+        }
+    }
+
+    /// 展开成镜像优先级列表（靠前的先试）。
+    pub fn mirrors(self) -> Vec<Mirror> {
+        match self {
+            MirrorPolicy::OfficialOnly => vec![Mirror::Official],
+            MirrorPolicy::OfficialFirst => Mirror::ALL.to_vec(),
+            MirrorPolicy::MirrorFirst => Mirror::ALL.iter().rev().copied().collect(),
+        }
+    }
+}
+
+impl fmt::Display for MirrorPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for MirrorPolicy {
+    type Err = anyhow::Error;
+
+    /// 不认识的值直接报错（配置文件写错时能立刻发现）。
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "official-only" => Ok(MirrorPolicy::OfficialOnly),
+            "official-first" => Ok(MirrorPolicy::OfficialFirst),
+            "mirror-first" => Ok(MirrorPolicy::MirrorFirst),
+            other => Err(anyhow!(
+                "不认识的镜像策略：{other}（可选 official-only / official-first / mirror-first）"
+            )),
+        }
+    }
+}
+
+impl Serialize for MirrorPolicy {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MirrorPolicy {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 下载根（URL 模板里的占位符）
 // ---------------------------------------------------------------------------
 
@@ -443,6 +524,11 @@ impl DownloadSource {
         Self::new(Mirror::Official)
     }
 
+    /// 按镜像策略构造（策略至少含一个镜像，因此不会失败）。
+    pub fn from_policy(policy: MirrorPolicy) -> Self {
+        Self::build(policy.mirrors(), DEFAULT_USER_AGENT)
+    }
+
     /// 按优先级列表尝试多个镜像。列表不能为空。
     pub fn with_priority(mirrors: impl IntoIterator<Item = Mirror>) -> Result<Self> {
         let mirrors: Vec<Mirror> = {
@@ -567,6 +653,38 @@ mod tests {
             Mirror::Bmclapi
         );
         assert_eq!(Mirror::default(), Mirror::Official);
+    }
+
+    #[test]
+    fn mirror_policies_map_to_priority_lists() {
+        assert_eq!(MirrorPolicy::OfficialOnly.mirrors(), vec![Mirror::Official]);
+        assert_eq!(
+            MirrorPolicy::OfficialFirst.mirrors(),
+            vec![Mirror::Official, Mirror::Bmclapi]
+        );
+        assert_eq!(
+            MirrorPolicy::MirrorFirst.mirrors(),
+            vec![Mirror::Bmclapi, Mirror::Official]
+        );
+        // from_policy 的镜像顺序跟 mirrors() 一致
+        let source = DownloadSource::from_policy(MirrorPolicy::MirrorFirst);
+        assert_eq!(source.mirrors(), &[Mirror::Bmclapi, Mirror::Official]);
+        assert_eq!(source.mirror(), Mirror::Bmclapi);
+    }
+
+    #[test]
+    fn mirror_policy_names_round_trip_and_typos_are_rejected() {
+        assert_eq!(MirrorPolicy::default(), MirrorPolicy::OfficialFirst);
+        for policy in MirrorPolicy::ALL {
+            let text = policy.as_str();
+            assert_eq!(text.parse::<MirrorPolicy>().unwrap(), policy);
+            let json = serde_json::to_string(&policy).unwrap();
+            assert_eq!(json, format!("\"{text}\""));
+            assert_eq!(serde_json::from_str::<MirrorPolicy>(&json).unwrap(), policy);
+        }
+        // 旧的单值写法（official / bmclapi）不再是合法策略
+        assert!("official".parse::<MirrorPolicy>().is_err());
+        assert!(serde_json::from_str::<MirrorPolicy>("\"typo\"").is_err());
     }
 
     #[test]
