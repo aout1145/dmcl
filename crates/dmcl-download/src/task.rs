@@ -128,14 +128,14 @@ impl DownloadTask {
             }
         }
 
-        // 进度总量**不预填**：从 0 开始，随每个文件从服务器拿到的实际大小动态累加
-        // （见 `Tracker::record_size`）。跳过的项不计入。
-        let tracker = Arc::new(Tracker::new(pending.len()));
+        // 进度总量按规划里已知的大小预填；服务器给出 `Content-Length` /
+        // `Content-Range` 后再修订（见 `Tracker::record_size`）。跳过的项不计入。
+        let tracker = Arc::new(Tracker::new(pending.iter().map(|item| item.size)));
         let connections = Arc::new(Semaphore::new(options.max_connections));
 
         if !pending.is_empty() {
             ctx.log(format!("待下载 {} 个文件", pending.len()));
-            // 立刻显示文件数量，不用等拿到字节总量
+            // 立刻显示文件数量与按规划预填的字节总量，不用等服务器响应
             tracker.initial_report(ctx);
         }
 
@@ -244,7 +244,8 @@ impl Downloader<'_> {
         let save_to = absolute(&item.save_to);
         let mut last_error: Option<anyhow::Error> = None;
         // 这一项在进度里的份额：是否已知实际大小、记了多少。整项失败时回滚。
-        let share = Share::default();
+        // 计划里已知大小的项先预填进去，服务器返回真实大小时再修订。
+        let share = Share::planned(item.size);
         // 最后尝试过的地址（失败上报用）；还没试过就退回首选
         let mut last_url = item.urls.first().cloned().unwrap_or_default();
 
@@ -544,16 +545,16 @@ struct Share {
     recorded: AtomicU64,
 }
 
-impl Default for Share {
-    fn default() -> Self {
+impl Share {
+    /// 按计划里已知的大小预填：一开始就归入「已知」组，
+    /// 服务器返回真实大小时再由 [`Tracker::record_size`] 修订。
+    fn planned(size: Option<u64>) -> Self {
         Self {
-            sized: Arc::new(AtomicBool::new(false)),
-            recorded: AtomicU64::new(0),
+            sized: Arc::new(AtomicBool::new(size.is_some())),
+            recorded: AtomicU64::new(size.unwrap_or(0)),
         }
     }
-}
 
-impl Share {
     fn is_sized(&self) -> bool {
         self.sized.load(Ordering::Relaxed)
     }
@@ -574,14 +575,14 @@ impl Share {
 /// （`N` 总数，`U` 当前未知数，`K = N - U`）。当 `N == K`（都已知道大小）时退化成
 /// 纯字节百分比；当 `N == U` 时退化成纯数量百分比。字节显示为 `(KD+UB) / (KB+UB)`。
 ///
-/// 总量**不预填**：从 0 开始，随每个文件从服务器实际拿到的 `Content-Length` /
-/// `Content-Range` 动态转入「已知」组（`record_size`），整项失败时回滚
-/// （`rollback_item`）。
+/// 总量**按规划大小预填**：调用方建 tracker 时把计划里已知的大小算进「已知」组，
+/// 随后每个文件从服务器实际拿到的 `Content-Length` / `Content-Range` 会把该项修订成
+/// 真实值（`record_size`），整项失败时回滚（`rollback_item`）。
 struct Tracker {
     files_total: usize,
     /// 所有处理完的文件（成功或失败），用于 `X/N 个文件`。
     files_done: AtomicUsize,
-    /// 还不知道实际大小、也没处理完的项数 `U`（含还没开始下载的）。
+    /// 计划里也不知道大小、且还没处理完的项数 `U`（含还没开始下载的）。
     unsized_files: AtomicUsize,
     /// 未知大小且已处理完的项数 `UD`。
     unsized_done_files: AtomicUsize,
@@ -595,24 +596,36 @@ struct Tracker {
 }
 
 impl Tracker {
-    fn new(files_total: usize) -> Self {
+    /// `planned` 是每个待下载项在计划里的已知大小（`None` 表示计划里也不知道）。
+    fn new(planned: impl IntoIterator<Item = Option<u64>>) -> Self {
+        let mut files_total = 0usize;
+        let mut planned_sized = 0usize;
+        let mut planned_bytes = 0u64;
+        for size in planned {
+            files_total += 1;
+            if let Some(size) = size {
+                planned_sized += 1;
+                planned_bytes += size;
+            }
+        }
         Self {
             files_total,
             files_done: AtomicUsize::new(0),
-            unsized_files: AtomicUsize::new(files_total),
+            unsized_files: AtomicUsize::new(files_total - planned_sized),
             unsized_done_files: AtomicUsize::new(0),
             sized_done_bytes: AtomicU64::new(0),
-            sized_total_bytes: AtomicU64::new(0),
+            sized_total_bytes: AtomicU64::new(planned_bytes),
             unsized_done_bytes: AtomicU64::new(0),
             last: Mutex::new(Instant::now()),
         }
     }
 
-    /// 学到某一项的实际大小：把它记进「已知」组。
+    /// 学到某一项的实际大小：把它记进「已知」组，并把计划预填的值修订成实际值。
     ///
-    /// 重复调用幂等，实际值变了就修正（重试 / 服务器前后不一致都安全）。转组发生在
-    /// 读取正文之前（`single` / `chunked` 都是先拿到大小再下字节），所以转组时这一项
-    /// 还没有字节记在「未知」组里。
+    /// 重复调用幂等，实际值变了就修正（重试 / 服务器前后不一致都安全）。预填过计划大小的
+    /// 项已经在「已知」组，这里只做修订；计划未知的项在这里从「未知」组转入「已知」组。
+    /// 转组发生在读取正文之前（`single` / `chunked` 都是先拿到大小再下字节），所以转组时
+    /// 这一项还没有字节记在「未知」组里。
     fn record_size(&self, share: &Share, actual: u64) {
         let prev = share.recorded.swap(actual, Ordering::Relaxed);
         match actual.cmp(&prev) {
@@ -702,7 +715,7 @@ impl Tracker {
         Progress::new(current, Some(total), self.message(), Some(self.percent()))
     }
 
-    /// 开跑时立刻上报一次，先把文件数量显示出来（此时总量可能还是 0）。
+    /// 开跑时立刻上报一次，先把文件数量与预填的字节总量显示出来。
     fn initial_report(&self, ctx: &TaskContext) {
         ctx.report(self.snapshot());
     }
@@ -809,14 +822,16 @@ mod tests {
     #[test]
     fn the_tracker_blends_known_and_unknown_sizes() {
         let ctx = TaskContext::detached("下载");
-        // N=2：一个已知大小、一个未知
-        let tracker = Tracker::new(2);
-        let known = Share::default();
-        let unknown = Share::default();
+        // N=2：一项计划已知 100 字节、一项计划未知
+        let tracker = Tracker::new([Some(100), None]);
+        let known = Share::planned(Some(100));
+        let unknown = Share::planned(None);
 
-        // 未知项先下了 10 字节；已知项学到 100 字节、下了 40
+        // 开跑即预填：已知项的计划大小已经进分母
+        assert_eq!(tracker.snapshot().total, Some(100));
+
+        // 未知项先下了 10 字节；已知项下了 40
         tracker.add(10, &unknown.sized, &ctx);
-        tracker.record_size(&known, 100);
         tracker.add(40, &known.sized, &ctx);
 
         // percent = UD/N + (K/N)(KD/KB) = 0/2 + (1/2)(40/100) = 20%
@@ -836,8 +851,8 @@ mod tests {
     /// 已知项的字节累加幂等、可修正，失败可整项回滚；学到大小时从「未知」转组。
     #[test]
     fn record_size_is_idempotent_correctable_and_rollbackable() {
-        let tracker = Tracker::new(3);
-        let share = Share::default();
+        let tracker = Tracker::new([None, None, None]);
+        let share = Share::planned(None);
 
         tracker.record_size(&share, 100);
         tracker.record_size(&share, 100); // 重试重记：幂等
@@ -852,12 +867,33 @@ mod tests {
         assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 0);
     }
 
+    /// 计划大小预填进分母、服务器实际大小到达后修订、整项失败则回滚。
+    #[test]
+    fn planned_sizes_prefill_the_total_and_are_revised_by_the_server() {
+        // 一项计划 100 字节，一项计划未知
+        let tracker = Tracker::new([Some(100), None]);
+        let sized = Share::planned(Some(100));
+
+        // 开跑：计划大小已经在分母里（总量不再是 0）
+        let snapshot = tracker.snapshot();
+        assert_eq!(snapshot.total, Some(100));
+        assert_eq!(tracker.percent(), 0.0);
+
+        // 服务器说实际 130：把计划值修订上去
+        tracker.record_size(&sized, 130);
+        assert_eq!(tracker.snapshot().total, Some(130));
+
+        // 整项失败：把预填的大小从分母里回滚
+        tracker.rollback_item(&sized);
+        assert_eq!(tracker.snapshot().total, Some(0));
+    }
+
     /// 纯未知大小的项：百分比只按数量走，字节「下载多少算多少」。
     #[test]
     fn unknown_size_progress_is_count_based_with_self_growing_bytes() {
         let ctx = TaskContext::detached("下载");
-        let tracker = Tracker::new(1);
-        let share = Share::default();
+        let tracker = Tracker::new([None]);
+        let share = Share::planned(None);
 
         assert_eq!(tracker.percent(), 0.0);
         let snapshot = tracker.snapshot();
@@ -959,8 +995,8 @@ mod tests {
     #[test]
     fn a_recorder_rolls_back_a_discarded_attempt() {
         let ctx = TaskContext::detached("下载");
-        let tracker = Arc::new(Tracker::new(1));
-        let share = Share::default();
+        let tracker = Arc::new(Tracker::new([None]));
+        let share = Share::planned(None);
         let recorder = Recorder::new(tracker.clone(), ctx, share.sized.clone());
 
         recorder.add(40);
