@@ -73,7 +73,7 @@ impl GameLauncher {
                     Ok(better) => better,
                     Err(()) => {
                         ctx.confirm(format!(
-                            "库 {name} 的版本号无法比较（{version} vs {existing}），先到的保留。是否继续？"
+                            "库 {name} 的版本号无法比较（{version} vs {existing}），先到的保留。"
                         ))
                         .await?;
                         false
@@ -180,7 +180,7 @@ impl GameLauncher {
         };
         if java.major_version != required_major {
             ctx.confirm(format!(
-                "使用的 java 版本不匹配（需要 {required_major}，实际用 {}），是否继续？",
+                "使用的 java 版本不匹配（需要 {required_major}，实际用 {}）",
                 java.major_version
             ))
             .await?;

@@ -223,6 +223,9 @@ impl TaskContext {
     /// * 没有订阅者时直接继续（不阻塞，脚本 / 库场景安全）；
     /// * 前端 [`WarningDecision::abort`] → 触发取消，返回 [`Cancelled`]；
     /// * 前端 [`WarningDecision::accept`] → 继续。
+    ///
+    /// `message` 只写**陈述事实**（如"使用的 java 版本不匹配（需要 17，实际用 27）"）：
+    /// 「要不要继续」由前端负责提问，不要写进消息里，否则会和前端的提问重复。
     pub async fn confirm(&self, message: impl Into<String>) -> Result<()> {
         let gate = WarningGate::new();
         let sent = self
