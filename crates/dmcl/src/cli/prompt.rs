@@ -28,15 +28,27 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use clap::CommandFactory;
 
-use dmcl_install::LoaderKind;
-use dmcl_mcmeta::fabric::latest_fabric_loader;
-use dmcl_mcmeta::forge::latest_forge_version;
-use dmcl_mcmeta::neoforge::latest_neoforge_version;
-use dmcl_mcmeta::source::DownloadSource;
 use dmcl_task::BoxFuture;
 
 use super::interact::{clear_screen, is_terminal, Prompter, TerminalPrompter};
 use super::Cli;
+
+/// 交互式拼命令行时，为参数求「预填默认值」的接口。
+///
+/// prompt 只依赖这个接口，**不认识任何具体命令的参数**；各命令按需实现它 ——
+/// 例如 `install` 会现场查加载器最新版本、按已选项拼默认版本名。
+pub(crate) trait ArgDefaults {
+    /// `id` 是参数 id，`answers` 是已经填过的值（参数 id → 值），
+    /// `enabled_flags` 是已经启用的开关 id。
+    ///
+    /// 返回 `None` 表示「没有默认值」，由调用方退回 clap 的静态默认值 / 留空。
+    fn default_for<'a>(
+        &'a self,
+        id: &'a str,
+        answers: &'a BTreeMap<String, String>,
+        enabled_flags: &'a [String],
+    ) -> BoxFuture<'a, Option<String>>;
+}
 
 /// 全局参数，不值得逐个提问。
 const SKIPPED_ARGS: &[&str] = &["help", "version"];
@@ -84,97 +96,26 @@ fn should_ask(id: &str, disabled: &[String]) -> bool {
         .any(|prefix| id.starts_with(prefix.as_str()))
 }
 
-/// 这个参数是不是某个加载器的版本（`forge_version` → `Forge`）。
-fn loader_kind_for(id: &str) -> Option<LoaderKind> {
-    match id {
-        "forge_version" => Some(LoaderKind::Forge),
-        "neoforge_version" => Some(LoaderKind::NeoForge),
-        "fabric_version" => Some(LoaderKind::Fabric),
-        _ => None,
-    }
-}
-
-/// 这个开关是不是某个加载器（`forge` → `Forge`）。
-fn loader_flag_kind(id: &str) -> Option<LoaderKind> {
-    match id {
-        "forge" => Some(LoaderKind::Forge),
-        "neoforge" => Some(LoaderKind::NeoForge),
-        "fabric" => Some(LoaderKind::Fabric),
-        _ => None,
-    }
-}
-
-/// 按 mc 版本 + 已启用的加载器拼出默认的版本目录名（规则与 `install` 命令一致）。
-///
-/// 某个加载器没给出具体版本时只写加载器名（`1.20.1-forge`），不硬凑一个版本号。
-fn compose_version_name(
-    mc_version: &str,
-    loaders: &[LoaderKind],
-    answers: &BTreeMap<String, String>,
-) -> String {
-    let mut name = mc_version.to_string();
-    for kind in loaders {
-        name.push('-');
-        name.push_str(kind.as_str());
-        if let Some(version) = answers.get(&format!("{}_version", kind.as_str())) {
-            name.push('-');
-            name.push_str(version);
-        }
-    }
-    name
-}
-
-// ---------------------------------------------------------------------------
-// 加载器版本解析
-// ---------------------------------------------------------------------------
-
-/// 现场查加载器最新版本（给 prompt 预填默认值用）。
-trait LoaderVersions {
-    fn latest<'a>(&'a self, kind: LoaderKind, mc_version: &'a str)
-        -> BoxFuture<'a, Result<String>>;
-}
-
-/// 走配置里的下载源查最新版。
-struct RemoteLoaderVersions {
-    source: DownloadSource,
-}
-
-impl LoaderVersions for RemoteLoaderVersions {
-    fn latest<'a>(
-        &'a self,
-        kind: LoaderKind,
-        mc_version: &'a str,
-    ) -> BoxFuture<'a, Result<String>> {
-        Box::pin(async move {
-            match kind {
-                LoaderKind::Fabric => latest_fabric_loader(&self.source, mc_version).await,
-                LoaderKind::Forge => latest_forge_version(&self.source, mc_version).await,
-                LoaderKind::NeoForge => latest_neoforge_version(&self.source, mc_version).await,
-            }
-        })
-    }
-}
-
 // ---------------------------------------------------------------------------
 // 拼命令行
 // ---------------------------------------------------------------------------
 
 /// 逐个参数提问，拼出一条完整的命令行（第一个元素是子命令名）。
 ///
-/// 纯逻辑（除了加载器版本要联网查），不碰终端：留空算跳过还是算无效输入、
-/// 关掉的开关要不要继续追问、加载器版本默认值怎么来，都在这一个函数里决定。
+/// 纯逻辑（除了 [`ArgDefaults`] 可能联网查默认值），不碰终端：留空算跳过还是算
+/// 无效输入、关掉的开关要不要继续追问、默认值怎么来，都在这一个函数里决定。
 async fn build_argv(
     subcommand: &clap::Command,
     prompter: &dyn Prompter,
-    loaders: &dyn LoaderVersions,
+    defaults: &dyn ArgDefaults,
 ) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![subcommand.get_name().to_string()];
     // 被关掉的开关；它的细节参数之后不再追问
     let mut disabled: Vec<String> = Vec::new();
-    // 已经填过的值，按参数 id 记下来（加载器版本要看 mc 版本、版本目录名要看加载器）
+    // 已经填过的值，按参数 id 记下来（加载器版本要看 mc 版本、版本名要看加载器）
     let mut answers: BTreeMap<String, String> = BTreeMap::new();
-    // 已经启用的加载器（按参数声明顺序），给版本目录名的默认值用
-    let mut enabled_loaders: Vec<LoaderKind> = Vec::new();
+    // 已经启用的开关 id，给版本名的默认值用
+    let mut enabled_flags: Vec<String> = Vec::new();
 
     for arg in subcommand.get_arguments() {
         let id = arg.get_id().as_str().to_string();
@@ -185,30 +126,14 @@ async fn build_argv(
 
         if arg.get_action().takes_values() {
             let required = arg.is_required_set();
+            // 先看 clap 的静态默认值，再由命令提供的默认值覆盖（可能要联网查）
             let mut default = arg
                 .get_default_values()
                 .first()
                 .map(|value| value.to_string_lossy().into_owned())
                 .unwrap_or_default();
-
-            // 加载器版本：按已经填好的 mc 版本现场查最新，预填进输入框，让用户看见要装的版本
-            if let Some(kind) = loader_kind_for(&id) {
-                if let Some(mc_version) = answers.get("version_id") {
-                    match loaders.latest(kind, mc_version).await {
-                        Ok(version) => default = version,
-                        Err(err) => eprintln!(
-                            "提示：无法查询 {} 最新版本（{err:#}），请手动输入。",
-                            kind.display_name()
-                        ),
-                    }
-                }
-            }
-
-            // 版本目录名：加载器都问完了，按 mc 版本 + 加载器拼出默认名预填
-            if id == "version_name" {
-                if let Some(mc_version) = answers.get("version_id") {
-                    default = compose_version_name(mc_version, &enabled_loaders, &answers);
-                }
+            if let Some(computed) = defaults.default_for(&id, &answers, &enabled_flags).await {
+                default = computed;
             }
 
             let label = arg
@@ -247,9 +172,7 @@ async fn build_argv(
                 .unwrap_or_else(|| id.clone());
             if prompter.ask_flag(&label)? {
                 append_answer(&mut argv, long.as_deref(), false, &Answer::Flag);
-                if let Some(kind) = loader_flag_kind(&id) {
-                    enabled_loaders.push(kind);
-                }
+                enabled_flags.push(id.clone());
             } else {
                 // 关掉的功能，它的细节参数不再问
                 append_answer(&mut argv, long.as_deref(), false, &Answer::Skipped);
@@ -265,8 +188,8 @@ async fn build_argv(
 // 主循环
 // ---------------------------------------------------------------------------
 
-/// `prompt` —— 交互式命令浏览器。
-pub async fn prompt_interactive(source: DownloadSource) -> Result<()> {
+/// `prompt` —— 交互式命令浏览器。`defaults` 为各命令提供参数默认值。
+pub(crate) async fn prompt_interactive(defaults: &dyn ArgDefaults) -> Result<()> {
     // 管道 / CI 里没有终端可以交互，直接给一句人话，而不是抛一个 IO 错误。
     // dialoguer 把提问写在 stderr 上、把菜单画面写在 stdout 上，两边都得是终端。
     if !is_terminal() {
@@ -276,7 +199,6 @@ pub async fn prompt_interactive(source: DownloadSource) -> Result<()> {
     }
 
     let prompter = TerminalPrompter;
-    let loaders = RemoteLoaderVersions { source };
 
     loop {
         clear_screen();
@@ -321,7 +243,7 @@ pub async fn prompt_interactive(source: DownloadSource) -> Result<()> {
         };
 
         let subcommand = subcommands[index].clone();
-        let argv = build_argv(&subcommand, &prompter, &loaders).await?;
+        let argv = build_argv(&subcommand, &prompter, defaults).await?;
 
         clear_screen();
         println!("执行：{}", shell_words::join(&argv));
@@ -382,17 +304,6 @@ mod tests {
         assert!(should_ask("version_id", &disabled));
         // 什么都没关时全都要问
         assert!(should_ask("forge_version", &[]));
-    }
-
-    #[test]
-    fn loader_version_arguments_map_to_loader_kinds() {
-        assert_eq!(loader_kind_for("forge_version"), Some(LoaderKind::Forge));
-        assert_eq!(
-            loader_kind_for("neoforge_version"),
-            Some(LoaderKind::NeoForge)
-        );
-        assert_eq!(loader_kind_for("fabric_version"), Some(LoaderKind::Fabric));
-        assert_eq!(loader_kind_for("version_id"), None);
     }
 
     // -----------------------------------------------------------------------
@@ -467,16 +378,17 @@ mod tests {
         }
     }
 
-    /// 固定的加载器版本，供测试断言"默认值被预填"。
-    struct FakeLoaders;
+    /// 假的默认值提供者：给每个参数一个可预测的默认值，验证 prompt 会预填。
+    struct FakeDefaults;
 
-    impl LoaderVersions for FakeLoaders {
-        fn latest<'a>(
+    impl ArgDefaults for FakeDefaults {
+        fn default_for<'a>(
             &'a self,
-            kind: LoaderKind,
-            _mc_version: &'a str,
-        ) -> BoxFuture<'a, Result<String>> {
-            Box::pin(async move { Ok(format!("{}-latest", kind.as_str())) })
+            id: &'a str,
+            _answers: &'a BTreeMap<String, String>,
+            _enabled_flags: &'a [String],
+        ) -> BoxFuture<'a, Option<String>> {
+            Box::pin(async move { Some(format!("default-{id}")) })
         }
     }
 
@@ -507,7 +419,7 @@ mod tests {
             Reply::Value(""),       // 本地版本目录名：直接回车 ⇒ 跳过
         ]);
 
-        let argv = build_argv(&install_command(), &prompter, &FakeLoaders)
+        let argv = build_argv(&install_command(), &prompter, &FakeDefaults)
             .await
             .unwrap();
 
@@ -539,38 +451,37 @@ mod tests {
             "{:?}",
             prompter.asked()
         );
-        // Forge 版本留空 ⇒ 版本名默认值里不带版本号
+        // 版本名的默认值来自提供者（具体拼法在 install 的测试里验证）
         assert_eq!(
             prompter.default_of("本地版本名").as_deref(),
-            Some("1.20.1-forge")
+            Some("default-version_name")
         );
     }
 
-    /// 加载器版本的默认值取"现场查最新"；版本目录名的默认值按已选加载器拼出来。
+    /// 各参数的默认值由 [`ArgDefaults`] 提供者预填；prompt 自己不认任何具体命令。
     #[tokio::test]
-    async fn loader_defaults_are_resolved_and_the_version_name_is_prefilled() {
+    async fn defaults_come_from_the_provider() {
         let prompter = Scripted::new([
             Reply::Value("1.20.1"),              // mc 版本号
             Reply::Flag(true),                   // 顺便装 Forge
             Reply::Flag(false),                  // 顺便装 NeoForge
             Reply::Flag(false),                  // 顺便装 Fabric
-            Reply::Value("47.2.0"),              // Forge 版本（真实终端里回车即接受预填的最新版）
-            Reply::Value("1.20.1-forge-47.2.0"), // 版本目录名（默认名）
+            Reply::Value("47.2.0"),              // Forge 版本（真实终端里回车即接受预填默认值）
+            Reply::Value("1.20.1-forge-47.2.0"), // 版本名（默认名）
         ]);
 
-        let argv = build_argv(&install_command(), &prompter, &FakeLoaders)
+        let argv = build_argv(&install_command(), &prompter, &FakeDefaults)
             .await
             .unwrap();
 
-        // 加载器版本的默认值来自现场查最新
+        // 加载器版本与版本名的默认值都来自提供者
         assert_eq!(
             prompter.default_of("Forge 版本").as_deref(),
-            Some("forge-latest")
+            Some("default-forge_version")
         );
-        // 版本名默认值 = mc 版本 + 已启用加载器 + 版本
         assert_eq!(
             prompter.default_of("本地版本名").as_deref(),
-            Some("1.20.1-forge-47.2.0")
+            Some("default-version_name")
         );
         assert_eq!(
             argv,
@@ -592,7 +503,7 @@ mod tests {
             Reply::Value("1.20.1"), // 再填
         ]);
 
-        let argv = build_argv(&list_forge_command(), &prompter, &FakeLoaders)
+        let argv = build_argv(&list_forge_command(), &prompter, &FakeDefaults)
             .await
             .unwrap();
 
@@ -610,7 +521,7 @@ mod tests {
     async fn a_required_value_gives_up_after_a_few_blank_tries() {
         let prompter = Scripted::new([Reply::Value(""), Reply::Value(""), Reply::Value("")]);
 
-        let argv = build_argv(&list_forge_command(), &prompter, &FakeLoaders)
+        let argv = build_argv(&list_forge_command(), &prompter, &FakeDefaults)
             .await
             .unwrap();
 
@@ -633,7 +544,9 @@ mod tests {
 
         // 空回答 ⇒ 命令行里没有 `--type`（而不是 `--type=`）
         let prompter = Scripted::new([Reply::Value("")]);
-        let argv = build_argv(&list_mc, &prompter, &FakeLoaders).await.unwrap();
+        let argv = build_argv(&list_mc, &prompter, &FakeDefaults)
+            .await
+            .unwrap();
         assert_eq!(argv, vec!["list-mc"]);
 
         // 而且 clap 侧确实有默认值，所以命令仍然按 release 过滤

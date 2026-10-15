@@ -20,8 +20,6 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::config::Config;
 
-pub use prompt::prompt_interactive;
-
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
 #[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
@@ -332,7 +330,12 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
 
         Commands::Java { action } => commands::java::run(action, config).await,
 
-        Commands::Prompt => prompt_interactive(config.download_source()).await,
+        Commands::Prompt => {
+            let defaults = commands::install::InstallDefaults {
+                loaders: config.download_source(),
+            };
+            prompt::prompt_interactive(&defaults).await
+        }
 
         Commands::Version => commands::version::run().await,
 
