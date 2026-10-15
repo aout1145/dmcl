@@ -465,10 +465,6 @@ mod tests {
         fn choose(&self, _prompt: &str, _items: &[String]) -> Result<Option<usize>> {
             Ok(None)
         }
-
-        fn edit(&self, _initial: &str) -> Result<Option<String>> {
-            Ok(None)
-        }
     }
 
     /// 固定的加载器版本，供测试断言"默认值被预填"。

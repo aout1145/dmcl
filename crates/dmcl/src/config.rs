@@ -328,7 +328,7 @@ pub fn display_value(value: &serde_json::Value) -> String {
     }
 }
 
-/// 对象 / 数组类型的值（按 JSON 编辑，支持多行）。
+/// 对象 / 数组类型的值（结构化字段，**不支持**在交互编辑器里修改）。
 pub fn is_json_value(value: &serde_json::Value) -> bool {
     matches!(
         value,
@@ -337,6 +337,8 @@ pub fn is_json_value(value: &serde_json::Value) -> bool {
 }
 
 /// 把编辑后的文本解析成 JSON 值：类型按 `current` 推断（字符串不加引号、布尔写 true/false）。
+///
+/// 只处理标量；结构化值（对象 / 数组）不走这里。
 pub fn parse_edited_value(text: &str, current: &serde_json::Value) -> Result<serde_json::Value> {
     match current {
         serde_json::Value::String(_) | serde_json::Value::Null => {
@@ -362,14 +364,9 @@ pub fn parse_edited_value(text: &str, current: &serde_json::Value) -> Result<ser
             }
         }
         serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-            serde_json::from_str(text).with_context(|| "需要合法的 JSON")
+            Err(anyhow!("结构化配置项不能在这里修改"))
         }
     }
-}
-
-/// 对象 / 数组值编辑时的初始文本（多行 JSON）。
-pub fn pretty_json(value: &serde_json::Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
 /// 让 `dmcl-install` 用配置里的 java 选择去跑安装器 processor。
@@ -552,11 +549,8 @@ mod tests {
         assert_eq!(parse_edited_value(" 42 ", &json!(0)).unwrap(), json!(42));
         assert!(parse_edited_value("abc", &json!(0)).is_err());
         assert!(parse_edited_value("maybe", &json!(true)).is_err());
-        assert_eq!(
-            parse_edited_value(r#"{"a":"b"}"#, &json!({})).unwrap(),
-            json!({"a": "b"})
-        );
-        assert!(parse_edited_value("not json", &json!({})).is_err());
+        // 结构化值不走这里（编辑器直接提示无法修改）
+        assert!(parse_edited_value(r#"{"a":"b"}"#, &json!({})).is_err());
     }
 
     #[test]

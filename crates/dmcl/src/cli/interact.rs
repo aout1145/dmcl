@@ -9,7 +9,7 @@ use std::fmt;
 use anyhow::Result;
 use dialoguer::console::Term;
 use dialoguer::theme::Theme;
-use dialoguer::{Confirm, Editor, Input, Select};
+use dialoguer::{Confirm, Input, Select};
 
 /// 跟终端打交道的方式。
 pub(crate) trait Prompter {
@@ -21,10 +21,6 @@ pub(crate) trait Prompter {
     fn ask_flag(&self, label: &str) -> Result<bool>;
     /// 从若干项里选一个。`Ok(None)` = 用户按 Esc 退出。
     fn choose(&self, prompt: &str, items: &[String]) -> Result<Option<usize>>;
-    /// 用外部编辑器编辑一段（可能多行的）文本。
-    ///
-    /// `Ok(None)` = 没有改动（或用户没保存）。
-    fn edit(&self, initial: &str) -> Result<Option<String>>;
 }
 
 /// 真实终端上的提问。
@@ -62,11 +58,6 @@ impl Prompter for TerminalPrompter {
             .items(items)
             .default(0)
             .interact_opt()?)
-    }
-
-    fn edit(&self, initial: &str) -> Result<Option<String>> {
-        // 外编辑器走 `$VISUAL` / `$EDITOR`（Windows 回落到 notepad），天然支持多行
-        Ok(Editor::new().trim_newlines(false).edit(initial)?)
     }
 }
 
