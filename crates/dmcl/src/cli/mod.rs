@@ -3,37 +3,29 @@
 //! 参数解析 / `--help` 交给 [`clap`] derive；交互式菜单交给 [`dialoguer`]。
 //!
 //! 前端的职责只有三件：把配置翻译成各 crate 的 `*Options`、打印事件流、显示结果
-//! —— 业务逻辑都在 `dmcl-*` 里。
+//! —— 业务逻辑都在 `dmcl-*` 里。命令定义、本地化与分发留在本模块；
+//! 各命令的实现按文件拆在 `commands` 子模块下。
 
+mod commands;
+mod interact;
 mod progress;
 mod prompt;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use dialoguer::Confirm;
-
-use dmcl_install::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
-use dmcl_launch::{find_java, JavaChoice, DEFAULT_JAVA_ROOTS, LAUNCHER_NAME, LAUNCHER_VERSION};
-use dmcl_task::TaskEvent;
 
 use crate::config::Config;
 
-use progress::ProgressPrinter;
 pub use prompt::prompt_interactive;
 
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
 #[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
 pub struct Cli {
-    /// 用这个 java，并把它记进命名 java 配置
-    #[arg(long, global = true, value_name = "JAVA")]
-    pub java: Option<String>,
-
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -50,12 +42,12 @@ pub struct Cli {
 const HELP_TEMPLATE_WITH_POSITIONALS: &str =
     "{about-with-newline}\n用法：{usage}\n\n位置参数：\n{positionals}\n\n选项：\n{options}{after-help}";
 
-/// 没有位置参数的命令（`list-mc`、`search-java` …）—— 不打出空的小节。
+/// 没有位置参数的命令（`list-mc`、`config` …）—— 不打出空的小节。
 const HELP_TEMPLATE_WITHOUT_POSITIONALS: &str =
     "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}{after-help}";
 
-/// 根命令：额外列出子命令。
-const HELP_TEMPLATE_ROOT: &str =
+/// 带子命令的命令（根命令与 `java`）—— 额外列出子命令。
+const HELP_TEMPLATE_WITH_SUBCOMMANDS: &str =
     "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}\n\n命令：\n{subcommands}{after-help}";
 
 impl Cli {
@@ -116,14 +108,17 @@ fn translate_error(err: &clap::Error) -> Option<String> {
     }
 }
 
-/// 把 clap 自动生成的英文说明换成中文。
+/// 把 clap 自动生成的英文说明换成中文（递归处理子命令）。
 fn localized_command() -> clap::Command {
     fn localize(mut command: clap::Command) -> clap::Command {
-        // `--help` / `--version` 是 clap 在 build 阶段补进命令树的，
+        // `--help` / `--version` / `help` 子命令是 clap 在 build 阶段补进命令树的，
         // 先 build 一次才能改到它们
         command.build();
+        let has_subcommands = command.get_subcommands().next().is_some();
         let has_positionals = command.get_positionals().next().is_some();
-        let template = if has_positionals {
+        let template = if has_subcommands {
+            HELP_TEMPLATE_WITH_SUBCOMMANDS
+        } else if has_positionals {
             HELP_TEMPLATE_WITH_POSITIONALS
         } else {
             HELP_TEMPLATE_WITHOUT_POSITIONALS
@@ -136,31 +131,25 @@ fn localized_command() -> clap::Command {
         if command.get_arguments().any(|arg| arg.get_id() == "version") {
             command = command.mut_arg("version", |arg| arg.help("打印版本信息"));
         }
+
+        // 递归处理子命令（`java` 的 list/search/… 也要中文化）
+        let names: Vec<String> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+        for name in names {
+            if name == "help" {
+                command = command.mut_subcommand("help", |sub| {
+                    sub.about("打印帮助信息（也可查询某个子命令的帮助）")
+                });
+            } else {
+                command = command.mut_subcommand(name, localize);
+            }
+        }
         command
     }
 
-    let root = Cli::command();
-    // 先 build 一次：`--help` / `--version` / `help` 子命令都是 clap 在这个阶段补进去的
-    let mut root = root;
-    root.build();
-
-    let names: Vec<String> = root
-        .get_subcommands()
-        .map(|sub| sub.get_name().to_string())
-        .collect();
-
-    root = localize(root).help_template(HELP_TEMPLATE_ROOT);
-    for name in names {
-        if name == "help" {
-            // clap 自动加的 `help` 子命令，说明也得换掉
-            root = root.mut_subcommand("help", |command| {
-                command.about("打印帮助信息（也可查询某个子命令的帮助）")
-            });
-        } else {
-            root = root.mut_subcommand(name, localize);
-        }
-    }
-    root
+    localize(Cli::command())
 }
 
 /// 全部子命令。
@@ -168,42 +157,43 @@ fn localized_command() -> clap::Command {
 pub enum Commands {
     /// 启动游戏
     Launch {
-        /// 本地版本目录名（versions/<名字>）
+        /// 本地版本名
         #[arg(value_name = "version-name")]
         vername: String,
     },
 
     /// 安装游戏
     Install {
-        /// Minecraft 版本号（如 1.20.1）
+        /// Minecraft 版本号
         #[arg(value_name = "mc-version-id")]
         version_id: String,
-        /// 本地版本目录名（versions/<名字>）
-        #[arg(value_name = "version-name")]
-        version_name: String,
-        /// 顺便装 Forge
+        /// 安装 Forge
         #[arg(long)]
         forge: bool,
-        /// 顺便装 NeoForge
+        /// 安装 NeoForge
         #[arg(long)]
         neoforge: bool,
-        /// 顺便装 Fabric
+        /// 安装 Fabric
         #[arg(long)]
         fabric: bool,
-        /// 指定 Forge 版本（默认取最新）
+        /// Forge 版本
         #[arg(long, value_name = "version")]
         forge_version: Option<String>,
-        /// 指定 NeoForge 版本（默认取最新）
+        /// NeoForge 版本
         #[arg(long, value_name = "version")]
         neoforge_version: Option<String>,
-        /// 指定 Fabric loader 版本（默认取最新稳定版）
+        /// Fabric loader 版本
         #[arg(long, value_name = "version")]
         fabric_version: Option<String>,
+        /// 本地版本名
+        // 放在加载器参数之后：这样 prompt 问到它时已经知道加载器版本，能预填默认名
+        #[arg(value_name = "version-name")]
+        version_name: Option<String>,
     },
 
     /// 列出 Minecraft 版本
     ListMc {
-        /// 版本类型，逗号分隔（如 release,snapshot；默认 release）
+        /// 版本类型，逗号分隔
         #[arg(
             long = "type",
             value_name = "type",
@@ -216,7 +206,7 @@ pub enum Commands {
 
     /// 列出 Forge 版本
     ListForge {
-        /// Minecraft 版本号（如 1.20.1）
+        /// Minecraft 版本号
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
@@ -224,41 +214,23 @@ pub enum Commands {
     /// 列出 NeoForge 版本
     #[command(name = "list-neoforge")]
     ListNeoforge {
-        /// Minecraft 版本号（如 1.20.1）
+        /// Minecraft 版本号
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
 
     /// 列出 Fabric 版本
     ListFabric {
-        /// Minecraft 版本号（如 1.20.1）
+        /// Minecraft 版本号
         #[arg(value_name = "mc-version-id")]
         verid: String,
     },
 
-    /// 在指定版本上安装 Forge
-    InstallForge {
-        /// 本地版本目录名（versions/<名字>）
-        #[arg(value_name = "version-name")]
-        vername: String,
-        /// Forge 版本号
-        #[arg(value_name = "forge-version-id")]
-        forgever: String,
+    /// 管理本机 java
+    Java {
+        #[command(subcommand)]
+        action: Option<JavaCommand>,
     },
-
-    /// 在指定版本上安装 NeoForge
-    #[command(name = "install-neoforge")]
-    InstallNeoforge {
-        /// 本地版本目录名（versions/<名字>）
-        #[arg(value_name = "version-name")]
-        vername: String,
-        /// NeoForge 版本号
-        #[arg(value_name = "neoforge-version-id")]
-        forgever: String,
-    },
-
-    /// 自动搜索本机 java
-    SearchJava,
 
     /// 交互式菜单
     Prompt,
@@ -266,26 +238,43 @@ pub enum Commands {
     /// 显示版本
     Version,
 
-    /// 显示配置
+    /// 查看或编辑配置
     #[command(name = "config")]
-    ShowConfig,
+    Config,
+}
 
-    /// 给出配置文件位置
-    EditConfig,
+/// `java` 的子命令。不给子命令时进交互菜单。
+#[derive(Subcommand, Debug)]
+pub enum JavaCommand {
+    /// 列出已配置的 java
+    List,
+    /// 搜索本机 java 并写入配置
+    Search,
+    /// 手动添加 java
+    Add {
+        /// java 可执行文件路径
+        #[arg(value_name = "path")]
+        path: PathBuf,
+        /// 配置项名字
+        #[arg(value_name = "name")]
+        name: Option<String>,
+    },
+    /// 删除 java 配置
+    Remove {
+        /// 配置项名字
+        #[arg(value_name = "name")]
+        name: String,
+    },
+    /// 选择使用的 java
+    Use {
+        /// 配置项名字或 autoselect
+        #[arg(value_name = "name")]
+        name: String,
+    },
 }
 
 /// 命令行前端的入口。
 pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
-    // `--java` 在命令执行前生效（只改内存里的配置）
-    if let Some(java) = cli.java.clone() {
-        // java 的**路径**同时充当配置项的名字
-        config
-            .launch
-            .java_configs
-            .insert(java.clone(), PathBuf::from(&java));
-        config.launch.java = JavaChoice::Named(java);
-    }
-
     match cli.command {
         Some(command) => dispatch(command, config).await,
         None => {
@@ -310,10 +299,8 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
 }
 
 async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
-    let source = config.download_source();
-
     match command {
-        Commands::Launch { vername } => launch(&vername, config).await,
+        Commands::Launch { vername } => commands::launch::run(&vername, config).await,
 
         Commands::Install {
             version_id,
@@ -325,178 +312,32 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
             neoforge_version,
             fabric_version,
         } => {
-            let mut spec = InstallSpec::new(version_id, version_name);
-            if forge {
-                spec = spec.with_loader(LoaderKind::Forge, forge_version);
-            }
-            if neoforge {
-                spec = spec.with_loader(LoaderKind::NeoForge, neoforge_version);
-            }
-            if fabric {
-                spec = spec.with_loader(LoaderKind::Fabric, fabric_version);
-            }
-            let options = Arc::new(config.install_options(source));
-            let mut printer = ProgressPrinter::new();
-            let result = install_task(options, spec)
-                .run_with((), |event| handle_event(&mut printer, event))
-                .await;
-            printer.finish();
-            result
-        }
-
-        Commands::ListMc { r#type } => {
-            let manifest = source.fetch_version_manifest().await?;
-            // 从新到旧输出
-            for version in manifest.filter_kinds(&r#type).rev() {
-                println!("{} {}", version.kind, version.id);
-            }
-            Ok(())
-        }
-
-        Commands::ListForge { verid } => {
-            let mut versions = source.fetch_forge_versions(&verid).await?;
-            versions.sort_by_key(|entry| entry.build);
-            for version in versions {
-                println!("{}", version.full_name());
-            }
-            Ok(())
-        }
-
-        Commands::ListNeoforge { verid } => {
-            for version in source.fetch_neoforge_versions(&verid).await? {
-                println!("{version}");
-            }
-            Ok(())
-        }
-
-        Commands::ListFabric { verid } => {
-            let loaders = source.fetch_fabric_loaders(&verid).await?;
-            for entry in loaders.iter().rev() {
-                println!(
-                    "{verid}/{}{}",
-                    entry.loader.version,
-                    if entry.loader.is_stable() {
-                        "(recommanded)"
-                    } else {
-                        ""
-                    }
-                );
-            }
-            Ok(())
-        }
-
-        Commands::InstallForge { vername, forgever } => {
-            install_loader(&vername, forgever, LoaderKind::Forge, config).await
-        }
-
-        Commands::InstallNeoforge { vername, forgever } => {
-            install_loader(&vername, forgever, LoaderKind::NeoForge, config).await
-        }
-
-        Commands::SearchJava => search_java(config).await,
-
-        Commands::Prompt => prompt_interactive().await,
-
-        Commands::Version => {
-            let suffix = if cfg!(debug_assertions) {
-                " (debug)"
-            } else {
-                ""
+            let args = commands::install::InstallArgs {
+                version_id,
+                version_name,
+                forge,
+                neoforge,
+                fabric,
+                forge_version,
+                neoforge_version,
+                fabric_version,
             };
-            println!("{LAUNCHER_NAME} 版本 {LAUNCHER_VERSION}{suffix}");
-            println!("构建时间：{}", env!("DMCL_BUILD_TIME"));
-            println!();
-            println!("感谢：bmclapi");
-            Ok(())
+            commands::install::run(args, config).await
         }
 
-        Commands::ShowConfig => {
-            config.show();
-            Ok(())
-        }
+        Commands::ListMc { r#type } => commands::list::mc(config, &r#type).await,
+        Commands::ListForge { verid } => commands::list::forge(config, &verid).await,
+        Commands::ListNeoforge { verid } => commands::list::neoforge(config, &verid).await,
+        Commands::ListFabric { verid } => commands::list::fabric(config, &verid).await,
 
-        Commands::EditConfig => {
-            println!("提示：编辑 {}", Config::path().display());
-            Ok(())
-        }
+        Commands::Java { action } => commands::java::run(action, config).await,
+
+        Commands::Prompt => prompt_interactive(config.download_source()).await,
+
+        Commands::Version => commands::version::run().await,
+
+        Commands::Config => commands::config::run(config).await,
     }
-}
-
-/// 渲染一条任务事件；遇到**警告**就询问用户，让它决定继续还是中止。
-fn handle_event(printer: &mut ProgressPrinter, event: TaskEvent) {
-    let warning = match &event {
-        TaskEvent::Warning {
-            message, decision, ..
-        } => Some((message.clone(), decision.clone())),
-        _ => None,
-    };
-    printer.handle(event);
-
-    if let Some((message, decision)) = warning {
-        let proceed = if printer.is_interactive() {
-            Confirm::new()
-                .with_prompt(format!("⚠ {message}\n是否继续？"))
-                .default(true)
-                .interact()
-                .unwrap_or(true)
-        } else {
-            true
-        };
-        if proceed {
-            decision.accept();
-        } else {
-            decision.abort();
-        }
-    }
-}
-
-/// `launch` —— 检查完整性 →（缺件则补全）→ 生成启动参数 → 启动子进程，等游戏退出。
-///
-/// 整条「检查并补全 → 生成参数 → 启动」链由 `dmcl-launch` 的 [`dmcl_launch::launch_chain`] 组装，
-/// 这里负责显示进度，并在拿到**未 wait** 的 `GameMonitor` 后等它退出。
-async fn launch(vername: &str, config: &mut Config) -> Result<()> {
-    let source = config.download_source();
-    let option = config.launch_option(config.account(), vername);
-    let install = Arc::new(config.install_options(source));
-
-    let mut printer = ProgressPrinter::new();
-    let mut monitor = dmcl_launch::launch_chain(option, install)
-        .run_with((), |event| handle_event(&mut printer, event))
-        .await?;
-    printer.finish();
-
-    monitor.wait().await?;
-    Ok(())
-}
-
-/// `install-forge` / `install-neoforge`：在已有版本上装加载器再补齐文件。
-async fn install_loader(
-    vername: &str,
-    loader_version: String,
-    kind: LoaderKind,
-    config: &Config,
-) -> Result<()> {
-    let options = Arc::new(config.install_options(config.download_source()));
-    let request = LoaderRequest::version(kind, loader_version);
-    let mut printer = ProgressPrinter::new();
-    let result = install_loader_task(options, vername.to_string(), vername.to_string(), request)
-        .run_with((), |event| handle_event(&mut printer, event))
-        .await;
-    printer.finish();
-    result
-}
-
-/// `search-java` —— 扫描并**写回配置**（这是前端才有权做的事）。
-async fn search_java(config: &mut Config) -> Result<()> {
-    println!("找到以下 java：");
-    let configs = find_java(DEFAULT_JAVA_ROOTS).await?;
-    for (name, path) in &configs {
-        println!("{name}: {}", path.display());
-    }
-    config.launch.java_configs = configs;
-    config.launch.java = JavaChoice::Auto;
-    config.save().await?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -515,15 +356,24 @@ mod tests {
             "list-forge",
             "list-neoforge",
             "list-fabric",
-            "install-forge",
-            "install-neoforge",
-            "search-java",
+            "java",
             "prompt",
             "version",
             "config",
-            "edit-config",
         ] {
             assert!(names.contains(&expected), "缺少命令 {expected}: {names:?}");
+        }
+        // 删掉的命令不该再出现
+        for removed in [
+            "install-forge",
+            "install-neoforge",
+            "search-java",
+            "edit-config",
+        ] {
+            assert!(
+                !names.contains(&removed),
+                "不该还有命令 {removed}: {names:?}"
+            );
         }
     }
 
@@ -537,12 +387,18 @@ mod tests {
     }
 
     #[test]
-    fn global_options_are_accepted_in_any_position() {
-        let cli = Cli::try_parse_from(["dmcl", "launch", "--java", "/opt/java/bin/java", "1.20.1"])
-            .unwrap();
-        assert_eq!(cli.java.as_deref(), Some("/opt/java/bin/java"));
+    fn install_version_name_is_optional() {
+        let cli = Cli::try_parse_from(["dmcl", "install", "1.20.1"]).unwrap();
         match cli.command {
-            Some(Commands::Launch { vername }) => assert_eq!(vername, "1.20.1"),
+            Some(Commands::Install { version_name, .. }) => assert!(version_name.is_none()),
+            other => panic!("解析结果不对: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["dmcl", "install", "1.20.1", "my-name"]).unwrap();
+        match cli.command {
+            Some(Commands::Install { version_name, .. }) => {
+                assert_eq!(version_name.as_deref(), Some("my-name"));
+            }
             other => panic!("解析结果不对: {other:?}"),
         }
     }
@@ -569,6 +425,23 @@ mod tests {
                 assert!(forge);
                 assert!(!neoforge);
                 assert_eq!(forge_version.as_deref(), Some("47.2.0"));
+            }
+            other => panic!("解析结果不对: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn java_subcommands_parse() {
+        let cli = Cli::try_parse_from(["dmcl", "java"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Java { action: None })));
+
+        let cli = Cli::try_parse_from(["dmcl", "java", "add", "/usr/bin/java"]).unwrap();
+        match cli.command {
+            Some(Commands::Java {
+                action: Some(JavaCommand::Add { path, name }),
+            }) => {
+                assert_eq!(path, PathBuf::from("/usr/bin/java"));
+                assert!(name.is_none());
             }
             other => panic!("解析结果不对: {other:?}"),
         }
@@ -603,6 +476,31 @@ mod tests {
         }
         assert!(install_help.contains("位置参数："));
         assert!(install_help.contains("Minecraft 版本号"));
+
+        // 带子命令的命令（`java`）要列出子命令，且子命令的帮助也中文化
+        let root_help_java = root
+            .find_subcommand("java")
+            .unwrap()
+            .clone()
+            .render_long_help()
+            .to_string();
+        assert!(root_help_java.contains("命令："));
+        assert!(root_help_java.contains("search"));
+
+        let java_list_help = root
+            .find_subcommand("java")
+            .unwrap()
+            .find_subcommand("list")
+            .unwrap()
+            .clone()
+            .render_long_help()
+            .to_string();
+        for english in ["Usage:", "Options:", "Print help"] {
+            assert!(
+                !java_list_help.contains(english),
+                "java list 帮助里残留 {english}:\n{java_list_help}"
+            );
+        }
     }
 
     /// clap 的报错也要是中文。
@@ -612,7 +510,7 @@ mod tests {
 
         let err = command
             .clone()
-            .try_get_matches_from(["dmcl", "install"])
+            .try_get_matches_from(["dmcl", "list-forge"])
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
         let message = translate_error(&err).expect("应当翻译成中文");

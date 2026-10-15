@@ -49,27 +49,11 @@ impl std::fmt::Display for LoaderKind {
 #[derive(Debug, Clone)]
 pub struct LoaderRequest {
     pub kind: LoaderKind,
-    /// 想要的加载器版本；`None` 表示"自动取最新"。
-    pub version: Option<String>,
+    /// 要安装的加载器版本（调用者负责确定具体版本，`dmcl-install` 不查最新）。
+    pub version: String,
 }
 
 impl LoaderRequest {
-    /// 装最新版。
-    pub fn latest(kind: LoaderKind) -> Self {
-        Self {
-            kind,
-            version: None,
-        }
-    }
-
-    /// 装指定版本。
-    pub fn version(kind: LoaderKind, version: impl Into<String>) -> Self {
-        Self {
-            kind,
-            version: Some(version.into()),
-        }
-    }
-
     /// 变成对应加载器的安装任务链。
     pub fn task(
         &self,
@@ -82,12 +66,8 @@ impl LoaderRequest {
             LoaderKind::Fabric => {
                 install_fabric_task(options, name, mc_version, self.version.clone())
             }
-            LoaderKind::Forge => {
-                install_forge_task(options, name, mc_version, self.version.clone())
-            }
-            LoaderKind::NeoForge => {
-                install_neoforge_task(options, name, mc_version, self.version.clone())
-            }
+            LoaderKind::Forge => install_forge_task(options, name, self.version.clone()),
+            LoaderKind::NeoForge => install_neoforge_task(options, name, self.version.clone()),
         }
     }
 }
@@ -113,25 +93,23 @@ impl InstallSpec {
     }
 
     /// 追加一个加载器请求。
-    pub fn with_loader(mut self, kind: LoaderKind, version: Option<String>) -> Self {
-        self.loaders.push(LoaderRequest { kind, version });
+    pub fn with_loader(mut self, kind: LoaderKind, version: impl Into<String>) -> Self {
+        self.loaders.push(LoaderRequest {
+            kind,
+            version: version.into(),
+        });
         self
     }
 
-    /// 追加"装最新版"的加载器请求。
-    pub fn with_latest_loader(self, kind: LoaderKind) -> Self {
-        self.with_loader(kind, None)
-    }
-
-    pub fn with_fabric(self, version: Option<String>) -> Self {
+    pub fn with_fabric(self, version: impl Into<String>) -> Self {
         self.with_loader(LoaderKind::Fabric, version)
     }
 
-    pub fn with_forge(self, version: Option<String>) -> Self {
+    pub fn with_forge(self, version: impl Into<String>) -> Self {
         self.with_loader(LoaderKind::Forge, version)
     }
 
-    pub fn with_neoforge(self, version: Option<String>) -> Self {
+    pub fn with_neoforge(self, version: impl Into<String>) -> Self {
         self.with_loader(LoaderKind::NeoForge, version)
     }
 }
@@ -172,27 +150,6 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
     )
 }
 
-/// 在**已有**的版本上装一个加载器，然后补齐文件。
-///
-/// 客户端 jar 同样先确保就位（如果版本已经装过，这一步会被「已是最新」跳过）。
-pub fn install_loader_task(
-    options: Arc<InstallOptions>,
-    version_name: String,
-    mc_version: String,
-    request: LoaderRequest,
-) -> TaskChain<(), ()> {
-    TaskChain::new(format!("安装 {}", request.kind.display_name()))
-        .then(
-            client_jar_task(options.clone(), version_name.clone()),
-            "下载客户端 jar",
-        )
-        .then(
-            request.task(options.clone(), version_name.clone(), mc_version),
-            format!("安装 {}", request.kind.display_name()),
-        )
-        .then(game_files_task(options, version_name), "下载游戏文件")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,18 +165,18 @@ mod tests {
     #[test]
     fn specs_collect_loader_requests_in_order() {
         let spec = InstallSpec::new("1.20.1", "1.20.1")
-            .with_latest_loader(LoaderKind::Fabric)
-            .with_loader(LoaderKind::Forge, Some("47.2.0".to_string()));
+            .with_fabric("0.15.0")
+            .with_loader(LoaderKind::Forge, "47.2.0");
         assert_eq!(spec.loaders.len(), 2);
         assert_eq!(spec.loaders[0].kind, LoaderKind::Fabric);
-        assert!(spec.loaders[0].version.is_none());
-        assert_eq!(spec.loaders[1].version.as_deref(), Some("47.2.0"));
+        assert_eq!(spec.loaders[0].version, "0.15.0");
+        assert_eq!(spec.loaders[1].version, "47.2.0");
         assert_eq!(LoaderKind::NeoForge.to_string(), "neoforge");
     }
 
     #[test]
     fn the_install_chain_has_one_step_per_phase() {
-        let spec = InstallSpec::new("1.20.1", "1.20.1").with_fabric(None);
+        let spec = InstallSpec::new("1.20.1", "1.20.1").with_fabric("0.15.0");
         let chain = install_task(options(), spec);
         let steps: Vec<&str> = chain.step_names().collect();
         // 客户端 jar 必须先于加载器：Forge/NeoForge 的 processor 要读它
@@ -233,17 +190,5 @@ mod tests {
             ]
         );
         assert_eq!(chain.name(), "安装 1.20.1");
-    }
-
-    #[test]
-    fn the_loader_chain_installs_then_downloads() {
-        let chain = install_loader_task(
-            options(),
-            "1.20.1".to_string(),
-            "1.20.1".to_string(),
-            LoaderRequest::version(LoaderKind::Forge, "47.2.0"),
-        );
-        let steps: Vec<&str> = chain.step_names().collect();
-        assert_eq!(steps, vec!["下载客户端 jar", "安装 Forge", "下载游戏文件"]);
     }
 }

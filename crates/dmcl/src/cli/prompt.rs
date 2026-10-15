@@ -7,34 +7,39 @@
 //!
 //! 拆成三块，便于在没有终端的环境里验证：
 //!
-//! * [`Prompter`]：只管"跟终端打交道"；真实实现是 [`TerminalPrompter`]（dialoguer），
-//!   测试里换成脚本化回答；
-//! * [`build_argv`]：纯逻辑 —— 按 `clap` 的参数表逐个提问、拼出命令行，
-//!   留空怎么处理、哪些参数不再追问都在这里，有单测；
+//! * [`Prompter`]（见 [`crate::cli::interact`]）：只管"跟终端打交道"；
+//!   真实实现是 `TerminalPrompter`（dialoguer），测试里换成脚本化回答；
+//! * [`build_argv`]：异步纯逻辑 —— 按 `clap` 的参数表逐个提问、拼出命令行，
+//!   留空怎么处理、哪些参数不再追问、加载器版本的默认值都在这里，有单测；
 //! * [`prompt_interactive`]：菜单主循环 + 用拼好的命令行重新执行自己。
 //!
 //! # 行为
 //!
-//! 行为：循环展示命令、回车选择、逐参数提问、再用启动器自己重新执行。几个体验细节：
-//!
-//! * **提示语全中文**：包括 dialoguer 自带的英文渲染（`[y/N]`、`error: …`），
-//!   见 [`ChineseTheme`]；
-//! * **可选参数可以留空**：值参数直接回车就是"不要这个参数"，
+//! * **提示语全中文**：包括 dialoguer 自带的英文渲染（`[y/N]`、`error: …`）；
+//! * **默认值预填进输入框**：值参数有默认值时直接填在输入框里，回车即接受（不再在
+//!   标签里写「（默认 …）」）；加载器版本（`--forge-version` 等）会按已经填好的 mc
+//!   版本**现场查最新**再预填；
+//! * **可选参数可以留空**：值参数清空后回车就是"不要这个参数"，
 //!   不会再拼出一个空值（比如 `--forge-version=`）让 clap 报错；
 //! * **必填参数留空会重新追问**，并给出中文说明（而不是沉默地重刷一次提问）。
 
-use std::fmt;
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use clap::CommandFactory;
-use dialoguer::console::Term;
-use dialoguer::theme::Theme;
-use dialoguer::{Confirm, Input, Select};
 
+use dmcl_install::LoaderKind;
+use dmcl_mcmeta::fabric::latest_fabric_loader;
+use dmcl_mcmeta::forge::latest_forge_version;
+use dmcl_mcmeta::neoforge::latest_neoforge_version;
+use dmcl_mcmeta::source::DownloadSource;
+use dmcl_task::BoxFuture;
+
+use super::interact::{clear_screen, is_terminal, Prompter, TerminalPrompter};
 use super::Cli;
 
 /// 全局参数，不值得逐个提问。
-const SKIPPED_ARGS: &[&str] = &["help", "java", "mirror", "version"];
+const SKIPPED_ARGS: &[&str] = &["help", "version"];
 
 /// 必填参数被反复留空时最多追问几次（之后交给 clap 报错，避免死循环）。
 const MAX_REQUIRED_ATTEMPTS: usize = 3;
@@ -69,21 +74,6 @@ fn append_answer(argv: &mut Vec<String>, long: Option<&str>, takes_value: bool, 
     }
 }
 
-/// 值参数的提问标签：优先用命令里的中文说明，并提示"默认值"或"可留空"。
-fn value_label(arg: &clap::Arg, default: &str, required: bool) -> String {
-    let name = arg
-        .get_help()
-        .map(|help| help.to_string())
-        .unwrap_or_else(|| arg.get_id().to_string());
-    if !default.is_empty() {
-        format!("{name}（默认 {default}）")
-    } else if required {
-        name
-    } else {
-        format!("{name}（可留空跳过）")
-    }
-}
-
 /// 这个参数还要不要问。
 ///
 /// 关掉的开关，它的细节参数就不再追问了：`--forge` 选了"否"，
@@ -94,69 +84,97 @@ fn should_ask(id: &str, disabled: &[String]) -> bool {
         .any(|prefix| id.starts_with(prefix.as_str()))
 }
 
-// ---------------------------------------------------------------------------
-// 提问：接口 + 真实实现
-// ---------------------------------------------------------------------------
+/// 这个参数是不是某个加载器的版本（`forge_version` → `Forge`）。
+fn loader_kind_for(id: &str) -> Option<LoaderKind> {
+    match id {
+        "forge_version" => Some(LoaderKind::Forge),
+        "neoforge_version" => Some(LoaderKind::NeoForge),
+        "fabric_version" => Some(LoaderKind::Fabric),
+        _ => None,
+    }
+}
 
-/// 跟终端打交道的方式。
+/// 这个开关是不是某个加载器（`forge` → `Forge`）。
+fn loader_flag_kind(id: &str) -> Option<LoaderKind> {
+    match id {
+        "forge" => Some(LoaderKind::Forge),
+        "neoforge" => Some(LoaderKind::NeoForge),
+        "fabric" => Some(LoaderKind::Fabric),
+        _ => None,
+    }
+}
+
+/// 按 mc 版本 + 已启用的加载器拼出默认的版本目录名（规则与 `install` 命令一致）。
 ///
-/// 抽出来是为了让 [`build_argv`] 能在没有终端的环境里被验证：
-/// 真实实现是 [`TerminalPrompter`]，测试里换成脚本化回答。
-trait Prompter {
-    /// 问一个值参数。`Ok(None)` = 直接回车留空。
-    fn ask_value(&self, label: &str, default: &str) -> Result<Option<String>>;
-    /// 问一个开关参数。
-    fn ask_flag(&self, label: &str) -> Result<bool>;
-    /// 选一个子命令。`Ok(None)` = 用户退出。
-    fn choose(&self, prompt: &str, items: &[String]) -> Result<Option<usize>>;
-}
-
-/// 真实终端上的提问。
-struct TerminalPrompter;
-
-impl Prompter for TerminalPrompter {
-    fn ask_value(&self, label: &str, default: &str) -> Result<Option<String>> {
-        // **`allow_empty(true)` 不能省**：dialoguer 默认 `permit_empty = false`，
-        // 而它"不允许空输入"的方式是直接 `continue` —— 既不报错也不给提示，
-        // 只是把提问原样重新渲染一遍（dialoguer 0.11.0 `prompts/input.rs`）。
-        // 用起来就是"必须输入某个值才能按回车"，且看不出任何原因。
-        let mut input = Input::<String>::with_theme(&THEME)
-            .allow_empty(true)
-            // 标签里已经写了"（默认 …）"，不必让 dialoguer 再渲染一遍 `[值]: `
-            .show_default(false)
-            .with_prompt(label);
-        if !default.is_empty() {
-            input = input.default(default.to_string());
+/// 某个加载器没给出具体版本时只写加载器名（`1.20.1-forge`），不硬凑一个版本号。
+fn compose_version_name(
+    mc_version: &str,
+    loaders: &[LoaderKind],
+    answers: &BTreeMap<String, String>,
+) -> String {
+    let mut name = mc_version.to_string();
+    for kind in loaders {
+        name.push('-');
+        name.push_str(kind.as_str());
+        if let Some(version) = answers.get(&format!("{}_version", kind.as_str())) {
+            name.push('-');
+            name.push_str(version);
         }
-        // 首尾空白一并去掉：只敲了空格再回车同样算留空
-        let value = input.interact_text()?.trim().to_string();
-        Ok(if value.is_empty() { None } else { Some(value) })
     }
+    name
+}
 
-    fn ask_flag(&self, label: &str) -> Result<bool> {
-        Ok(Confirm::with_theme(&THEME)
-            .with_prompt(format!("{label}？"))
-            .default(false)
-            .interact()?)
-    }
+// ---------------------------------------------------------------------------
+// 加载器版本解析
+// ---------------------------------------------------------------------------
 
-    fn choose(&self, prompt: &str, items: &[String]) -> Result<Option<usize>> {
-        Ok(Select::with_theme(&THEME)
-            .with_prompt(prompt)
-            .items(items)
-            .default(0)
-            .interact_opt()?)
+/// 现场查加载器最新版本（给 prompt 预填默认值用）。
+trait LoaderVersions {
+    fn latest<'a>(&'a self, kind: LoaderKind, mc_version: &'a str)
+        -> BoxFuture<'a, Result<String>>;
+}
+
+/// 走配置里的下载源查最新版。
+struct RemoteLoaderVersions {
+    source: DownloadSource,
+}
+
+impl LoaderVersions for RemoteLoaderVersions {
+    fn latest<'a>(
+        &'a self,
+        kind: LoaderKind,
+        mc_version: &'a str,
+    ) -> BoxFuture<'a, Result<String>> {
+        Box::pin(async move {
+            match kind {
+                LoaderKind::Fabric => latest_fabric_loader(&self.source, mc_version).await,
+                LoaderKind::Forge => latest_forge_version(&self.source, mc_version).await,
+                LoaderKind::NeoForge => latest_neoforge_version(&self.source, mc_version).await,
+            }
+        })
     }
 }
+
+// ---------------------------------------------------------------------------
+// 拼命令行
+// ---------------------------------------------------------------------------
 
 /// 逐个参数提问，拼出一条完整的命令行（第一个元素是子命令名）。
 ///
-/// 纯逻辑，不碰终端：留空算跳过还是算无效输入、关掉的开关要不要继续追问，
-/// 都在这一个函数里决定。
-fn build_argv(subcommand: &clap::Command, prompter: &dyn Prompter) -> Result<Vec<String>> {
+/// 纯逻辑（除了加载器版本要联网查），不碰终端：留空算跳过还是算无效输入、
+/// 关掉的开关要不要继续追问、加载器版本默认值怎么来，都在这一个函数里决定。
+async fn build_argv(
+    subcommand: &clap::Command,
+    prompter: &dyn Prompter,
+    loaders: &dyn LoaderVersions,
+) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![subcommand.get_name().to_string()];
     // 被关掉的开关；它的细节参数之后不再追问
     let mut disabled: Vec<String> = Vec::new();
+    // 已经填过的值，按参数 id 记下来（加载器版本要看 mc 版本、版本目录名要看加载器）
+    let mut answers: BTreeMap<String, String> = BTreeMap::new();
+    // 已经启用的加载器（按参数声明顺序），给版本目录名的默认值用
+    let mut enabled_loaders: Vec<LoaderKind> = Vec::new();
 
     for arg in subcommand.get_arguments() {
         let id = arg.get_id().as_str().to_string();
@@ -167,17 +185,42 @@ fn build_argv(subcommand: &clap::Command, prompter: &dyn Prompter) -> Result<Vec
 
         if arg.get_action().takes_values() {
             let required = arg.is_required_set();
-            let default = arg
+            let mut default = arg
                 .get_default_values()
                 .first()
                 .map(|value| value.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let label = value_label(arg, &default, required);
+
+            // 加载器版本：按已经填好的 mc 版本现场查最新，预填进输入框，让用户看见要装的版本
+            if let Some(kind) = loader_kind_for(&id) {
+                if let Some(mc_version) = answers.get("version_id") {
+                    match loaders.latest(kind, mc_version).await {
+                        Ok(version) => default = version,
+                        Err(err) => eprintln!(
+                            "提示：无法查询 {} 最新版本（{err:#}），请手动输入。",
+                            kind.display_name()
+                        ),
+                    }
+                }
+            }
+
+            // 版本目录名：加载器都问完了，按 mc 版本 + 加载器拼出默认名预填
+            if id == "version_name" {
+                if let Some(mc_version) = answers.get("version_id") {
+                    default = compose_version_name(mc_version, &enabled_loaders, &answers);
+                }
+            }
+
+            let label = arg
+                .get_help()
+                .map(|help| help.to_string())
+                .unwrap_or_else(|| id.clone());
 
             let mut attempts = 0;
             loop {
                 match prompter.ask_value(&label, &default)? {
                     Some(value) => {
+                        answers.insert(id.clone(), value.clone());
                         append_answer(&mut argv, long.as_deref(), true, &Answer::Value(value));
                         break;
                     }
@@ -204,6 +247,9 @@ fn build_argv(subcommand: &clap::Command, prompter: &dyn Prompter) -> Result<Vec
                 .unwrap_or_else(|| id.clone());
             if prompter.ask_flag(&label)? {
                 append_answer(&mut argv, long.as_deref(), false, &Answer::Flag);
+                if let Some(kind) = loader_flag_kind(&id) {
+                    enabled_loaders.push(kind);
+                }
             } else {
                 // 关掉的功能，它的细节参数不再问
                 append_answer(&mut argv, long.as_deref(), false, &Answer::Skipped);
@@ -216,95 +262,21 @@ fn build_argv(subcommand: &clap::Command, prompter: &dyn Prompter) -> Result<Vec
 }
 
 // ---------------------------------------------------------------------------
-// 渲染：中文主题
-// ---------------------------------------------------------------------------
-
-/// 把 dialoguer 自带的英文渲染换成中文。
-///
-/// dialoguer 的主题（`Theme`）就是一组 `format_*` 方法，只覆盖实际用到的几个，
-/// 其余沿用 trait 的默认实现（如选择项的 `> ` 光标）。
-struct ChineseTheme;
-
-static THEME: ChineseTheme = ChineseTheme;
-
-impl Theme for ChineseTheme {
-    fn format_prompt(&self, f: &mut dyn fmt::Write, prompt: &str) -> fmt::Result {
-        write!(f, "{prompt}：")
-    }
-
-    fn format_error(&self, f: &mut dyn fmt::Write, err: &str) -> fmt::Result {
-        write!(f, "错误：{err}")
-    }
-
-    fn format_input_prompt(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        default: Option<&str>,
-    ) -> fmt::Result {
-        match default {
-            Some(default) => write!(f, "{prompt}（默认 {default}）："),
-            None => write!(f, "{prompt}："),
-        }
-    }
-
-    fn format_input_prompt_selection(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        sel: &str,
-    ) -> fmt::Result {
-        write!(f, "{prompt}：{sel}")
-    }
-
-    fn format_confirm_prompt(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        default: Option<bool>,
-    ) -> fmt::Result {
-        // y/n 是 dialoguer 唯一接受的按键，所以照实写出来，只是用中文解释
-        match default {
-            Some(true) => write!(f, "{prompt} [y=是 / n=否，回车=是] "),
-            Some(false) => write!(f, "{prompt} [y=是 / n=否，回车=否] "),
-            None => write!(f, "{prompt} [y=是 / n=否] "),
-        }
-    }
-
-    fn format_confirm_prompt_selection(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        selection: Option<bool>,
-    ) -> fmt::Result {
-        match selection {
-            Some(true) => write!(f, "{prompt}是"),
-            Some(false) => write!(f, "{prompt}否"),
-            None => write!(f, "{prompt}"),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // 主循环
 // ---------------------------------------------------------------------------
 
-/// 清屏（交给终端库，不手写 ANSI 转义）。
-fn clear_screen() {
-    let _ = Term::stdout().clear_screen();
-}
-
 /// `prompt` —— 交互式命令浏览器。
-pub async fn prompt_interactive() -> Result<()> {
+pub async fn prompt_interactive(source: DownloadSource) -> Result<()> {
     // 管道 / CI 里没有终端可以交互，直接给一句人话，而不是抛一个 IO 错误。
     // dialoguer 把提问写在 stderr 上、把菜单画面写在 stdout 上，两边都得是终端。
-    if !Term::stdout().is_term() || !Term::stderr().is_term() {
+    if !is_terminal() {
         println!("当前不是交互式终端，无法使用交互式菜单。");
         println!("可以直接使用具体命令，例如：dmcl --help");
         return Ok(());
     }
 
     let prompter = TerminalPrompter;
+    let loaders = RemoteLoaderVersions { source };
 
     loop {
         clear_screen();
@@ -349,7 +321,7 @@ pub async fn prompt_interactive() -> Result<()> {
         };
 
         let subcommand = subcommands[index].clone();
-        let argv = build_argv(&subcommand, &prompter)?;
+        let argv = build_argv(&subcommand, &prompter, &loaders).await?;
 
         clear_screen();
         println!("执行：{}", shell_words::join(&argv));
@@ -402,31 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn labels_use_the_chinese_help_text_and_announce_skipping() {
-        let optional = clap::Arg::new("forge_version")
-            .long("forge-version")
-            .help("指定 Forge 版本");
-        assert_eq!(
-            value_label(&optional, "", false),
-            "指定 Forge 版本（可留空跳过）"
-        );
-        assert_eq!(
-            value_label(&optional, "47.2.0", false),
-            "指定 Forge 版本（默认 47.2.0）"
-        );
-
-        // 必填参数不提示"可留空"
-        let required = clap::Arg::new("version_id")
-            .help("Minecraft 版本号")
-            .required(true);
-        assert_eq!(value_label(&required, "", true), "Minecraft 版本号");
-
-        // 没有 help 时退回参数 id
-        let bare = clap::Arg::new("bare");
-        assert_eq!(value_label(&bare, "", true), "bare");
-    }
-
-    #[test]
     fn a_disabled_flag_hides_its_detail_arguments() {
         let disabled = vec!["forge".to_string()];
         // 没装 forge 就不该再问 forge 版本
@@ -437,55 +384,26 @@ mod tests {
         assert!(should_ask("forge_version", &[]));
     }
 
-    /// 交互界面里的渲染不该残留 dialoguer 的英文。
     #[test]
-    fn the_chinese_theme_has_no_english_left() {
-        let render = |f: &dyn Fn(&mut dyn fmt::Write) -> fmt::Result| {
-            let mut out = String::new();
-            f(&mut out).unwrap();
-            out
-        };
-
+    fn loader_version_arguments_map_to_loader_kinds() {
+        assert_eq!(loader_kind_for("forge_version"), Some(LoaderKind::Forge));
         assert_eq!(
-            render(&|f| THEME.format_input_prompt(f, "指定 Forge 版本（可留空跳过）", None)),
-            "指定 Forge 版本（可留空跳过）："
+            loader_kind_for("neoforge_version"),
+            Some(LoaderKind::NeoForge)
         );
-        assert_eq!(
-            render(&|f| THEME.format_input_prompt(f, "版本类型", Some("release"))),
-            "版本类型（默认 release）："
-        );
-        assert_eq!(
-            render(&|f| THEME.format_prompt(f, "选择要执行的命令")),
-            "选择要执行的命令："
-        );
-        assert_eq!(
-            render(&|f| THEME.format_error(f, "取值不合法")),
-            "错误：取值不合法"
-        );
-
-        let confirm = render(&|f| THEME.format_confirm_prompt(f, "安装 Forge？", Some(false)));
-        assert!(!confirm.contains("[y/N]"), "{confirm}");
-        assert!(confirm.contains("回车=否"), "{confirm}");
-        assert!(confirm.contains("y=是"), "{confirm}");
-
-        assert_eq!(
-            render(&|f| THEME.format_confirm_prompt_selection(f, "安装 Forge？", Some(true))),
-            "安装 Forge？是"
-        );
-        assert_eq!(
-            render(&|f| THEME.format_confirm_prompt_selection(f, "安装 Forge？", Some(false))),
-            "安装 Forge？否"
-        );
+        assert_eq!(loader_kind_for("fabric_version"), Some(LoaderKind::Fabric));
+        assert_eq!(loader_kind_for("version_id"), None);
     }
 
     // -----------------------------------------------------------------------
     // 提问流程（用脚本化回答替代真实终端）
     // -----------------------------------------------------------------------
 
-    /// 脚本化回答：按顺序给出预设答案，并记下实际问了哪些参数。
+    /// 脚本化回答：按顺序给出预设答案，并记下实际问了哪些参数（含传来的默认值）。
     struct Scripted {
         replies: RefCell<VecDeque<Reply>>,
         asked: RefCell<Vec<String>>,
+        defaults: RefCell<Vec<(String, String)>>,
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -501,6 +419,7 @@ mod tests {
             Self {
                 replies: RefCell::new(replies.into_iter().collect()),
                 asked: RefCell::new(Vec::new()),
+                defaults: RefCell::new(Vec::new()),
             }
         }
 
@@ -509,13 +428,25 @@ mod tests {
         }
 
         fn times_asked(&self, needle: &str) -> usize {
-            self.asked().iter().filter(|q| q.contains(needle)).count()
+            self.asked().iter().filter(|q| q.as_str() == needle).count()
+        }
+
+        /// 某个问题收到的默认值（用于断言"预填了默认名 / 最新版本"）。
+        fn default_of(&self, needle: &str) -> Option<String> {
+            self.defaults
+                .borrow()
+                .iter()
+                .find(|(label, _)| label == needle)
+                .map(|(_, default)| default.clone())
         }
     }
 
     impl Prompter for Scripted {
-        fn ask_value(&self, label: &str, _default: &str) -> Result<Option<String>> {
+        fn ask_value(&self, label: &str, default: &str) -> Result<Option<String>> {
             self.asked.borrow_mut().push(label.to_string());
+            self.defaults
+                .borrow_mut()
+                .push((label.to_string(), default.to_string()));
             match self.replies.borrow_mut().pop_front() {
                 Some(Reply::Value("")) => Ok(None),
                 Some(Reply::Value(value)) => Ok(Some(value.to_string())),
@@ -534,6 +465,23 @@ mod tests {
         fn choose(&self, _prompt: &str, _items: &[String]) -> Result<Option<usize>> {
             Ok(None)
         }
+
+        fn edit(&self, _initial: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+    }
+
+    /// 固定的加载器版本，供测试断言"默认值被预填"。
+    struct FakeLoaders;
+
+    impl LoaderVersions for FakeLoaders {
+        fn latest<'a>(
+            &'a self,
+            kind: LoaderKind,
+            _mc_version: &'a str,
+        ) -> BoxFuture<'a, Result<String>> {
+            Box::pin(async move { Ok(format!("{}-latest", kind.as_str())) })
+        }
     }
 
     fn install_command() -> clap::Command {
@@ -543,27 +491,36 @@ mod tests {
             .clone()
     }
 
+    fn list_forge_command() -> clap::Command {
+        Cli::command()
+            .find_subcommand("list-forge")
+            .expect("list-forge 子命令")
+            .clone()
+    }
+
     /// 报告过的问题：可选参数不能留空。这里把整条提问流程跑一遍，
     /// 断言"直接回车"不会给命令行带上那个参数。
-    #[test]
-    fn an_optional_value_can_be_left_blank() {
+    #[tokio::test]
+    async fn an_optional_value_can_be_left_blank() {
         let prompter = Scripted::new([
             Reply::Value("1.20.1"), // mc 版本号
-            Reply::Value("1.20.1"), // 本地版本目录名
             Reply::Flag(true),      // 顺便装 Forge
             Reply::Flag(false),     // 顺便装 NeoForge
             Reply::Flag(false),     // 顺便装 Fabric
             Reply::Value(""),       // Forge 版本：直接回车 ⇒ 跳过
+            Reply::Value(""),       // 本地版本目录名：直接回车 ⇒ 跳过
         ]);
 
-        let argv = build_argv(&install_command(), &prompter).unwrap();
+        let argv = build_argv(&install_command(), &prompter, &FakeLoaders)
+            .await
+            .unwrap();
 
         // 关键断言：没有 `--forge-version=`（更不是空值）
-        assert_eq!(argv, vec!["install", "1.20.1", "1.20.1", "--forge"]);
+        assert_eq!(argv, vec!["install", "1.20.1", "--forge"]);
 
         // 只问了 Forge 版本；被关掉的开关，其细节参数压根没问
         assert!(
-            prompter.times_asked("指定 Forge 版本") == 1,
+            prompter.times_asked("Forge 版本") == 1,
             "{:?}",
             prompter.asked()
         );
@@ -579,7 +536,6 @@ mod tests {
             "{:?}",
             prompter.asked()
         );
-        // 全局参数不问；必填参数各问一次（没被留空，不重问）
         assert_eq!(prompter.times_asked("mirror"), 0, "{:?}", prompter.asked());
         assert_eq!(
             prompter.times_asked("Minecraft 版本号"),
@@ -587,32 +543,66 @@ mod tests {
             "{:?}",
             prompter.asked()
         );
+        // Forge 版本留空 ⇒ 版本名默认值里不带版本号
+        assert_eq!(
+            prompter.default_of("本地版本名").as_deref(),
+            Some("1.20.1-forge")
+        );
+    }
+
+    /// 加载器版本的默认值取"现场查最新"；版本目录名的默认值按已选加载器拼出来。
+    #[tokio::test]
+    async fn loader_defaults_are_resolved_and_the_version_name_is_prefilled() {
+        let prompter = Scripted::new([
+            Reply::Value("1.20.1"),              // mc 版本号
+            Reply::Flag(true),                   // 顺便装 Forge
+            Reply::Flag(false),                  // 顺便装 NeoForge
+            Reply::Flag(false),                  // 顺便装 Fabric
+            Reply::Value("47.2.0"),              // Forge 版本（真实终端里回车即接受预填的最新版）
+            Reply::Value("1.20.1-forge-47.2.0"), // 版本目录名（默认名）
+        ]);
+
+        let argv = build_argv(&install_command(), &prompter, &FakeLoaders)
+            .await
+            .unwrap();
+
+        // 加载器版本的默认值来自现场查最新
+        assert_eq!(
+            prompter.default_of("Forge 版本").as_deref(),
+            Some("forge-latest")
+        );
+        // 版本名默认值 = mc 版本 + 已启用加载器 + 版本
+        assert_eq!(
+            prompter.default_of("本地版本名").as_deref(),
+            Some("1.20.1-forge-47.2.0")
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "install",
+                "1.20.1",
+                "--forge",
+                "--forge-version=47.2.0",
+                "1.20.1-forge-47.2.0",
+            ]
+        );
     }
 
     /// 必填参数留空要重新追问，而不是沉默地重刷提问。
-    #[test]
-    fn a_required_value_is_asked_again_after_being_left_blank() {
+    #[tokio::test]
+    async fn a_required_value_is_asked_again_after_being_left_blank() {
         let prompter = Scripted::new([
             Reply::Value(""),       // mc 版本号：留空 ⇒ 重问
             Reply::Value("1.20.1"), // 再填
-            Reply::Value(""),       // 本地版本目录名：留空 ⇒ 重问
-            Reply::Value("正式版"), // 再填
-            Reply::Flag(false),
-            Reply::Flag(false),
-            Reply::Flag(false),
         ]);
 
-        let argv = build_argv(&install_command(), &prompter).unwrap();
+        let argv = build_argv(&list_forge_command(), &prompter, &FakeLoaders)
+            .await
+            .unwrap();
 
-        assert_eq!(argv, vec!["install", "1.20.1", "正式版"]);
+        assert_eq!(argv, vec!["list-forge", "1.20.1"]);
         assert_eq!(
             prompter.times_asked("Minecraft 版本号"),
-            2,
-            "{:?}",
-            prompter.asked()
-        );
-        assert_eq!(
-            prompter.times_asked("本地版本目录名"),
             2,
             "{:?}",
             prompter.asked()
@@ -620,23 +610,15 @@ mod tests {
     }
 
     /// 必填参数一直留空时不会死循环：放宽给 clap 去报"缺少参数"。
-    #[test]
-    fn a_required_value_gives_up_after_a_few_blank_tries() {
-        let prompter = Scripted::new([
-            Reply::Value(""),
-            Reply::Value(""),
-            Reply::Value(""),
-            Reply::Value(""),
-            Reply::Value(""),
-            Reply::Value(""),
-            Reply::Flag(false),
-            Reply::Flag(false),
-            Reply::Flag(false),
-        ]);
+    #[tokio::test]
+    async fn a_required_value_gives_up_after_a_few_blank_tries() {
+        let prompter = Scripted::new([Reply::Value(""), Reply::Value(""), Reply::Value("")]);
 
-        let argv = build_argv(&install_command(), &prompter).unwrap();
+        let argv = build_argv(&list_forge_command(), &prompter, &FakeLoaders)
+            .await
+            .unwrap();
 
-        assert_eq!(argv, vec!["install"]);
+        assert_eq!(argv, vec!["list-forge"]);
         assert_eq!(
             prompter.times_asked("Minecraft 版本号"),
             MAX_REQUIRED_ATTEMPTS,
@@ -646,12 +628,8 @@ mod tests {
     }
 
     /// `--type` 这类"有默认值"的可选参数：回车不会拼出 `--type=` 空值。
-    ///
-    /// 真实终端下 dialoguer 会把回车解释成"接受默认值"（于是命令行里是
-    /// `--type=release`）；逻辑层这里验证的是另一条路径 —— 空回答不产生参数，
-    /// 由 clap 自己补默认值。两条路径的最终效果一致。
-    #[test]
-    fn an_optional_value_with_a_default_never_becomes_an_empty_value() {
+    #[tokio::test]
+    async fn an_optional_value_with_a_default_never_becomes_an_empty_value() {
         let list_mc = Cli::command()
             .find_subcommand("list-mc")
             .expect("list-mc 子命令")
@@ -659,7 +637,7 @@ mod tests {
 
         // 空回答 ⇒ 命令行里没有 `--type`（而不是 `--type=`）
         let prompter = Scripted::new([Reply::Value("")]);
-        let argv = build_argv(&list_mc, &prompter).unwrap();
+        let argv = build_argv(&list_mc, &prompter, &FakeLoaders).await.unwrap();
         assert_eq!(argv, vec!["list-mc"]);
 
         // 而且 clap 侧确实有默认值，所以命令仍然按 release 过滤
@@ -674,12 +652,17 @@ mod tests {
         let root = Cli::command();
         let install = root.find_subcommand("install").expect("install 子命令");
 
-        // 位置参数必填
+        // 位置参数：mc 版本号必填，版本目录名可选
         let version_id = install
             .get_arguments()
             .find(|arg| arg.get_id() == "version_id")
             .expect("version_id");
         assert!(version_id.is_required_set());
+        let version_name = install
+            .get_arguments()
+            .find(|arg| arg.get_id() == "version_name")
+            .expect("version_name");
+        assert!(!version_name.is_required_set());
 
         // `--forge-version` 这类是可选的（可以直接留空跳过）
         let forge_version = install
@@ -688,11 +671,5 @@ mod tests {
             .expect("forge_version");
         assert!(!forge_version.is_required_set());
         assert_eq!(forge_version.get_long(), Some("forge-version"));
-
-        // 被跳过的全局参数确实存在（`help` 由 clap 自动生成，不在 get_arguments 里）
-        assert!(
-            root.get_arguments().any(|arg| arg.get_id() == "java"),
-            "java 应当确实存在"
-        );
     }
 }

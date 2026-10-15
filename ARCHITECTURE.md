@@ -54,7 +54,7 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 | `dmcl-task`     | 无（纯任务抽象）                                                                      |
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
-| `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、natives 位宽、java 提供者） |
+| `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
 | `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存、java 选择与候选表）                |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
@@ -116,7 +116,8 @@ source / os / maven / merge / layout / json   —— 四个域共用的底座
 
 只做「把文件铺好」的事（写入 + 完整性检查），不做任何决策。内部把安装拆成：
 
-- `plan`：**纯函数**的「这个版本需要哪些文件」规划（库、资源、客户端 jar、natives）；
+- `plan`：**纯函数**的「这个版本需要哪些文件」规划（库、资源、客户端 jar；natives
+  由 `plan_native_jars` 按 java 架构单独规划）；
 - `files`：按规划构造 `DownloadTask` 并落盘；
 - `integrity`：完整性检查（「完整吗？缺什么？」），缺失判定与下载共用同一个 `file_ok`；
 - `vanilla`：原版元数据落盘、`launcher_profiles.json`；
@@ -224,8 +225,9 @@ handle.await??;
 - 规划可以离线单测（喂真实版本 JSON，断言结果）；
 - `dmcl-launch` 的完整性检查**复用同一批纯函数**，两边永远不会对不上。
 
-natives 的解压也从「启动时」挪到了安装流程 —— 它本质就是「把文件铺好」，
-于是 `dmcl-launch` 不需要 zip 代码。
+natives 的**下载 + 解压**单独放进 `dmcl-install::natives_task`，不在 `install_task` 里：
+它的分类器（`natives-linux-64` 之类）取决于运行游戏的 JVM 架构，只有启动时选好 java
+才知道要下哪一个、解到哪个目录。所以完整性检查也**不覆盖 natives**，由启动流程自愈。
 
 ### 5. 启动与安装解耦
 
@@ -246,12 +248,14 @@ monitor.wait().await?;
 ```
 
 - `check_integrity(plan, version)`（`dmcl-install`）返回 `IntegrityStatus { complete, missing, checked }`，
-  每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符 / 尚未生成）；
+  每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符）；它**不检查 natives**；
 - 它**不下载任何东西**：修复由调用者跑 `dmcl-install` 的 `game_files_task`（已存在的文件会被跳过）；
 - Java 选择不读全局配置：`find_java(roots)` 只返回结果，`select_java(required_major,
 &choice, &configs)` 接收配置表；
-- 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 生成参数 → 启动」串成一条
-  `TaskChain<(), GameMonitor>`；参数只在文件齐备后才生成。
+- 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 准备 natives → 生成参数 →
+  启动」串成一条 `TaskChain<(), GameMonitor>`：**准备 natives** 先选好 java，再按这个 java 的
+  os / arch 跑 `natives_task`（下载 + 解压到 `natives_dir`，目录名带 os / arch）；参数只在
+  文件齐备、java 选好后才生成，且生成参数复用同一个 java，不再选第二次。
 
 ### 6. 加载器安装
 
@@ -271,7 +275,17 @@ monitor.wait().await?;
 ## 应用层与前端
 
 `dmcl` 的职责只有三件：把配置翻译成各 crate 的 `*Options`、打印事件流、显示结果。
-CLI 用 `clap` derive 定义命令，交互式菜单用 `dialoguer`。
+CLI 用 `clap` derive 定义命令，交互式菜单用 `dialoguer`。命令定义、本地化与分发在
+`cli/mod.rs`，各命令实现按文件拆在 `cli/commands/` 下；跟终端打交道的部件
+（`Prompter` trait + 中文主题）放在 `cli/interact.rs`，供 `prompt` / `config` / `java`
+三处复用（测试里换成脚本化回答）。
+
+配置相关的两处都走 serde 派生、不手写字段清单：
+
+- `config` 命令的编辑器：把 `Config` 序列化成 `serde_json::Value`、按「点分键」逐项展示，
+  标量单行编辑、对象 / 数组（`launch.java_configs`）走外部编辑器按 JSON 编辑；写回后
+  整体反序列化校验；
+- `show()` 也用同一份展开结果打印。
 
 界面语言全部为中文，包括 clap 自动生成的小节标题（`用法：` / `位置参数：` / `选项：` /
 `命令：`）与常见报错（`错误：缺少必填参数：…`）。命令名、参数名、配置键名保持英文

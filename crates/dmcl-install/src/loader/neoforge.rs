@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use dmcl_download::{file_ok, Checksum};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
-use dmcl_mcmeta::neoforge::{latest_neoforge_version, neoforge_installer_url, InstallProfile};
+use dmcl_mcmeta::neoforge::{neoforge_installer_url, InstallProfile};
 use dmcl_mcmeta::os::classpath_separator;
 use dmcl_mcmeta::vanilla::VersionJson;
 use dmcl_task::{task_fn_io, CommandTask, Task, TaskChain, TaskContext};
@@ -34,24 +34,6 @@ pub async fn install_neoforge(
     extract_neoforge_libraries(options, &installer.path, ctx).await?;
     run_neoforge_installer(options, version_name, forge_version, &installer.path, ctx).await?;
     write_installer_version_json(options, version_name, &installer.path).await
-}
-
-/// 解析 NeoForge 版本（`requested` 为 `None` 时取最新版）。
-async fn resolve_neoforge_version(
-    options: &InstallOptions,
-    mc_version: &str,
-    requested: Option<&str>,
-    ctx: &TaskContext,
-) -> Result<String> {
-    let version = match requested {
-        Some(version) => version.to_string(),
-        None => {
-            ctx.log("查询最新的 NeoForge 版本");
-            latest_neoforge_version(&options.source, mc_version).await?
-        }
-    };
-    ctx.log(format!("使用 NeoForge {version}"));
-    Ok(version)
 }
 
 fn neoforge_installer(version: &str) -> Installer {
@@ -259,41 +241,19 @@ async fn write_installer_version_json(
     write_json_safe(&path, &mc_json).await
 }
 
-/// 安装 NeoForge 的任务链（`forge_version = None` 时自动取最新版）。
+/// 安装 NeoForge 的任务链。加载器版本由调用者给定（`dmcl-install` 不查最新）。
 pub fn install_neoforge_task(
     options: Arc<InstallOptions>,
     version_name: String,
-    mc_version: String,
-    forge_version: Option<String>,
+    forge_version: String,
 ) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 NeoForge：{version_name}"))
         .then(
-            task_fn_io("确定 NeoForge 版本", {
-                let options = options.clone();
-                let mc_version = mc_version.clone();
-                move |_: (), ctx: TaskContext| {
-                    let options = options.clone();
-                    let mc_version = mc_version.clone();
-                    let forge_version = forge_version.clone();
-                    async move {
-                        let version = resolve_neoforge_version(
-                            &options,
-                            &mc_version,
-                            forge_version.as_deref(),
-                            &ctx,
-                        )
-                        .await?;
-                        Ok(neoforge_installer(&version))
-                    }
-                }
-            }),
-            "确定 NeoForge 版本",
-        )
-        .then(
             task_fn_io("下载 NeoForge 安装器", {
                 let options = options.clone();
-                move |installer: Installer, ctx: TaskContext| {
+                move |_: (), ctx: TaskContext| {
                     let options = options.clone();
+                    let installer = neoforge_installer(&forge_version);
                     async move {
                         download_installer(&options, &installer, &ctx).await?;
                         Ok(installer)
@@ -415,18 +375,12 @@ mod tests {
     }
 
     #[test]
-    fn neoforge_install_is_five_named_steps() {
-        let chain = install_neoforge_task(
-            options(),
-            "1.20.1".into(),
-            "1.20.1".into(),
-            Some("47.1.0".into()),
-        );
+    fn neoforge_install_has_one_step_per_phase() {
+        let chain = install_neoforge_task(options(), "1.20.1".into(), "47.1.0".into());
         let names: Vec<_> = chain.step_names().collect();
         assert_eq!(
             names,
             [
-                "确定 NeoForge 版本",
                 "下载 NeoForge 安装器",
                 "解出安装器内的库",
                 "运行安装器",

@@ -20,7 +20,7 @@
 //! # async fn run() -> anyhow::Result<()> {
 //! let options = Arc::new(InstallOptions::new("/tmp/.minecraft", DownloadSource::new(Mirror::Bmclapi)));
 //! let spec = InstallSpec::new("1.20.1", "1.20.1")
-//!     .with_loader(LoaderKind::Fabric, None);
+//!     .with_loader(LoaderKind::Fabric, "0.15.0");
 //!
 //! install_task(options, spec)
 //!     .run_with((), |event| println!("{event}"))
@@ -76,5 +76,5 @@ pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_game_files,
     plan_libraries, plan_native_jars, plan_natives, PlanContext, PlannedFile,
 };
-pub use spec::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
+pub use spec::{install_task, InstallSpec, LoaderKind, LoaderRequest};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};
