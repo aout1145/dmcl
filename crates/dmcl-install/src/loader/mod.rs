@@ -9,3 +9,4 @@ pub mod forge;
 pub mod neoforge;
 
 pub(crate) mod common;
+pub(crate) mod xforge;
