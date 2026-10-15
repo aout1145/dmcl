@@ -30,8 +30,9 @@ const NESTED: &str = "  ";
 ///   出栈，栈深即层级，嵌套步骤名只作标题出现一次、不再逐行重复。
 /// * **日志弱化**：`TaskEvent::Log` 变暗（`dim`），步骤头 / 进度保持正常，突出进度。
 /// * **多行内容**（含换行的消息）整块再缩进一级，成一目了然的子块。
-/// * 交互式终端上，**日志打在“当前进度行”上方，进度行始终钉在最下面一行**；管道里
-///   则逐行输出、跨 5% 刻度才打一条进度。
+/// * 交互式终端上，**最终行打在“当前进度行”上方**：同一上下文的日志会保留那条进度行
+///   （避免下载时进度一闪一闪），换到别的上下文（换步骤、`ctx.child(名字)`）才收掉它，
+///   以免残留旧进度。管道里则逐行输出、跨 5% 刻度才打一条进度。
 pub struct ProgressPrinter {
     term: Term,
     interactive: bool,
@@ -43,6 +44,8 @@ pub struct ProgressPrinter {
     layout: Layout,
     /// 交互式：当前钉在底部的那行进度（纯文本，不含换行）。
     live: Option<String>,
+    /// 交互式：底部进度行属于哪个上下文（事件名）；同一上下文的日志才不会把它顶掉。
+    live_name: Option<String>,
 }
 
 impl Default for ProgressPrinter {
@@ -62,6 +65,7 @@ impl ProgressPrinter {
             last_line: String::new(),
             layout: Layout::default(),
             live: None,
+            live_name: None,
         }
     }
 
@@ -116,7 +120,11 @@ impl ProgressPrinter {
         }
     }
 
-    /// 交互式：日志等最终行打在底部进度行**上方**，进度行始终留在最下面。
+    /// 交互式：日志等最终行打在底部进度行**上方**，进度行留在最下面。
+    ///
+    /// 一条最终行是否结束底部进度行，看它是不是**同一个上下文**（同名）的日志：
+    /// 同一处的日志不会把进度顶掉（否则下载时会一闪一闪）；换成别的上下文
+    /// （换步骤、`ctx.child(名字)`）就收掉旧进度，避免残留。
     fn draw_interactive(&mut self, lines: &[Line]) {
         for line in lines {
             if line.end_line {
@@ -125,11 +133,15 @@ impl ProgressPrinter {
                     let _ = self.term.clear_line();
                 }
                 let _ = writeln!(self.term, "{}", styled(line));
-                if !line.keep_live {
+
+                let same_context = line.name.is_some() && line.name == self.live_name;
+                if !(line.keep_live && same_context) {
                     self.live = None;
+                    self.live_name = None;
                 }
             } else {
                 self.live = Some(line.text.clone());
+                self.live_name = line.name.clone();
             }
         }
         // 把当前进度重新画到最下面一行
@@ -157,7 +169,9 @@ struct Line {
     end_line: bool,
     /// 日志弱化：用暗色渲染。
     dim: bool,
-    /// 打完之后是否保留底部进度行（日志 = true；警告 / 步骤头 / 完成 / 失败 = false）。
+    /// 产生这行的事件名（用于判断是不是同一上下文）。
+    name: Option<String>,
+    /// 打完之后是否**尽量保留**底部进度行（只有日志为 true）。
     keep_live: bool,
 }
 
@@ -168,6 +182,7 @@ impl Line {
             text,
             end_line: true,
             dim: false,
+            name: None,
             keep_live: false,
         }
     }
@@ -266,6 +281,7 @@ impl Layout {
                     text: format!("{label_indent}{name}"),
                     end_line: true,
                     dim,
+                    name: Some(name.to_string()),
                     keep_live,
                 });
                 self.label = Some(name.to_string());
@@ -284,6 +300,7 @@ impl Layout {
                 text: indent,
                 end_line,
                 dim,
+                name: Some(name.to_string()),
                 keep_live,
             });
         } else {
@@ -292,6 +309,7 @@ impl Layout {
                     text: format!("{indent}{text}"),
                     end_line,
                     dim,
+                    name: Some(name.to_string()),
                     keep_live,
                 });
             }
