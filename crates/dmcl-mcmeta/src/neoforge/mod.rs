@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use version_compare::{compare, Cmp};
 
-use crate::source::{DownloadSource, Root};
+use crate::source::{DownloadSource, Mirror, Root};
 
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallProfile, Processor, Side};
@@ -55,12 +55,13 @@ pub fn neoforge_installer_url(forge_version: &str) -> (String, &'static str) {
 
 /// NeoForge 版本列表地址。
 ///
-/// **占位**：借用 bmclapi 的 JSON 路径（`${MC_META}` 的 bmclapi 侧就是站点根），官方侧
-/// 解析出来是 `piston-meta` 下的地址、会 404 —— 靠 `fetch_json` 的候选轮换重试落到
-/// bmclapi。TODO：官方 neoforged maven 与 bmclapi 都有 `maven-metadata.xml`，以后两边
-/// 统一改用 XML 取，这里换成对应的模板。
+/// **不可镜像**：这个 JSON 接口只有 bmclapi 提供，所以直接给出它的地址、不走镜像模板
+/// （不含占位符，`fetch_json` 展开候选时会原样返回，只在 bmclapi 上重试）。
 fn neoforge_version_list_url(mc_version: &str) -> String {
-    format!("{}/neoforge/list/{mc_version}", Root::McMeta.placeholder())
+    format!(
+        "{}/neoforge/list/{mc_version}",
+        Root::McMeta.base(Mirror::Bmclapi)
+    )
 }
 
 impl DownloadSource {
@@ -118,18 +119,11 @@ mod tests {
     }
 
     #[test]
-    fn neoforge_version_list_url_is_a_placeholder() {
-        assert_eq!(
-            neoforge_version_list_url("1.21.1"),
-            "${MC_META}/neoforge/list/1.21.1"
-        );
-        // bmclapi 侧解析出来就是它真正的 JSON 地址；官方侧会 404（靠重试兜过去）
-        assert_eq!(
-            crate::source::resolve_url(
-                &neoforge_version_list_url("1.21.1"),
-                crate::source::Mirror::Bmclapi
-            ),
-            "https://bmclapi2.bangbang93.com/neoforge/list/1.21.1"
-        );
+    fn neoforge_version_list_url_is_bmclapi_only() {
+        let url = neoforge_version_list_url("1.21.1");
+        assert_eq!(url, "https://bmclapi2.bangbang93.com/neoforge/list/1.21.1");
+        // 不含占位符 ⇒ 不可镜像：解析到官方镜像也原样，不会指向 piston-meta
+        assert!(!crate::source::is_templated(&url));
+        assert_eq!(crate::source::resolve_url(&url, Mirror::Official), url);
     }
 }

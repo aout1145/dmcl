@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::source::{DownloadSource, Root};
+use crate::source::{DownloadSource, Mirror, Root};
 
 pub mod install_profile;
 pub use install_profile::{DataEntry, DataPair, InstallEntry, InstallProfile, Processor, Side};
@@ -68,13 +68,12 @@ pub fn forge_installer_url(forge_version: &str) -> String {
 
 /// Forge 版本列表地址。
 ///
-/// **占位**：借用 bmclapi 的 JSON 路径（`${MC_META}` 的 bmclapi 侧就是站点根），官方侧
-/// 会 404 —— 靠 `fetch_json` 的候选轮换重试落到 bmclapi。TODO：官方 maven 也有
-/// `maven-metadata.xml`，以后两边统一改用 XML 取。
+/// **不可镜像**：这个 JSON 接口只有 bmclapi 提供，所以直接给出它的地址、不走镜像模板
+/// （不含占位符，`fetch_json` 展开候选时会原样返回，只在 bmclapi 上重试）。
 fn forge_version_list_url(mc_version: &str) -> String {
     format!(
         "{}/forge/minecraft/{mc_version}",
-        Root::McMeta.placeholder()
+        Root::McMeta.base(Mirror::Bmclapi)
     )
 }
 
@@ -146,18 +145,14 @@ mod tests {
     }
 
     #[test]
-    fn the_forge_version_list_url_is_a_placeholder() {
+    fn the_forge_version_list_url_is_bmclapi_only() {
+        let url = forge_version_list_url("1.20.1");
         assert_eq!(
-            forge_version_list_url("1.20.1"),
-            "${MC_META}/forge/minecraft/1.20.1"
-        );
-        // bmclapi 侧解析出来就是它真正的 JSON 地址；官方侧会 404（靠重试兜过去）
-        assert_eq!(
-            crate::source::resolve_url(
-                &forge_version_list_url("1.20.1"),
-                crate::source::Mirror::Bmclapi
-            ),
+            url,
             "https://bmclapi2.bangbang93.com/forge/minecraft/1.20.1"
         );
+        // 不含占位符 ⇒ 不可镜像：解析到官方镜像也原样，不会指向 piston-meta
+        assert!(!crate::source::is_templated(&url));
+        assert_eq!(crate::source::resolve_url(&url, Mirror::Official), url);
     }
 }
