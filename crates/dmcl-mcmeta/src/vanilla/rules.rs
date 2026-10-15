@@ -8,7 +8,7 @@ use version_compare::Cmp;
 
 use crate::json::JsonMap;
 use crate::macros::string_enum;
-use crate::os::{get_os_name, os_version};
+use crate::os::{os_version, Os};
 
 string_enum! {
     /// 规则的 `action` —— 原本是裸字符串，到处和 `"allow"` 比较。
@@ -90,7 +90,7 @@ pub struct Rule {
 /// `RuleContext::current()` 取本机的系统名 / 架构 / 系统版本，特性默认为空。
 #[derive(Debug, Clone)]
 pub struct RuleContext {
-    /// `windows` / `osx` / `linux`（见 [`get_os_name`]）。
+    /// `windows` / `osx` / `linux`（见 [`Os::mc_name`]）。
     pub os_name: &'static str,
     /// `std::env::consts::ARCH`（`x86_64` / `aarch64` …）。
     pub arch: &'static str,
@@ -104,7 +104,7 @@ impl RuleContext {
     /// 本机平台 + 空特性。
     pub fn current() -> Self {
         Self {
-            os_name: get_os_name(),
+            os_name: Os::current().mc_name(),
             arch: std::env::consts::ARCH,
             os_version: Some(os_version()),
             features: BTreeMap::new(),

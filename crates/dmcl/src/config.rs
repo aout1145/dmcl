@@ -36,7 +36,7 @@ const MIB: u64 = 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
-    /// 命名 java（名字 → 可执行文件），由 `search-java` 填充。
+    /// 命名 java（名字 → 可执行文件），由 `dmcl java` 维护。
     pub java_configs: JavaConfigs,
     /// 用哪一个，或自动选择。
     pub java: JavaChoice,
@@ -50,9 +50,6 @@ pub struct LaunchConfig {
     pub custom_info: String,
     pub additional_jvm: String,
     pub additional_game: String,
-    /// natives 分类器里 `${arch}` 的取值；留空表示按本机位宽。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub natives_arch: Option<u32>,
 }
 
 impl Default for LaunchConfig {
@@ -72,7 +69,6 @@ impl Default for LaunchConfig {
                 "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True"
                     .to_string(),
             additional_game: String::new(),
-            natives_arch: None,
         }
     }
 }
@@ -227,13 +223,6 @@ impl Config {
         println!("launch.custom_info = {}", self.launch.custom_info);
         println!("launch.additional_jvm = {}", self.launch.additional_jvm);
         println!("launch.additional_game = {}", self.launch.additional_game);
-        println!(
-            "launch.natives_arch = {}",
-            self.launch
-                .natives_arch
-                .map(|arch| arch.to_string())
-                .unwrap_or_else(|| "auto".to_string())
-        );
         println!("account.online_mode = {}", self.account.online_mode);
         println!("account.username = {}", self.account.username);
         println!("download.max_tasks = {}", self.download.max_tasks);
@@ -277,17 +266,13 @@ impl Config {
 
     /// 配置文件 → [`InstallOptions`]（含"用哪个 java 跑安装器 processor"）。
     pub fn install_options(&self, source: DownloadSource) -> InstallOptions {
-        let mut options = InstallOptions::new(self.launch.minecraft_root_path.clone(), source)
+        InstallOptions::new(self.launch.minecraft_root_path.clone(), source)
             .with_download(self.download_options())
             .with_skip_music(self.download.i_dont_need_music)
             .with_java(Arc::new(ConfigJava {
                 choice: self.launch.java.clone(),
                 configs: self.launch.java_configs.clone(),
-            }));
-        if let Some(arch) = self.launch.natives_arch {
-            options = options.with_natives_arch(arch);
-        }
-        options
+            }))
     }
 
     /// 配置文件 → [`LaunchOption`]。
@@ -302,12 +287,7 @@ impl Config {
             version_name,
         )
         .with_java(self.launch.java.clone(), self.launch.java_configs.clone())
-        .with_local_layout(
-            self.download.i_dont_need_music,
-            self.launch
-                .natives_arch
-                .unwrap_or_else(dmcl_install::options::default_natives_arch),
-        );
+        .with_local_layout(self.download.i_dont_need_music);
         option.window_width = self.launch.window_width;
         option.window_height = self.launch.window_height;
         option.min_memory = self.launch.min_memory;
@@ -380,8 +360,6 @@ mod tests {
         assert!(value["download"]["max_tasks"].is_number());
         assert!(value["download"]["mirror"].is_string());
         assert!(value["cli"]["default_command"].is_string());
-        // 没设置时不写出 natives_arch
-        assert!(value["launch"].get("natives_arch").is_none());
     }
 
     #[test]
@@ -409,7 +387,6 @@ mod tests {
         config.download.max_chunks_per_file = 3;
         config.download.max_attempts = 5;
         config.download.i_dont_need_music = true;
-        config.launch.natives_arch = Some(32);
         config.launch.window_width = 1920;
         config.account.username = "steve".to_string();
 
@@ -423,13 +400,11 @@ mod tests {
         let install = config.install_options(config.download_source());
         assert_eq!(install.root_path, PathBuf::from("/mc"));
         assert!(install.skip_music);
-        assert_eq!(install.natives_arch, 32);
         assert_eq!(install.download.max_connections, 8);
 
         let option = config.launch_option(config.account(), "1.20.1");
         assert_eq!(option.root_path, PathBuf::from("/mc"));
         assert_eq!(option.window_width, 1920);
-        assert_eq!(option.natives_arch, 32);
         assert!(option.skip_music);
         assert_eq!(option.account.get_name(), "steve");
     }

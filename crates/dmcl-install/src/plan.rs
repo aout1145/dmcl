@@ -6,7 +6,6 @@
 //! 产出的 [`PlannedFile::url`] 仍然是**模板**，真正下载时才由
 //! [`dmcl_mcmeta::source::DownloadSource::resolve`] 解析成具体镜像地址。
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use dmcl_download::{Checksum, DownloadItem};
@@ -14,7 +13,7 @@ use dmcl_mcmeta::layout::{
     assets_index_path, assets_objects_dir, assets_virtual_dir, libraries_dir, version_jar_path,
 };
 use dmcl_mcmeta::maven::lib_name_to_path;
-use dmcl_mcmeta::os::get_os_name;
+use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{
     asset_object_url, maven_library_url, rules_allow, Artifact, AssetIndexFile, Library,
     RuleContext, VersionJson,
@@ -32,8 +31,6 @@ pub struct PlanContext {
     pub root_path: PathBuf,
     /// 是否跳过 `*.ogg` 资源。
     pub skip_music: bool,
-    /// natives 分类器里 `${arch}` 的取值。
-    pub natives_arch: u32,
 }
 
 impl PlanContext {
@@ -41,17 +38,11 @@ impl PlanContext {
         Self {
             root_path: root_path.into(),
             skip_music: false,
-            natives_arch: crate::options::default_natives_arch(),
         }
     }
 
     pub fn with_skip_music(mut self, skip_music: bool) -> Self {
         self.skip_music = skip_music;
-        self
-    }
-
-    pub fn with_natives_arch(mut self, natives_arch: u32) -> Self {
-        self.natives_arch = natives_arch;
         self
     }
 }
@@ -122,19 +113,13 @@ pub fn plan_assets_index(plan: &PlanContext, json: &VersionJson) -> Option<Plann
     })
 }
 
-/// natives 里该平台需要的分类器名（`${arch}` 会被替换）。
-pub fn native_classifier(natives: &BTreeMap<String, String>, arch: u32) -> Option<String> {
-    let raw = natives.get(get_os_name())?;
-    Some(raw.replace("${arch}", &arch.to_string()))
-}
-
 /// 库条目里该平台 natives jar 对应的 artifact。
 ///
 /// 先按替换过 `${arch}` 的名字找，找不到再退回原名（有些版本的 `natives`
 /// 与 `classifiers` 用的名字并不完全一致）。
-pub fn native_artifact(lib: &Library, arch: u32) -> Option<&Artifact> {
-    let raw = lib.natives.as_ref()?.get(get_os_name())?;
-    let resolved = raw.replace("${arch}", &arch.to_string());
+pub fn native_artifact(lib: &Library, os: Os, arch: Arch) -> Option<&Artifact> {
+    let raw = lib.natives.as_ref()?.get(os.mc_name())?;
+    let resolved = raw.replace("${arch}", arch.mc_bits());
     let classifiers = lib.downloads.as_ref()?.classifiers.as_ref()?;
     classifiers
         .get(&resolved)
@@ -158,7 +143,8 @@ fn lib_checksum(lib: &Library) -> Option<Checksum> {
     lib.md5.clone().map(Checksum::md5)
 }
 
-/// 库文件（含 natives 分类器 jar）。
+/// 库文件（**不含** natives 分类器 jar；natives 由 [`plan_native_jars`] 单独规划，
+/// 因为它依赖启动时选中的 java 架构）。
 pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile> {
     let libraries = libraries_dir(&plan.root_path);
     let rules = RuleContext::current();
@@ -209,9 +195,29 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
                 });
             }
         }
+    }
 
-        // natives 分类器
-        if let Some(artifact) = native_artifact(lib, plan.natives_arch) {
+    planned
+}
+
+/// natives 分类器 jar（按 java 架构 `arch` 选分类器）。
+///
+/// 与普通库分开规划：natives 只有在启动时选好 java、知道架构后才能确定要哪一个。
+pub fn plan_native_jars(
+    plan: &PlanContext,
+    json: &VersionJson,
+    os: Os,
+    arch: Arch,
+) -> Vec<PlannedFile> {
+    let libraries = libraries_dir(&plan.root_path);
+    let rules = RuleContext::current();
+    let mut planned = Vec::new();
+
+    for lib in &json.libraries {
+        if !rules_allow(&lib.rules, &rules) {
+            continue;
+        }
+        if let Some(artifact) = native_artifact(lib, os, arch) {
             let (Some(url), Some(path)) = (artifact.url.clone(), artifact.path.clone()) else {
                 // 文档里没给地址的 natives 直接跳过
                 continue;
@@ -229,14 +235,19 @@ pub fn plan_libraries(plan: &PlanContext, json: &VersionJson) -> Vec<PlannedFile
     planned
 }
 
-/// 需要解压的 natives jar（路径 + 显示名）。
-pub fn plan_natives(plan: &PlanContext, json: &VersionJson) -> Vec<(PathBuf, String)> {
+/// 需要解压的 natives jar（路径 + 显示名），按 java 架构 `arch` 选分类器。
+pub fn plan_natives(
+    plan: &PlanContext,
+    json: &VersionJson,
+    os: Os,
+    arch: Arch,
+) -> Vec<(PathBuf, String)> {
     let libraries = libraries_dir(&plan.root_path);
     let rules = RuleContext::current();
     json.libraries
         .iter()
         .filter(|lib| rules_allow(&lib.rules, &rules))
-        .filter_map(|lib| native_artifact(lib, plan.natives_arch))
+        .filter_map(|lib| native_artifact(lib, os, arch))
         .filter_map(|artifact| artifact.path.clone())
         .map(|path| {
             let name = base_name(&path);
@@ -318,12 +329,12 @@ mod tests {
 
     /// 规划只依赖 [`PlanContext`]（launch 做完整性检查时用的也是它）。
     fn options() -> PlanContext {
-        PlanContext::new("/mc").with_natives_arch(64)
+        PlanContext::new("/mc")
     }
 
     /// 把规划结果变成下载项时需要完整的安装配置（下载源）。
     fn install_options() -> InstallOptions {
-        InstallOptions::new("/mc", DownloadSource::new(Mirror::Bmclapi)).with_natives_arch(64)
+        InstallOptions::new("/mc", DownloadSource::new(Mirror::Bmclapi))
     }
 
     fn version(json: &str) -> VersionJson {
@@ -464,15 +475,15 @@ mod tests {
             }"#,
         );
 
-        let planned = plan_libraries(&options, &json);
+        let (os, arch) = (Os::current(), Arch::X86_64);
+        let planned = plan_native_jars(&options, &json, os, arch);
         let names: Vec<&str> = planned.iter().map(|file| file.name.as_str()).collect();
         // 平台不匹配的 natives 不下载；`${arch}` 会被替换成 64
         #[cfg(target_os = "linux")]
         {
-            assert!(names.contains(&"lwjgl-3.3.1.jar"));
             assert!(names.contains(&"lwjgl-3.3.1-natives-linux.jar"));
             assert!(names.contains(&"arch-1-natives-linux-64.jar"));
-            let natives = plan_natives(&options, &json);
+            let natives = plan_natives(&options, &json, os, arch);
             assert_eq!(natives.len(), 2);
             assert_eq!(
                 natives[0].0,
@@ -482,13 +493,11 @@ mod tests {
         #[cfg(not(target_os = "linux"))]
         {
             assert!(!names.iter().any(|name| name.contains("natives")));
-            assert!(plan_natives(&options, &json).is_empty());
+            assert!(plan_natives(&options, &json, os, arch).is_empty());
         }
 
         // 32 位时 `${arch}` 取 32，找不到对应分类器就不下载
-        let mut options32 = options.clone();
-        options32.natives_arch = 32;
-        let planned = plan_libraries(&options32, &json);
+        let planned = plan_native_jars(&options, &json, os, Arch::X86);
         assert!(!planned.iter().any(|file| file.name.contains("arch-1")));
     }
 

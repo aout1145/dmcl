@@ -1,13 +1,15 @@
-//! 启动流程：检查并补全 → 生成参数 → 启动。
+//! 启动流程：检查并补全 → 准备 natives → 生成参数 → 启动。
 //!
 //! * [`PrepareLaunchFilesTask`]（`Task<(), IntegrityStatus>`）——「检查文件完整性；
 //!   缺件时跑一次 `dmcl-install` 补全」，产出完整性检查结果；
-//! * [`GenerateArgsTask`]（`Task<IntegrityStatus, PreparedLaunch>`）——文件齐了之后再
+//! * [`PrepareNativesTask`]（`Task<IntegrityStatus, JavaOption>`）——先按配置选好 java，
+//!   再按这个 java 的 os / arch 下载 + 解压 natives（natives 只有在选好 java 后才能确定）；
+//! * [`GenerateArgsTask`]（`Task<JavaOption, PreparedLaunch>`）——用已经选好的 java
 //!   生成启动参数，产出 [`PreparedLaunch`]；
 //! * [`LaunchTask`]（`Task<PreparedLaunch, GameMonitor>`）——用已生成的参数启动子进程，
 //!   产出**未 wait** 的 [`GameMonitor`]。
 //!
-//! [`launch_chain`] 把三者串成 `TaskChain<(), GameMonitor>`：由调用者运行、订阅事件，
+//! [`launch_chain`] 把四者串成 `TaskChain<(), GameMonitor>`：由调用者运行、订阅事件，
 //! 并在拿到未 wait 的 [`GameMonitor`] 后决定是等待退出还是中途停掉。
 //!
 //! 「先补全文件、再生成参数」是刻意的顺序：参数只在文件齐备后才拼，避免在缺件时
@@ -18,17 +20,17 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dmcl_install::{InstallOptions, IntegrityStatus};
+use dmcl_mcmeta::layout::read_version_json_safe;
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
+use crate::java::{select_java, JavaOption};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
 
-/// 「补全文件 → 生成参数」之后的产出。
+/// 「补全文件 → 准备 natives → 生成参数」之后的产出。
 #[derive(Debug, Clone)]
 pub struct PreparedLaunch {
-    /// 完整性检查结果（完整吗、缺哪些文件）。
-    pub integrity: IntegrityStatus,
     /// 生成好的启动参数；第一个元素是 java 可执行文件。
     pub args: Vec<String>,
     /// 转义后的命令行，用于展示 / 交给别人执行。
@@ -76,7 +78,60 @@ impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
     }
 }
 
-/// 文件齐备后生成启动参数。
+/// 按配置选好 java，并按这个 java 的 os / arch 下载 + 解压 natives。
+///
+/// natives 的分类器（`natives-linux-64` 之类）取决于运行游戏的 JVM 架构，所以必须在
+/// 选好 java 之后才能确定要下哪一个、解到哪个目录。
+pub struct PrepareNativesTask {
+    option: LaunchOption,
+    install: Arc<InstallOptions>,
+}
+
+impl PrepareNativesTask {
+    pub fn new(option: LaunchOption, install: Arc<InstallOptions>) -> Self {
+        Self { option, install }
+    }
+}
+
+impl Task<IntegrityStatus, JavaOption> for PrepareNativesTask {
+    fn name(&self) -> &str {
+        "准备 natives"
+    }
+
+    fn run<'a>(
+        &'a self,
+        _integrity: IntegrityStatus,
+        ctx: TaskContext,
+    ) -> BoxFuture<'a, Result<JavaOption>> {
+        Box::pin(async move {
+            let json =
+                read_version_json_safe(&self.option.root_path, &self.option.version_name).await?;
+            let java = select_java(
+                json.required_java_major(),
+                &self.option.java,
+                &self.option.java_configs,
+            )
+            .await?;
+            ctx.log(format!(
+                "使用 java {}（{} / {}）",
+                java.version_str,
+                java.os.mc_name(),
+                java.arch.name()
+            ));
+
+            let chain = dmcl_install::natives_task(
+                self.install.clone(),
+                self.option.version_name.clone(),
+                java.os,
+                java.arch,
+            );
+            Task::<(), ()>::run(&chain, (), ctx).await?;
+            Ok(java)
+        })
+    }
+}
+
+/// 用已经选好的 java 生成启动参数。
 pub struct GenerateArgsTask {
     option: LaunchOption,
 }
@@ -87,22 +142,23 @@ impl GenerateArgsTask {
     }
 }
 
-impl Task<IntegrityStatus, PreparedLaunch> for GenerateArgsTask {
+impl Task<JavaOption, PreparedLaunch> for GenerateArgsTask {
     fn name(&self) -> &str {
         "生成启动参数"
     }
 
     fn run<'a>(
         &'a self,
-        integrity: IntegrityStatus,
+        java: JavaOption,
         ctx: TaskContext,
     ) -> BoxFuture<'a, Result<PreparedLaunch>> {
         Box::pin(async move {
             let mut launcher = GameLauncher::new(self.option.clone()).await?;
+            // 复用上一步选好的 java，避免再选一次
+            launcher.java = Some(java);
             let args = launcher.gen_args_in(&ctx).await?;
             let command = command_preview(&launcher.version_path, &args);
             Ok(PreparedLaunch {
-                integrity,
                 args,
                 command,
                 version_path: launcher.version_path.clone(),
@@ -136,7 +192,8 @@ impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
     }
 }
 
-/// 组装「检查并补全 → 生成参数 → 启动」三段链，返回 `TaskChain<(), GameMonitor>`（不运行）。
+/// 组装「检查并补全 → 准备 natives → 生成参数 → 启动」四段链，返回
+/// `TaskChain<(), GameMonitor>`（不运行）。
 pub fn launch_chain(
     option: LaunchOption,
     install: Arc<InstallOptions>,
@@ -144,8 +201,12 @@ pub fn launch_chain(
     let version_name = option.version_name.clone();
     TaskChain::new("启动")
         .then(
-            PrepareLaunchFilesTask::new(install, version_name),
+            PrepareLaunchFilesTask::new(install.clone(), version_name),
             "检查并补全文件",
+        )
+        .then(
+            PrepareNativesTask::new(option.clone(), install),
+            "准备 natives",
         )
         .then(GenerateArgsTask::new(option), "生成启动参数")
         .then(LaunchTask, "启动游戏")
@@ -168,19 +229,26 @@ mod tests {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
         let install = install_options(std::path::Path::new("/mc"));
         assert_eq!(
-            PrepareLaunchFilesTask::new(install, "1.0").name(),
+            PrepareLaunchFilesTask::new(install.clone(), "1.0").name(),
             "检查并补全文件"
+        );
+        assert_eq!(
+            PrepareNativesTask::new(option.clone(), install).name(),
+            "准备 natives"
         );
         assert_eq!(GenerateArgsTask::new(option).name(), "生成启动参数");
     }
 
     #[test]
-    fn the_launch_chain_checks_fills_generates_then_launches() {
+    fn the_launch_chain_checks_fills_prepares_generates_then_launches() {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
         let install = install_options(std::path::Path::new("/mc"));
         let chain = launch_chain(option, install);
         let names: Vec<_> = chain.step_names().collect();
-        assert_eq!(names, ["检查并补全文件", "生成启动参数", "启动游戏"]);
+        assert_eq!(
+            names,
+            ["检查并补全文件", "准备 natives", "生成启动参数", "启动游戏"]
+        );
     }
 
     /// 找一个能用的 java 可执行文件；本机没有就返回 `None`（跳过测试）。
@@ -202,9 +270,9 @@ mod tests {
         None
     }
 
-    /// 完整跑一遍：检查（空版本即完整）→ 生成参数 → 直接拿到产出。
+    /// 完整跑一遍：检查（空版本即完整）→ 准备 natives（选 java）→ 生成参数 → 拿到产出。
     #[tokio::test]
-    async fn checking_then_generating_produces_the_launch_args_and_integrity() {
+    async fn checking_then_generating_produces_the_launch_args() {
         let Some(java) = any_java().await else {
             return; // 本机没有 java，跳过
         };
@@ -238,8 +306,14 @@ mod tests {
             .unwrap();
         assert!(integrity.is_complete(), "{:?}", integrity.missing);
 
+        let java = PrepareNativesTask::new(option.clone(), install_options(&root))
+            .run(integrity, TaskContext::detached("准备 natives"))
+            .await
+            .unwrap();
+        assert!(java.is_usable());
+
         let prepared = GenerateArgsTask::new(option)
-            .run(integrity, TaskContext::detached("生成启动参数"))
+            .run(java, TaskContext::detached("生成启动参数"))
             .await
             .unwrap();
 

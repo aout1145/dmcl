@@ -7,6 +7,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use dmcl_mcmeta::os::{Arch, Os};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use walkdir::WalkDir;
 
@@ -82,8 +83,10 @@ pub struct JavaOption {
     pub path: PathBuf,
     /// 厂商 / 类型，`java -version` 输出的第一个词（例如 `openjdk`）。
     pub type_: String,
-    /// 32 或 64 —— 替换 `${arch}` 用。
-    pub arch: u32,
+    /// JVM 所在的操作系统（`os.name`）。
+    pub os: Os,
+    /// JVM 架构（`os.arch`）。
+    pub arch: Arch,
     /// 大版本号（`1.8` ⇒ 8，`17.0.2` ⇒ 17）—— 不可能为负。
     pub major_version: u32,
     /// 完整版本字符串（`17.0.2`）。
@@ -91,24 +94,48 @@ pub struct JavaOption {
 }
 
 impl JavaOption {
-    /// 用 `-version` 探测一个 java 可执行文件。
+    /// 探测一个 java 可执行文件。
+    ///
+    /// 用 `-XshowSettings:properties -version`：一次调用既能拿到版本横幅，又能拿到
+    /// `os.name` / `os.arch`（`java -version` 给不出 `linux` / `x86_64` 这种平台信息）。
     pub async fn probe(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         let output = tokio::process::Command::new(&path)
+            .arg("-XshowSettings:properties")
             .arg("-version")
             .output()
             .await
-            .with_context(|| format!("无法执行 {} -version", path.display()))?;
+            .with_context(|| {
+                format!(
+                    "无法执行 {} -XshowSettings:properties -version",
+                    path.display()
+                )
+            })?;
 
-        // `java -version` 通常把版本打印在 stderr，但有的实现写在 stdout，两个都收着
+        // 属性与版本横幅通常都打在 stderr，有的实现写在 stdout，两个都收着
         let mut raw = String::from_utf8_lossy(&output.stderr).into_owned();
         raw.push_str(&String::from_utf8_lossy(&output.stdout));
-        let raw = raw.replace('"', "").replace('\n', " ");
 
-        let tokens: Vec<&str> = raw.split(' ').collect();
+        let property = |key: &str| {
+            raw.lines()
+                .find_map(|line| line.trim().strip_prefix(key))
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+
+        // 版本横幅那一行：不缩进、且带着 "version"（属性行都缩进，且首行是 "Property settings:"）
+        let banner = raw
+            .lines()
+            .find(|line| {
+                !line.starts_with(' ') && !line.starts_with('\t') && line.contains("version")
+            })
+            .unwrap_or("")
+            .replace('"', "");
+
+        let tokens: Vec<&str> = banner.split(' ').collect();
         let type_ = tokens.first().copied().unwrap_or("").to_string();
         let version_str = tokens.get(2).copied().unwrap_or("").to_string();
-        let arch = if raw.contains("64-Bit") { 64 } else { 32 };
         let versions: Vec<&str> = version_str.split('.').collect();
         let major_version = if versions.first().copied().unwrap_or("") != "1" {
             versions
@@ -122,9 +149,21 @@ impl JavaOption {
                 .unwrap_or(0)
         };
 
+        // 架构必须能从 `os.arch` 认出来：认不出就报错，让调用者跳过这个 java，
+        // 而不是猜一个（natives 的 classifier 全押在它上面）
+        let os_arch = property("os.arch = ");
+        let arch = Arch::from_java_name(&os_arch).ok_or_else(|| {
+            anyhow!(
+                "无法确定 {} 的架构（os.arch = {os_arch:?}）",
+                path.display()
+            )
+        })?;
+        let os = Os::from_java_name(&property("os.name = ")).unwrap_or_else(Os::current);
+
         Ok(Self {
             path,
             type_,
+            os,
             arch,
             major_version,
             version_str,
@@ -136,9 +175,15 @@ impl JavaOption {
         self.major_version > 0
     }
 
-    /// 探测结果对应的配置项名字（`{type}-{arch}-bit-{version}`）。
+    /// 探测结果对应的配置项名字（`{type}-{os}-{arch}-{version}`，如 `openjdk-linux-x86_64-17.0.2`）。
     pub fn config_name(&self) -> String {
-        format!("{}-{}-bit-{}", self.type_, self.arch, self.version_str)
+        format!(
+            "{}-{}-{}-{}",
+            self.type_,
+            self.os.mc_name(),
+            self.arch.name(),
+            self.version_str
+        )
     }
 }
 
@@ -192,7 +237,7 @@ pub async fn select_java(
     };
     let configs = scanned.as_ref().unwrap_or(configs);
     if configs.is_empty() {
-        return Err(anyhow!("没有任何可用的 java 配置，请先用 search-java 搜索"));
+        return Err(anyhow!("没有任何可用的 java 配置，请先用 dmcl java 搜索"));
     }
 
     let name = match choice {
@@ -252,6 +297,19 @@ mod tests {
         assert_eq!(JavaChoice::Named("x".into()).to_string(), "x");
     }
 
+    #[test]
+    fn config_name_uses_os_and_arch_not_bits() {
+        let java = JavaOption {
+            path: PathBuf::from("/opt/jdk/bin/java"),
+            type_: "openjdk".to_string(),
+            os: Os::Linux,
+            arch: Arch::Aarch64,
+            major_version: 17,
+            version_str: "17.0.2".to_string(),
+        };
+        assert_eq!(java.config_name(), "openjdk-linux-aarch64-17.0.2");
+    }
+
     #[tokio::test]
     async fn selecting_without_any_java_is_an_error() {
         let configs = JavaConfigs::new();
@@ -284,7 +342,11 @@ mod tests {
             return; // 这台机器没有 java 就跳过
         };
         if java.is_usable() {
-            assert!(matches!(java.arch, 32 | 64));
+            assert!(matches!(
+                java.arch,
+                Arch::X86 | Arch::X86_64 | Arch::Aarch64
+            ));
+            assert!(matches!(java.os, Os::Windows | Os::Linux | Os::MacOs));
             assert!(!java.config_name().is_empty());
         }
     }

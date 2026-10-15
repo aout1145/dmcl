@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use dmcl_download::file_ok;
-use dmcl_mcmeta::layout::{assets_index_path, natives_dir, read_version_json_safe};
+use dmcl_mcmeta::layout::{assets_index_path, read_version_json_safe};
 use dmcl_mcmeta::vanilla::AssetIndexFile;
 
-use crate::plan::{plan_game_files, plan_natives, PlanContext};
+use crate::plan::{plan_game_files, PlanContext};
 
 /// 一个文件为什么不合格。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +24,6 @@ pub enum MissingReason {
     Missing,
     /// 文件在，但内容与预期不符（摘要 / 大小对不上）。
     Incomplete,
-    /// 目录还没准备好（例如 natives 还没解压）。
-    NotPrepared,
 }
 
 impl fmt::Display for MissingReason {
@@ -33,7 +31,6 @@ impl fmt::Display for MissingReason {
         f.write_str(match self {
             MissingReason::Missing => "缺失",
             MissingReason::Incomplete => "内容不符",
-            MissingReason::NotPrepared => "尚未生成",
         })
     }
 }
@@ -139,19 +136,8 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
         });
     }
 
-    // natives 是"解压出来的目录"，不是下载项，单独判断
-    if !plan_natives(plan, &json).is_empty() {
-        status.checked += 1;
-        let dir = natives_dir(version_name);
-        if !dir_is_populated(&dir).await {
-            status.missing.push(MissingFile {
-                path: dir,
-                url: None,
-                checksum: None,
-                reason: MissingReason::NotPrepared,
-            });
-        }
-    }
+    // natives 不在这里检查：它的分类器取决于启动时选中的 java 架构，由启动流程的
+    // 「准备 natives」步骤负责下载 + 解压（见 `dmcl_install::natives_task`）。
 
     status.complete = status.missing.is_empty();
     Ok(status)
@@ -161,15 +147,6 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
 async fn read_local_asset_index(path: &Path) -> Option<AssetIndexFile> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     serde_json::from_str(&text).ok()
-}
-
-/// 目录存在且非空。
-async fn dir_is_populated(path: &Path) -> bool {
-    let mut entries = match tokio::fs::read_dir(path).await {
-        Ok(entries) => entries,
-        Err(_) => return false,
-    };
-    entries.next_entry().await.ok().flatten().is_some()
 }
 
 #[cfg(test)]

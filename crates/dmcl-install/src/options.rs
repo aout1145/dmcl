@@ -56,8 +56,6 @@ pub struct InstallOptions {
     pub download: DownloadOptions,
     /// 是否跳过 `*.ogg` 资源（音乐与音效）。
     pub skip_music: bool,
-    /// natives 分类器里 `${arch}` 的取值（32 / 64），默认取本进程位宽。
-    pub natives_arch: u32,
     /// 跑安装器 processor 时用哪个 java。
     pub java: Arc<dyn JavaProvider>,
 }
@@ -69,7 +67,6 @@ impl fmt::Debug for InstallOptions {
             .field("source", &self.source)
             .field("download", &self.download)
             .field("skip_music", &self.skip_music)
-            .field("natives_arch", &self.natives_arch)
             .finish_non_exhaustive()
     }
 }
@@ -81,7 +78,6 @@ impl InstallOptions {
             source,
             download: DownloadOptions::default(),
             skip_music: false,
-            natives_arch: default_natives_arch(),
             java: Arc::new(PathJava),
         }
     }
@@ -93,11 +89,6 @@ impl InstallOptions {
 
     pub fn with_skip_music(mut self, skip_music: bool) -> Self {
         self.skip_music = skip_music;
-        self
-    }
-
-    pub fn with_natives_arch(mut self, natives_arch: u32) -> Self {
-        self.natives_arch = natives_arch;
         self
     }
 
@@ -116,7 +107,6 @@ impl InstallOptions {
         crate::plan::PlanContext {
             root_path: self.root_path.clone(),
             skip_music: self.skip_music,
-            natives_arch: self.natives_arch,
         }
     }
 
@@ -135,14 +125,6 @@ impl InstallOptions {
     }
 }
 
-/// 默认的 `natives_arch`：本进程的位宽。
-///
-/// 本 crate 不负责选 java，因此默认按本机位宽；
-/// 需要时由调用者用 [`InstallOptions::with_natives_arch`] 覆盖。
-pub fn default_natives_arch() -> u32 {
-    (std::mem::size_of::<usize>() * 8) as u32
-}
-
 /// `.minecraft` 是否已经存在（仅用于打印提示）。
 pub fn root_exists(root_path: &Path) -> bool {
     root_path.is_dir()
@@ -157,11 +139,9 @@ mod tests {
     fn options_carry_the_callers_configuration() {
         let options = InstallOptions::new("/tmp/mc", DownloadSource::new(Mirror::Bmclapi))
             .with_skip_music(true)
-            .with_natives_arch(32)
             .with_java_path("/opt/java/bin/java");
         assert_eq!(options.root_path, PathBuf::from("/tmp/mc"));
         assert!(options.skip_music);
-        assert_eq!(options.natives_arch, 32);
         assert_eq!(options.source.mirror(), Mirror::Bmclapi);
         assert!(format!("{options:?}").contains("/tmp/mc"));
     }
@@ -176,11 +156,5 @@ mod tests {
         let fixed =
             InstallOptions::new("/tmp/mc", DownloadSource::official()).with_java_path("/x/y/java");
         assert_eq!(fixed.java_for(8).await.unwrap(), PathBuf::from("/x/y/java"));
-    }
-
-    #[test]
-    fn natives_arch_defaults_to_the_process_width() {
-        assert!(matches!(default_natives_arch(), 32 | 64));
-        assert_eq!(default_natives_arch(), usize::BITS);
     }
 }

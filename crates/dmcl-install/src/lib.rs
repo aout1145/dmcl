@@ -66,6 +66,7 @@ pub mod zip;
 
 pub use files::{
     download_game_files, download_planned, ensure_asset_index, extract_natives, game_files_task,
+    natives_task,
 };
 pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
 pub use io::{write_json_safe, write_safe};
@@ -73,7 +74,7 @@ pub use loader::{fabric, forge, neoforge};
 pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
 pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_game_files,
-    plan_libraries, plan_natives, PlanContext, PlannedFile,
+    plan_libraries, plan_native_jars, plan_natives, PlanContext, PlannedFile,
 };
 pub use spec::{install_loader_task, install_task, InstallSpec, LoaderKind, LoaderRequest};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};

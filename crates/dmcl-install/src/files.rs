@@ -5,13 +5,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use dmcl_download::DownloadReport;
 use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe};
+use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{AssetIndexFile, VersionJson};
 use dmcl_task::{task_fn, TaskChain, TaskContext};
 
 use crate::options::InstallOptions;
 use crate::plan::{
-    plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries, plan_natives,
-    PlannedFile,
+    plan_asset_objects, plan_assets_index, plan_client_jar, plan_libraries, plan_native_jars,
+    plan_natives, PlannedFile,
 };
 use crate::zip::extract_zip;
 
@@ -86,19 +87,22 @@ pub async fn download_game_files(
     download_planned(options, "游戏文件", planned, ctx).await
 }
 
-/// 把 natives jar 解压到该版本的临时目录，返回解压了几个。
+/// 把 natives jar 解压到该版本、该架构的临时目录，返回解压了几个。
 ///
-/// 解压到的目录与启动时引用的是同一个（[`dmcl_mcmeta::layout::natives_dir`]）。
+/// 解压到的目录与启动时引用的是同一个（[`dmcl_mcmeta::layout::natives_dir`]），
+/// 目录名带上 os / arch，换平台或换 JVM 架构不会混用。
 pub async fn extract_natives(
     options: &InstallOptions,
     version_name: &str,
+    os: Os,
+    arch: Arch,
     ctx: &TaskContext,
 ) -> Result<usize> {
     let json = read_version_json_safe(&options.root_path, version_name).await?;
-    let target = natives_dir(version_name);
+    let target = natives_dir(version_name, os, arch);
     let mut extracted = 0;
 
-    for (jar, name) in plan_natives(&options.plan(), &json) {
+    for (jar, name) in plan_natives(&options.plan(), &json, os, arch) {
         if !jar.is_file() {
             // 库文件缺失时启动流程会在完整性检查里发现，这里不当作错误
             ctx.log(format!("跳过缺失的 natives: {name}"));
@@ -134,9 +138,9 @@ pub fn client_jar_task(
     })
 }
 
-/// 下载游戏文件的任务链：索引 → 库 → 资源 → natives。
+/// 下载游戏文件的任务链：索引 → 库 → 资源。
 ///
-/// 每一步单独读一次本地的版本 JSON（很便宜），因此步骤之间不需要共享可变状态。
+/// natives 不在这里：它依赖启动时选中的 java 架构，由 [`natives_task`] 单独跑。
 pub fn game_files_task(options: Arc<InstallOptions>, version_name: String) -> TaskChain<(), ()> {
     TaskChain::new(format!("下载游戏文件：{version_name}"))
         .then(
@@ -147,11 +151,28 @@ pub fn game_files_task(options: Arc<InstallOptions>, version_name: String) -> Ta
             libraries_step(options.clone(), version_name.clone()),
             "下载库文件",
         )
+        .then(assets_step(options, version_name), "下载资源")
+}
+
+/// natives 的下载 + 解压任务链。
+///
+/// 独立于 [`game_files_task`]：natives 要按**启动时选中的 java** 的 os / arch 挑分类器，
+/// 因此由启动流程在选好 java 之后再跑。
+pub fn natives_task(
+    options: Arc<InstallOptions>,
+    version_name: String,
+    os: Os,
+    arch: Arch,
+) -> TaskChain<(), ()> {
+    TaskChain::new(format!("准备 natives：{version_name}"))
         .then(
-            assets_step(options.clone(), version_name.clone()),
-            "下载资源",
+            natives_download_step(options.clone(), version_name.clone(), os, arch),
+            "下载 natives",
         )
-        .then(natives_step(options, version_name), "解压 natives")
+        .then(
+            natives_extract_step(options, version_name, os, arch),
+            "解压 natives",
+        )
 }
 
 fn index_step(
@@ -209,15 +230,35 @@ fn assets_step(
     })
 }
 
-fn natives_step(
+fn natives_download_step(
     options: Arc<InstallOptions>,
     version_name: String,
+    os: Os,
+    arch: Arch,
+) -> impl dmcl_task::Task<(), ()> + 'static {
+    task_fn("下载 natives", move |ctx| {
+        let options = options.clone();
+        let version_name = version_name.clone();
+        async move {
+            let json = read_version_json_safe(&options.root_path, &version_name).await?;
+            let planned = plan_native_jars(&options.plan(), &json, os, arch);
+            download_planned(&options, "natives", planned, &ctx).await?;
+            Ok(())
+        }
+    })
+}
+
+fn natives_extract_step(
+    options: Arc<InstallOptions>,
+    version_name: String,
+    os: Os,
+    arch: Arch,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
     task_fn("解压 natives", move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
-            extract_natives(&options, &version_name, &ctx).await?;
+            extract_natives(&options, &version_name, os, arch, &ctx).await?;
             Ok(())
         }
     })

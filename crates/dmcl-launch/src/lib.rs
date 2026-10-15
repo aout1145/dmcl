@@ -45,5 +45,6 @@ pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 pub use prepare::{
-    launch_chain, GenerateArgsTask, LaunchTask, PrepareLaunchFilesTask, PreparedLaunch,
+    launch_chain, GenerateArgsTask, LaunchTask, PrepareLaunchFilesTask, PrepareNativesTask,
+    PreparedLaunch,
 };

@@ -27,8 +27,6 @@ pub struct GameLauncher {
     pub option: LaunchOption,
     /// `versions/<version_name>`。
     pub version_path: PathBuf,
-    /// natives 解压目录（由安装流程填充）。
-    pub natives_path: PathBuf,
     pub java: Option<JavaOption>,
     pub json: VersionJson,
 }
@@ -37,12 +35,10 @@ impl GameLauncher {
     /// `this(LaunchOption)`。
     pub async fn new(option: LaunchOption) -> Result<Self> {
         let version_path = version_dir(&option.root_path, &option.version_name);
-        let natives_path = natives_dir(&option.version_name);
         let json = read_version_json_safe(&option.root_path, &option.version_name).await?;
         Ok(Self {
             option,
             version_path,
-            natives_path,
             java: None,
             json,
         })
@@ -108,8 +104,8 @@ impl GameLauncher {
                 }
             }
 
-            // natives 的解压不在这里做：安装流程已经把 natives 铺到
-            // `self.natives_path` 了，这里只需要在命令行里引用那个目录。
+            // natives 的解压不在这里做：启动流程的先导步骤已经把 natives 铺到
+            // 该 java 架构对应的目录里，这里只需要在命令行里引用那个目录。
         }
 
         let mut result = String::new();
@@ -190,6 +186,11 @@ impl GameLauncher {
             .await?;
         }
 
+        // natives 目录按所选 java 的 os / arch 区分
+        let natives_directory = natives_dir(&self.option.version_name, java.os, java.arch)
+            .to_string_lossy()
+            .into_owned();
+
         let mut args: Vec<String> = Vec::new();
         args.push(java.path.to_string_lossy().into_owned());
         self.java = Some(java);
@@ -247,7 +248,6 @@ impl GameLauncher {
 
         // 模板替换：这些都是要拼进命令行的值，因此必须是字符串
         let classpath = self.get_libraries(ctx).await?;
-        let natives_directory = self.natives_path.to_string_lossy().into_owned();
         let library_directory = self
             .option
             .root_path
@@ -412,6 +412,7 @@ pub(crate) fn spawn_game(version_path: &std::path::Path, args: &[String]) -> Res
 mod tests {
     use super::*;
     use crate::account::OfflineAccount;
+    use dmcl_mcmeta::os::{Arch, Os};
     use std::sync::Arc;
 
     /// "同名库保留最新版本"这一步现在依赖 `version-compare`。这些是 Minecraft
@@ -449,15 +450,14 @@ mod tests {
     fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, "1.0");
         let version_path = version_dir(&root, "1.0");
-        let natives_path = natives_dir(&option.version_name);
         GameLauncher {
             option,
             version_path,
-            natives_path,
             java: Some(JavaOption {
                 path: PathBuf::from("/usr/bin/java"),
                 type_: "openjdk".to_string(),
-                arch: 64,
+                arch: Arch::X86_64,
+                os: Os::current(),
                 major_version: 17,
                 version_str: "17.0.2".to_string(),
             }),

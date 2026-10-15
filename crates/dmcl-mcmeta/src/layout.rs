@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use path_clean::PathClean;
 
+use crate::os::{Arch, Os};
 use crate::vanilla::version::VersionJson;
 
 /// 把路径变成绝对路径并归一化（处理 `.` / `..` / 重复分隔符）。
@@ -60,12 +61,18 @@ pub fn assets_virtual_dir(root_path: &Path, asset_index_id: &str) -> PathBuf {
     assets_dir(root_path).join("virtual").join(asset_index_id)
 }
 
-/// natives 解压目录（放在临时目录里，每次启动重新解压）。
+/// natives 解压目录（放在临时目录里）。
 ///
-/// 目录名由版本名派生，因此同一个版本每次拿到同一个路径；用 FNV-1a 散列是为了
-/// 避免版本名里的路径分隔符等字符混进文件名。
-pub fn natives_dir(version_name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("dmcl-natives-{:016x}", fnv1a64(version_name)))
+/// 目录名带上 os 与 java 架构（如 `dmcl-natives-linux-x86_64-<hash>`）：换平台或换 JVM
+/// 架构时会落到不同目录，不会把上一次的 natives 混进来。版本名仍然经过 FNV-1a 散列，
+/// 避免其中的路径分隔符等字符混进文件名。
+pub fn natives_dir(version_name: &str, os: Os, arch: Arch) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "dmcl-natives-{}-{}-{:016x}",
+        os.mc_name(),
+        arch.name(),
+        fnv1a64(version_name)
+    ))
 }
 
 /// 读一个版本 JSON 文件。
@@ -143,13 +150,26 @@ mod tests {
 
     #[test]
     fn natives_directories_are_stable_and_distinct() {
-        assert_eq!(natives_dir("1.20.1"), natives_dir("1.20.1"));
-        assert_ne!(natives_dir("1.20.1"), natives_dir("1.20.2"));
-        let dir = natives_dir("1.20.1");
-        assert!(dir
+        let (os, arch) = (Os::current(), Arch::X86_64);
+        assert_eq!(
+            natives_dir("1.20.1", os, arch),
+            natives_dir("1.20.1", os, arch)
+        );
+        assert_ne!(
+            natives_dir("1.20.1", os, arch),
+            natives_dir("1.20.2", os, arch)
+        );
+        // 架构不同 ⇒ 目录不同（换 JVM 不会复用上一次的 natives）
+        assert_ne!(
+            natives_dir("1.20.1", os, Arch::X86_64),
+            natives_dir("1.20.1", os, Arch::X86)
+        );
+        let name = natives_dir("1.20.1", os, Arch::X86_64)
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("dmcl-natives-"));
+            .into_owned();
+        assert!(name.starts_with("dmcl-natives-"), "{name}");
+        assert!(name.contains("x86_64"), "{name}");
     }
 }

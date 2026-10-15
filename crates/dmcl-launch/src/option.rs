@@ -40,8 +40,6 @@ pub struct LaunchOption {
     pub java_configs: JavaConfigs,
     /// 跳过 `*.ogg` 资源（完整性检查时也要一致，否则会把音乐报成缺失）。
     pub skip_music: bool,
-    /// natives 分类器里 `${arch}` 的取值。
-    pub natives_arch: u32,
 }
 
 impl fmt::Debug for LaunchOption {
@@ -82,7 +80,6 @@ impl LaunchOption {
             java: JavaChoice::Auto,
             java_configs: JavaConfigs::new(),
             skip_music: false,
-            natives_arch: (std::mem::size_of::<usize>() * 8) as u32,
         }
     }
 
@@ -94,9 +91,8 @@ impl LaunchOption {
     }
 
     /// 指定本地文件布局相关的配置（与安装流程保持一致）。
-    pub fn with_local_layout(mut self, skip_music: bool, natives_arch: u32) -> Self {
+    pub fn with_local_layout(mut self, skip_music: bool) -> Self {
         self.skip_music = skip_music;
-        self.natives_arch = natives_arch;
         self
     }
 
@@ -105,7 +101,6 @@ impl LaunchOption {
         PlanContext {
             root_path: self.root_path.clone(),
             skip_music: self.skip_music,
-            natives_arch: self.natives_arch,
         }
     }
 }
@@ -132,9 +127,6 @@ mod tests {
             dmcl_mcmeta::layout::version_dir(&option.root_path, &option.version_name),
             PathBuf::from("/mc/versions/1.20.1")
         );
-        assert!(dmcl_mcmeta::layout::natives_dir(&option.version_name)
-            .to_string_lossy()
-            .contains("dmcl-natives-"));
     }
 
     #[test]
