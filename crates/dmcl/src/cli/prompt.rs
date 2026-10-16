@@ -53,6 +53,10 @@ pub(crate) trait ArgDefaults {
 /// 全局参数，不值得逐个提问。
 const SKIPPED_ARGS: &[&str] = &["help", "version"];
 
+/// 不进交互菜单的命令：`prompt` 不能递归自己，`help` 是 clap 内置的，
+/// `gui` 必须在主线程启动（此时进程已经跑在 tokio 里，dispatcher 也会拒绝）。
+const HIDDEN_COMMANDS: &[&str] = &["prompt", "help", "gui"];
+
 /// 必填参数被反复留空时最多追问几次（之后交给 clap 报错，避免死循环）。
 const MAX_REQUIRED_ATTEMPTS: usize = 3;
 
@@ -188,6 +192,15 @@ async fn build_argv(
 // 主循环
 // ---------------------------------------------------------------------------
 
+/// 交互菜单里要显示的命令（去掉 [`HIDDEN_COMMANDS`]）。
+fn menu_commands() -> Vec<clap::Command> {
+    Cli::command()
+        .get_subcommands()
+        .filter(|sub| !HIDDEN_COMMANDS.contains(&sub.get_name()))
+        .cloned()
+        .collect()
+}
+
 /// `prompt` —— 交互式命令浏览器。`defaults` 为各命令提供参数默认值。
 pub(crate) async fn prompt_interactive(defaults: &dyn ArgDefaults) -> Result<()> {
     // 管道 / CI 里没有终端可以交互，直接给一句人话，而不是抛一个 IO 错误。
@@ -203,12 +216,7 @@ pub(crate) async fn prompt_interactive(defaults: &dyn ArgDefaults) -> Result<()>
     loop {
         clear_screen();
 
-        let root = Cli::command();
-        let subcommands: Vec<clap::Command> = root
-            .get_subcommands()
-            .filter(|sub| sub.get_name() != "prompt" && sub.get_name() != "help")
-            .cloned()
-            .collect();
+        let subcommands = menu_commands();
         if subcommands.is_empty() {
             println!("没有可用的命令");
             return Ok(());
@@ -304,6 +312,22 @@ mod tests {
         assert!(should_ask("version_id", &disabled));
         // 什么都没关时全都要问
         assert!(should_ask("forge_version", &[]));
+    }
+
+    /// 交互菜单不列出 `prompt` / `help` / `gui`。
+    #[test]
+    fn the_prompt_menu_hides_prompt_help_and_gui() {
+        let names: Vec<String> = menu_commands()
+            .iter()
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+        for hidden in HIDDEN_COMMANDS {
+            assert!(
+                !names.contains(&hidden.to_string()),
+                "菜单里不该有 {hidden}: {names:?}"
+            );
+        }
+        assert!(names.contains(&"launch".to_string()), "{names:?}");
     }
 
     // -----------------------------------------------------------------------

@@ -233,6 +233,13 @@ pub enum Commands {
         action: Option<JavaCommand>,
     },
 
+    /// 启动图形界面
+    Gui {
+        /// 前端名称（默认 gtk4）
+        #[arg(value_name = "frontend")]
+        frontend: Option<String>,
+    },
+
     /// 交互式菜单
     Prompt,
 
@@ -274,12 +281,14 @@ pub enum JavaCommand {
     },
 }
 
-/// 命令行前端的入口。
-pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
+/// 解析最终要执行的命令。
+///
+/// 没有子命令时执行配置里的 `cli.default_command`（默认 `prompt`）。这一步是同步的，
+/// 因此可以在建 tokio runtime / 启动 GUI **之前**先定下走哪条路（见 `main.rs`）。
+pub fn resolve_command(cli: Cli, config: &Config) -> Result<Commands> {
     match cli.command {
-        Some(command) => dispatch(command, config).await,
+        Some(command) => Ok(command),
         None => {
-            // 没有子命令 ⇒ 执行配置里的 `cli.default_command`（默认 `prompt`）
             let default = config.cli.default_command.clone();
             if default.is_empty() {
                 return Err(anyhow!("没有可执行的命令（cli.default_command 为空）"));
@@ -289,18 +298,19 @@ pub async fn run(cli: Cli, config: &mut Config) -> Result<()> {
                 OsString::from(default.clone()),
             ];
             match Cli::try_parse_from(argv) {
-                Ok(parsed) => match parsed.command {
-                    Some(command) => dispatch(command, config).await,
-                    None => Err(anyhow!("未知命令：{default}")),
-                },
+                Ok(parsed) => parsed.command.ok_or_else(|| anyhow!("未知命令：{default}")),
                 Err(_) => Err(anyhow!("未知命令：{default}")),
             }
         }
     }
 }
 
-async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
+/// 执行一个命令。
+pub async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
     match command {
+        // GUI 必须在主线程启动（见 `main.rs`），不该走这条 tokio 路径。
+        Commands::Gui { .. } => Err(anyhow!("gui 前端必须在主线程启动")),
+
         Commands::Launch { vername } => commands::launch::run(&vername, config).await,
 
         Commands::Install {
@@ -366,6 +376,7 @@ mod tests {
             "list-fabric",
             "list",
             "java",
+            "gui",
             "prompt",
             "version",
             "config",

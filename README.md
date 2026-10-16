@@ -14,16 +14,24 @@
   `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
 - **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，**校验通过才改名**，失败自动重试。
 - **可配置** —— 镜像、并发度、分块阈值、内存、窗口尺寸、附加 JVM / 游戏参数、Java 选择……
+- **图形界面（开发中）** —— GTK4 + libadwaita，`dmcl gui`（需带 `--features gtk4` 构建）。
 - **跨平台** —— Linux / Windows 有 CI 覆盖，macOS 也可用。
 
 ## 构建
 
-需要 stable Rust（1.75 或更新）。
+需要 stable Rust（1.93 或更新）。
 
 ```bash
 cd dmcl-rs
 cargo build --release
 ./target/release/dmcl --help          # Windows: .\target\release\dmcl.exe --help
+```
+
+图形界面需要 GTK4 / libadwaita 开发库，并显式开启 `gtk4` feature：
+
+```bash
+cargo build --release --features gtk4
+./target/release/dmcl gui             # 默认前端 gtk4
 ```
 
 ## 快速开始
@@ -60,6 +68,7 @@ dmcl launch 1.20.1
 | `list-forge <mc-version-id>`                                    | 列出 Forge 版本                                               |
 | `list-neoforge <mc-version-id>`                                 | 列出 NeoForge 版本                                            |
 | `java [list\|search\|add\|remove\|use]`                          | 管理本机 java；不带子命令进交互菜单                           |
+| `gui [frontend]`                                                | 启动图形界面（默认前端 gtk4；需 `--features gtk4` 构建）      |
 | `prompt`                                                        | 交互式菜单                                                    |
 | `config`                                                        | 查看或编辑配置；非终端下只打印                                |
 | `version`                                                       | 显示版本与构建时间                                            |

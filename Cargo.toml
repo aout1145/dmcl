@@ -5,7 +5,7 @@
 #   dmcl-download  concurrent / chunked file downloads as a task
 #   dmcl-install   materialise a version on disk (vanilla + Fabric/Forge/NeoForge)
 #   dmcl-launch    accounts, java selection, command line generation, game monitor
-#   dmcl           the application: config + cli (and, later, a gui)
+#   dmcl           the application: config + cli + gui (GTK4, feature-gated)
 #
 # Nothing but `dmcl` itself knows about the config file: every other crate is
 # configured by the caller (see each crate's `*Options` struct).
@@ -23,7 +23,7 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.93"
 license = "GPL-3.0-or-later"
 authors = ["a_out_"]
 
@@ -56,6 +56,7 @@ shell-words = "1"
 version-compare = "0.2"
 regex = "1"
 os_info = "3"
+relm4 = { version = "0.11", features = ["libadwaita"] }
 
 [profile.release]
 lto = true

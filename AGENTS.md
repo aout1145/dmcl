@@ -20,7 +20,7 @@
 `dmcl`：非官方 Minecraft 启动器，Rust。一个 cargo workspace —— crate 划分、依赖关系、
 各 crate 职责见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-Rust edition 2021，MSRV **1.75**，许可 GPL-3.0-or-later。
+Rust edition 2021，MSRV **1.93**，许可 GPL-3.0-or-later。
 
 ## 交流与文案
 

@@ -7,8 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
-# The application is a library (so a future GUI / daemon can reuse the exact
-# same config + front-end plumbing) plus the CLI binary.
+# The application is a library (so a GUI / daemon can reuse the exact same
+# config + front-end plumbing) plus the CLI binary.
 [lib]
 name = "dmcl"
 path = "src/lib.rs"
@@ -16,6 +16,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "dmcl"
 path = "src/main.rs"
+
+[features]
+default = []
+# GTK4 + libadwaita 图形前端（relm4）。需要系统装有 gtk4 / libadwaita 开发库。
+gtk4 = ["dep:relm4"]
 
 [dependencies]
 dmcl-task.workspace = true
@@ -32,3 +37,6 @@ anyhow.workspace = true
 clap.workspace = true
 dialoguer.workspace = true
 shell-words.workspace = true
+
+# 图形前端：可选依赖，只有开启 `gtk4` feature 才编译。
+relm4 = { workspace = true, optional = true }
