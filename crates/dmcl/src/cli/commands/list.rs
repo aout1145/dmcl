@@ -1,8 +1,23 @@
-//! `list-*` —— 列出可安装的版本。
+//! `list` / `list-*` —— 列出已安装的版本，或可安装的版本。
 
 use anyhow::Result;
 
 use crate::config::Config;
+
+/// `list` —— 列出**已安装**的版本。
+pub(crate) async fn installed(config: &Config) -> Result<()> {
+    let versions =
+        dmcl_mcmeta::layout::installed_versions(&config.launch.minecraft_root_path).await?;
+    if versions.is_empty() {
+        println!("还没有安装任何版本。");
+        return Ok(());
+    }
+    println!("已安装的版本：");
+    for version in versions {
+        println!("{}", version.name);
+    }
+    Ok(())
+}
 
 /// `list-mc`。
 pub(crate) async fn mc(config: &Config, kinds: &[String]) -> Result<()> {

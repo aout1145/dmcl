@@ -189,6 +189,9 @@ pub enum Commands {
         version_name: Option<String>,
     },
 
+    /// 列出已安装的版本
+    List,
+
     /// 列出 Minecraft 版本
     ListMc {
         /// 版本类型，逗号分隔
@@ -328,6 +331,8 @@ async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
         Commands::ListNeoforge { verid } => commands::list::neoforge(config, &verid).await,
         Commands::ListFabric { verid } => commands::list::fabric(config, &verid).await,
 
+        Commands::List => commands::list::installed(config).await,
+
         Commands::Java { action } => commands::java::run(action, config).await,
 
         Commands::Prompt => {
@@ -359,6 +364,7 @@ mod tests {
             "list-forge",
             "list-neoforge",
             "list-fabric",
+            "list",
             "java",
             "prompt",
             "version",

@@ -54,6 +54,7 @@ dmcl launch 1.20.1
 | `install <mc-version-id> [version-name]`                        | 安装原版；省略版本名时自动命名                                |
 | `install … [--fabric] [--forge] [--neoforge]`                   | 安装加载器                                                    |
 | `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本                                    |
+| `list`                                                          | 列出**已安装**的版本                                          |
 | `list-mc [--type=release,snapshot,…]`                           | 列出 Minecraft 版本                                           |
 | `list-fabric <mc-version-id>`                                   | 列出 Fabric loader 版本                                       |
 | `list-forge <mc-version-id>`                                    | 列出 Forge 版本                                               |
