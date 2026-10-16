@@ -56,7 +56,7 @@ shell-words = "1"
 version-compare = "0.2"
 regex = "1"
 os_info = "3"
-relm4 = { version = "0.11", features = ["libadwaita"] }
+relm4 = { version = "0.11", features = ["libadwaita", "gnome_45"] }
 
 [profile.release]
 lto = true
