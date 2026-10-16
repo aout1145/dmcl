@@ -236,12 +236,12 @@ pub enum Commands {
     /// 交互式菜单
     Prompt,
 
-    /// 显示版本
-    Version,
-
     /// 查看或编辑配置
     #[command(name = "config")]
     Config,
+
+    /// 显示版本
+    Version,
 }
 
 /// `java` 的子命令。不给子命令时进交互菜单。

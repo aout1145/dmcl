@@ -61,8 +61,8 @@ dmcl launch 1.20.1
 | `list-neoforge <mc-version-id>`                                 | 列出 NeoForge 版本                                            |
 | `java [list\|search\|add\|remove\|use]`                          | 管理本机 java；不带子命令进交互菜单                           |
 | `prompt`                                                        | 交互式菜单                                                    |
-| `version`                                                       | 显示版本与构建时间                                            |
 | `config`                                                        | 查看或编辑配置；非终端下只打印                                |
+| `version`                                                       | 显示版本与构建时间                                            |
 
 不带子命令时执行配置里的 `cli.default_command`（默认 `prompt`）。
 
