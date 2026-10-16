@@ -6,9 +6,6 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use dmcl_install::{install_task, InstallSpec, LoaderKind};
-use dmcl_mcmeta::fabric::latest_fabric_loader;
-use dmcl_mcmeta::forge::latest_forge_version;
-use dmcl_mcmeta::neoforge::latest_neoforge_version;
 use dmcl_mcmeta::source::DownloadSource;
 use dmcl_task::BoxFuture;
 
@@ -168,6 +165,9 @@ pub(crate) trait LoaderVersions: Send + Sync {
 }
 
 /// 走下载源查最新版。
+///
+/// 三个 `fetch_*` 都按版本**从新到旧**返回，因此「最新」＝列表第一条；Fabric 额外
+/// 优先稳定版（找不到稳定版才退回最新一条）。
 impl LoaderVersions for DownloadSource {
     fn latest<'a>(
         &'a self,
@@ -175,11 +175,29 @@ impl LoaderVersions for DownloadSource {
         mc_version: &'a str,
     ) -> BoxFuture<'a, Result<String>> {
         Box::pin(async move {
-            match kind {
-                LoaderKind::Fabric => latest_fabric_loader(self, mc_version).await,
-                LoaderKind::Forge => latest_forge_version(self, mc_version).await,
-                LoaderKind::NeoForge => latest_neoforge_version(self, mc_version).await,
-            }
+            let version = match kind {
+                LoaderKind::Fabric => {
+                    let list = self.fetch_fabric_loaders(mc_version).await?;
+                    list.iter()
+                        .find(|entry| entry.loader.is_stable())
+                        .or_else(|| list.first())
+                        .map(|entry| entry.loader.version.clone())
+                        .unwrap_or_default()
+                }
+                LoaderKind::Forge => self
+                    .fetch_forge_versions(mc_version)
+                    .await?
+                    .first()
+                    .map(dmcl_mcmeta::forge::ForgeVersionEntry::full_name)
+                    .unwrap_or_default(),
+                LoaderKind::NeoForge => self
+                    .fetch_neoforge_versions(mc_version)
+                    .await?
+                    .first()
+                    .map(|entry| entry.version.clone())
+                    .unwrap_or_default(),
+            };
+            Ok(version)
         })
     }
 }

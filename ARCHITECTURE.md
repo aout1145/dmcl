@@ -104,6 +104,10 @@ neoforge/   mod.rs + install_profile.rs
 source / os / maven / merge / layout / json   —— 四个域共用的底座
 ```
 
+加载器版本列表（Fabric / Forge / NeoForge）的 `fetch_*` 统一按版本**从新到旧**返回：
+Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新」就是列表第一条，
+调用方不再需要单独的 `latest_*` 取数函数。
+
 `rules.rs` 按**标准 Mojang 语义**判定：空规则允许；否则按顺序评估、**最后一条命中的
 规则的 action 决定结果**；一条都不命中则不允许。条件涵盖 `os.name` / `os.arch` /
 `os.version`(正则) / `os.versionRange`(区间) / `features`。

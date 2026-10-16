@@ -142,10 +142,9 @@ async fn a_few_planned_libraries_really_download() {
 
 #[tokio::test]
 #[ignore = "requires network access"]
-async fn the_fabric_loader_list_reports_a_latest_version() {
+async fn the_fabric_loader_list_can_be_fetched_newest_first() {
     let source = DownloadSource::new(Mirror::Official);
-    let latest = dmcl_mcmeta::fabric::latest_fabric_loader(&source, "1.20.1")
-        .await
-        .expect("fabric");
-    assert!(!latest.is_empty());
+    let list = source.fetch_fabric_loaders("1.20.1").await.expect("fabric");
+    let latest = list.first().expect("fabric 列表非空");
+    assert!(!latest.loader.version.is_empty());
 }

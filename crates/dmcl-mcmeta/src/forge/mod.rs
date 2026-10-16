@@ -78,20 +78,13 @@ fn forge_version_list_url(mc_version: &str) -> String {
 }
 
 impl DownloadSource {
-    /// 取 Forge 版本列表（只有 bmclapi 提供）。
+    /// 取 Forge 版本列表（只有 bmclapi 提供），按 build 号从新到旧排序。
     pub async fn fetch_forge_versions(&self, mc_version: &str) -> Result<Vec<ForgeVersionEntry>> {
-        self.fetch_json(&forge_version_list_url(mc_version)).await
+        let mut listing: Vec<ForgeVersionEntry> =
+            self.fetch_json(&forge_version_list_url(mc_version)).await?;
+        listing.sort_by_key(|entry| std::cmp::Reverse(entry.build));
+        Ok(listing)
     }
-}
-
-/// 最新 Forge（build 号最大）。
-pub async fn latest_forge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let versions = source.fetch_forge_versions(mc_version).await?;
-    Ok(versions
-        .iter()
-        .max_by_key(|entry| entry.build)
-        .map(ForgeVersionEntry::full_name)
-        .unwrap_or_default())
 }
 
 #[cfg(test)]

@@ -65,26 +65,22 @@ fn neoforge_version_list_url(mc_version: &str) -> String {
 }
 
 impl DownloadSource {
-    /// 取 NeoForge 版本列表。
-    pub async fn fetch_neoforge_versions(&self, mc_version: &str) -> Result<Vec<String>> {
-        let listing: Vec<NeoForgeListEntry> = self
+    /// 取 NeoForge 版本列表，按版本号从新到旧排序。
+    pub async fn fetch_neoforge_versions(
+        &self,
+        mc_version: &str,
+    ) -> Result<Vec<NeoForgeListEntry>> {
+        let mut listing: Vec<NeoForgeListEntry> = self
             .fetch_json(&neoforge_version_list_url(mc_version))
             .await?;
-        Ok(listing.into_iter().map(|entry| entry.version).collect())
+        listing.sort_by(|a, b| {
+            compare(&b.version, &a.version)
+                .ok()
+                .and_then(Cmp::ord)
+                .unwrap_or(Ordering::Equal)
+        });
+        Ok(listing)
     }
-}
-
-/// 最新 NeoForge —— 按版本号取最大者。
-pub async fn latest_neoforge_version(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let versions = source.fetch_neoforge_versions(mc_version).await?;
-    Ok(versions
-        .into_iter()
-        .max_by(|a, b| match compare(a, b) {
-            Ok(Cmp::Lt) => Ordering::Less,
-            Ok(Cmp::Gt) => Ordering::Greater,
-            _ => Ordering::Equal,
-        })
-        .unwrap_or_default())
 }
 
 #[cfg(test)]

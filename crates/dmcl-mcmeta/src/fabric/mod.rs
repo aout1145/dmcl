@@ -1,7 +1,10 @@
 //! Fabric 的元数据、地址与取数（loader 版本列表、版本 JSON）。
 
+use std::cmp::Ordering;
+
 use anyhow::Result;
 use serde::Deserialize;
+use version_compare::{compare, Cmp};
 
 use crate::json::JsonMap;
 use crate::source::{DownloadSource, Root};
@@ -136,9 +139,17 @@ fn fabric_profile_url(mc_version: &str, loader_version: &str) -> String {
 }
 
 impl DownloadSource {
-    /// 取 Fabric 的 loader 版本列表（从新到旧的顺序由调用者决定）。
+    /// 取 Fabric 的 loader 版本列表，按 loader 版本号从新到旧排序。
     pub async fn fetch_fabric_loaders(&self, mc_version: &str) -> Result<Vec<FabricLoaderEntry>> {
-        self.fetch_json(&fabric_loader_list_url(mc_version)).await
+        let mut list: Vec<FabricLoaderEntry> =
+            self.fetch_json(&fabric_loader_list_url(mc_version)).await?;
+        list.sort_by(|a, b| {
+            compare(&b.loader.version, &a.loader.version)
+                .ok()
+                .and_then(Cmp::ord)
+                .unwrap_or(Ordering::Equal)
+        });
+        Ok(list)
     }
 
     /// 取 Fabric 的版本 JSON（需要合并进原版版本 JSON）。
@@ -150,20 +161,6 @@ impl DownloadSource {
         self.fetch_version_json(&fabric_profile_url(mc_version, loader_version))
             .await
     }
-}
-
-/// 最新的**稳定** Fabric loader；没有稳定版时取列表第一个。
-pub async fn latest_fabric_loader(source: &DownloadSource, mc_version: &str) -> Result<String> {
-    let list = source.fetch_fabric_loaders(mc_version).await?;
-    for entry in list.iter().rev() {
-        if entry.loader.is_stable() {
-            return Ok(entry.loader.version.clone());
-        }
-    }
-    Ok(list
-        .first()
-        .map(|entry| entry.loader.version.clone())
-        .unwrap_or_default())
 }
 
 #[cfg(test)]

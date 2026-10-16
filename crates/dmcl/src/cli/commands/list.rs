@@ -18,9 +18,8 @@ pub(crate) async fn mc(config: &Config, kinds: &[String]) -> Result<()> {
 /// `list-forge`。
 pub(crate) async fn forge(config: &Config, verid: &str) -> Result<()> {
     let source = config.download_source();
-    let mut versions = source.fetch_forge_versions(verid).await?;
-    versions.sort_by_key(|entry| entry.build);
-    for version in versions {
+    // fetch 已按 build 从新到旧排序
+    for version in source.fetch_forge_versions(verid).await? {
         println!("{}", version.full_name());
     }
     Ok(())
@@ -29,8 +28,9 @@ pub(crate) async fn forge(config: &Config, verid: &str) -> Result<()> {
 /// `list-neoforge`。
 pub(crate) async fn neoforge(config: &Config, verid: &str) -> Result<()> {
     let source = config.download_source();
-    for version in source.fetch_neoforge_versions(verid).await? {
-        println!("{version}");
+    // fetch 已按版本号从新到旧排序
+    for entry in source.fetch_neoforge_versions(verid).await? {
+        println!("{}", entry.version);
     }
     Ok(())
 }
@@ -38,8 +38,8 @@ pub(crate) async fn neoforge(config: &Config, verid: &str) -> Result<()> {
 /// `list-fabric`。
 pub(crate) async fn fabric(config: &Config, verid: &str) -> Result<()> {
     let source = config.download_source();
-    let loaders = source.fetch_fabric_loaders(verid).await?;
-    for entry in loaders.iter().rev() {
+    // fetch 已按 loader 版本从新到旧排序
+    for entry in source.fetch_fabric_loaders(verid).await? {
         println!(
             "{verid}/{}{}",
             entry.loader.version,
