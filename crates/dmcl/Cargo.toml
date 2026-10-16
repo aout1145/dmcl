@@ -19,7 +19,8 @@ path = "src/main.rs"
 
 [features]
 default = []
-# GTK4 + libadwaita 图形前端（relm4）。需要系统装有 gtk4 / libadwaita 开发库。
+# GTK4 + libadwaita 图形前端（relm4）。默认关，用 `--features gtk4` 开启；
+# 需要系统装有 GTK4 / libadwaita 开发库。
 gtk4 = ["dep:relm4"]
 
 [dependencies]

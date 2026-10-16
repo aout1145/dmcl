@@ -36,8 +36,8 @@ jobs:
             target/release/dmcl
             target/release/dmcl.exe
 
-  # 图形前端只在 Linux 上构建/检查：Windows 不开 `gtk4` feature，
-  # 上面的 build 任务就不会编译 GUI，也就不需要装 GTK。
+  # 图形前端默认关：单独一个 Linux 任务装 GTK 后，对 `--features gtk4` 做检查与构建。
+  # Windows 不开这个 feature，上面的 build 任务不会编译 GUI，也就不需要装 GTK。
   gui:
     name: GUI (GTK4)
     runs-on: ubuntu-latest

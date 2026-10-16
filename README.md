@@ -14,7 +14,7 @@
   `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
 - **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，**校验通过才改名**，失败自动重试。
 - **可配置** —— 镜像、并发度、分块阈值、内存、窗口尺寸、附加 JVM / 游戏参数、Java 选择……
-- **图形界面（开发中）** —— GTK4 + libadwaita，`dmcl gui`（需带 `--features gtk4` 构建）。
+- **图形界面（开发中）** —— GTK4 + libadwaita，`dmcl gui`（用 `--features gtk4` 开启）。
 - **跨平台** —— Linux / Windows 有 CI 覆盖，macOS 也可用。
 
 ## 构建
@@ -27,11 +27,12 @@ cargo build --release
 ./target/release/dmcl --help          # Windows: .\target\release\dmcl.exe --help
 ```
 
-图形界面需要 GTK4 / libadwaita 开发库，并显式开启 `gtk4` feature：
+图形界面默认**不**编译；开启需要 `--features gtk4`，并装好 GTK4 / libadwaita 开发库
+（GTK ≥ 4.12、libadwaita ≥ 1.4，如 Debian / Ubuntu 的 `libgtk-4-dev libadwaita-1-dev`）：
 
 ```bash
 cargo build --release --features gtk4
-./target/release/dmcl gui             # 默认前端 gtk4
+./target/release/dmcl gui              # 默认前端 gtk4
 ```
 
 ## 快速开始
