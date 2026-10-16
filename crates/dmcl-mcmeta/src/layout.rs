@@ -36,6 +36,59 @@ pub fn version_jar_path(root_path: &Path, version_name: &str) -> PathBuf {
     version_dir(root_path, version_name).join(format!("{version_name}.jar"))
 }
 
+/// 一个已安装的版本（`versions/<name>/` 目录）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledVersion {
+    /// 本地版本名（目录名，也是启动时用的 `version-name`）。
+    pub name: String,
+    /// 版本目录 `versions/<name>`。
+    pub dir: PathBuf,
+    /// 版本 JSON 路径 `versions/<name>/<name>.json`（不保证存在）。
+    pub json_path: PathBuf,
+}
+
+/// 列出 `<root_path>/versions/` 下的已安装版本，按名字排序。
+///
+/// `versions/` 不存在（还没装过任何版本）时返回空列表；只统计**目录**，
+/// 忽略同名文件。目录里是否真的装了版本（有 `<name>.json`）不在这一步判断
+/// —— 那是完整性检查的事。
+pub async fn installed_versions(root_path: &Path) -> Result<Vec<InstalledVersion>> {
+    let versions_dir = root_path.join("versions");
+    let mut entries = match tokio::fs::read_dir(&versions_dir).await {
+        Ok(entries) => entries,
+        // 还没装过任何版本
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("无法读取 {}", versions_dir.display()))
+        }
+    };
+
+    let mut versions = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .with_context(|| format!("无法读取 {}", versions_dir.display()))?
+    {
+        let file_type = entry
+            .file_type()
+            .await
+            .with_context(|| format!("无法读取 {}", entry.path().display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let dir = entry.path();
+        let json_path = dir.join(format!("{name}.json"));
+        versions.push(InstalledVersion {
+            name,
+            dir,
+            json_path,
+        });
+    }
+    versions.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(versions)
+}
+
 pub fn libraries_dir(root_path: &Path) -> PathBuf {
     root_path.join("libraries")
 }
@@ -171,5 +224,34 @@ mod tests {
             .into_owned();
         assert!(name.starts_with("dmcl-natives-"), "{name}");
         assert!(name.contains("x86_64"), "{name}");
+    }
+
+    #[tokio::test]
+    async fn installed_versions_lists_version_directories_sorted() {
+        let root = std::env::temp_dir().join(format!("dmcl-installed-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let versions = root.join("versions");
+        tokio::fs::create_dir_all(versions.join("1.20.1"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(versions.join("1.20.1-forge"))
+            .await
+            .unwrap();
+        // 同名文件不算版本
+        tokio::fs::write(versions.join("note.txt"), "x")
+            .await
+            .unwrap();
+
+        let found = installed_versions(&root).await.unwrap();
+        let names: Vec<&str> = found.iter().map(|version| version.name.as_str()).collect();
+        assert_eq!(names, vec!["1.20.1", "1.20.1-forge"]);
+        assert_eq!(found[0].dir, version_dir(&root, "1.20.1"));
+        assert_eq!(found[0].json_path, version_json_path(&root, "1.20.1"));
+
+        // 目录不存在 ⇒ 空列表，而不是报错
+        let empty = installed_versions(&root.join("nope")).await.unwrap();
+        assert!(empty.is_empty());
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
     }
 }
