@@ -12,7 +12,8 @@
 
 ## 编译与运行
 
-- cargo feature **`gtk4`，默认关**，用 `--features gtk4` 开启；`relm4` 是可选的 Linux 依赖。
+- cargo feature **`gtk4`，默认关**，用 `--features gtk4` 开启；`relm4` 是可选的依赖
+  （Linux / Windows / macOS）。
 - 需要系统 **GTK ≥ 4.18 / libadwaita ≥ 1.7**（relm4 开 `gnome_48`；用到了 `AdwWrapBox`、
   `AdwSpinner`、`AdwDialog` 等较新的 Adw 控件）。
 - 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；这份构建没编译 `gtk4` 时给出明确报错。
