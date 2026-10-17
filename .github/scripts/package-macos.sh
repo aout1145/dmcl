@@ -64,10 +64,14 @@ for prefix in "$gtk_prefix" "$adw_prefix"; do
   done
 done
 
-# gdk-pixbuf loaders / GIO modules / GTK 模块。
-cp -R "$pixbuf_prefix/lib/gdk-pixbuf-2.0" "$res/lib/"
+# gdk-pixbuf loaders / GIO modules / GTK 模块（Homebrew 不一定都带，缺了就跳过）。
+if [ -d "$pixbuf_prefix/lib/gdk-pixbuf-2.0" ]; then
+  cp -R "$pixbuf_prefix/lib/gdk-pixbuf-2.0" "$res/lib/"
+fi
 mkdir -p "$res/lib/gio"
-cp -R "$glib_prefix/lib/gio/modules" "$res/lib/gio/"
+if [ -d "$glib_prefix/lib/gio/modules" ]; then
+  cp -R "$glib_prefix/lib/gio/modules" "$res/lib/gio/"
+fi
 if [ -d "$gtk_prefix/lib/gtk-4.0" ]; then
   cp -R "$gtk_prefix/lib/gtk-4.0" "$res/lib/"
 fi
