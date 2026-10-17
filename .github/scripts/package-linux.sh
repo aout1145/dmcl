@@ -2,7 +2,7 @@
 # 把 GTK4 版 dmcl 打成自包含的 AppImage。
 #
 # 依赖（Ubuntu）：libgtk-4-dev libadwaita-1-dev libgtk-4-bin libglib2.0-bin
-#                 libgdk-pixbuf-2.0-bin adwaita-icon-theme gsettings-desktop-schemas
+#                 libgdk-pixbuf-2.0-0 adwaita-icon-theme gsettings-desktop-schemas
 #                 pkg-config patchelf squashfs-tools desktop-file-utils
 set -euo pipefail
 

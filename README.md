@@ -39,14 +39,14 @@ cargo build --release --features gtk4
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Debian / Ubuntu | `sudo apt install libgtk-4-dev libadwaita-1-dev`（Ubuntu 24.04 的 GTK 4.14 太旧，建议 26.04+ 或更新发行版）                                                            |
 | macOS           | `brew install pkgconf gtk4 libadwaita`                                                                                                                                 |
-| Windows         | MSYS2 MINGW64：`pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gtk4 mingw-w64-x86_64-libadwaita`，再用 `--target x86_64-pc-windows-gnu` 构建 |
+| Windows         | MSYS2 MINGW64：`pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gtk4 mingw-w64-x86_64-libadwaita`，再用 rustup 的 `stable-x86_64-pc-windows-gnu` 工具链构建（见下） |
 
-Windows 示例：
+Windows 示例（MSYS2 MINGW64 里用 GNU host 工具链，避免 `pkg-config` 把它当成交叉编译）：
 
 ```bash
-rustup target add x86_64-pc-windows-gnu
-cargo build --release --features gtk4 --target x86_64-pc-windows-gnu
-# 运行 target/x86_64-pc-windows-gnu/release/dmcl.exe（需要 mingw64/bin 在 PATH 里）
+rustup toolchain install stable-x86_64-pc-windows-gnu --force-non-host
+cargo +stable-x86_64-pc-windows-gnu build --release --features gtk4
+# 运行 target/release/dmcl.exe（需要 mingw64/bin 在 PATH 里）
 ```
 
 ### 只构建命令行

@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(pwd)"
 out="$root/dist/dmcl-gtk4-windows"
 zipfile="$root/dist/dmcl-gtk4-windows.zip"
-binary="target/x86_64-pc-windows-gnu/release/dmcl.exe"
+binary="target/release/dmcl.exe"
 
 rm -rf "$out" "$zipfile"
 mkdir -p "$out" "$root/dist"
