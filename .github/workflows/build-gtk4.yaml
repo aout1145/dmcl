@@ -1,0 +1,130 @@
+on: [push, pull_request]
+
+# GTK4 + libadwaita 图形前端：单独验证 `--features gtk4`。
+# 需要 GTK ≥4.18 / libadwaita ≥1.7（用到 AdwWrapBox / AdwSpinner / AdwWindow）。
+jobs:
+  gui-linux:
+    name: GUI (GTK4, Linux)
+    # 注意：`ubuntu-latest` 在 2026-11 之前仍是 Ubuntu 24.04（GTK 4.14），所以显式用
+    # `ubuntu-26.04`。
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install GTK4 / libadwaita
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev libadwaita-1-dev libgtk-4-bin \
+            libglib2.0-bin libgdk-pixbuf-2.0-bin \
+            adwaita-icon-theme gsettings-desktop-schemas pkg-config \
+            patchelf squashfs-tools desktop-file-utils
+
+      - name: Clippy (gtk4)
+        run: cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
+
+      - name: Test (gtk4)
+        run: cargo test -p dmcl --features gtk4
+
+      - name: Build (gtk4)
+        run: cargo build -p dmcl --features gtk4 --release
+
+      - name: Package (AppImage)
+        run: bash .github/scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmcl-gtk4-linux
+          path: dist/dmcl-gtk4-linux.AppImage
+
+  # Windows 上用 MSYS2 的 GTK4，Rust 侧用 rustup 的 GNU target（MSVC 的 GTK 包不好装）。
+  gui-windows:
+    name: GUI (GTK4, Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gtk4-windows
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-libadwaita
+            zip
+
+      - name: Clippy (gtk4)
+        run: cargo clippy --target x86_64-pc-windows-gnu -p dmcl --features gtk4 --all-targets -- -D warnings
+
+      - name: Test (gtk4)
+        run: cargo test --target x86_64-pc-windows-gnu -p dmcl --features gtk4
+
+      - name: Build (gtk4)
+        run: cargo build --target x86_64-pc-windows-gnu -p dmcl --features gtk4 --release
+
+      - name: Package (zip)
+        run: bash .github/scripts/package-windows.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmcl-gtk4-windows
+          path: dist/dmcl-gtk4-windows.zip
+
+  # macOS 用 Homebrew 的 GTK4 / libadwaita。
+  gui-macos:
+    name: GUI (GTK4, macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gtk4-macos
+
+      - name: Install GTK4 / libadwaita
+        run: brew install pkgconf gtk4 libadwaita adwaita-icon-theme gsettings-desktop-schemas dylibbundler
+
+      - name: Set pkg-config path
+        run: |
+          echo "PKG_CONFIG_PATH=$(brew --prefix gtk4)/lib/pkgconfig:$(brew --prefix libadwaita)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Clippy (gtk4)
+        run: cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
+
+      - name: Test (gtk4)
+        run: cargo test -p dmcl --features gtk4
+
+      - name: Build (gtk4)
+        run: cargo build -p dmcl --features gtk4 --release
+
+      - name: Package (.app)
+        run: bash .github/scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmcl-gtk4-macos
+          path: dist/dmcl-gtk4-macos.zip

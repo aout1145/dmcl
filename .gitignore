@@ -1,4 +1,5 @@
 /target
+/dist
 .minecraft
 # 本机删除工具留下的回收站目录（避免误提交）
 .Trash-*

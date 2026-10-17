@@ -5,7 +5,7 @@ jobs:
     name: Build
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -35,32 +35,3 @@ jobs:
           path: |
             target/release/dmcl
             target/release/dmcl.exe
-
-  # 图形前端默认关：单独一个 Linux 任务装 GTK 后，对 `--features gtk4` 做检查与构建。
-  # Windows 不开这个 feature，上面的 build 任务不会编译 GUI，也就不需要装 GTK。
-  gui:
-    name: GUI (GTK4)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      # 需要 GTK ≥4.18 / libadwaita ≥1.7（用到 AdwWrapBox / AdwSpinner / AdwDialog）。
-      - name: Install GTK4 / libadwaita
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
-
-      - name: Clippy (gtk4)
-        run: cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
-
-      - name: Test (gtk4)
-        run: cargo test -p dmcl --features gtk4
-
-      - name: Build (gtk4)
-        run: cargo build -p dmcl --features gtk4 --release
