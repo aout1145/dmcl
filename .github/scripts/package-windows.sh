@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# 把 GTK4 版 dmcl.exe 和运行时依赖打成一个自包含 zip（在 MSYS2 MINGW64 里运行）。
+# 把 GTK4 版 dmcl.exe 和运行时依赖准备成一个自包含目录（CI 再上传为 artifact）。
 set -euo pipefail
 
 root="$(pwd)"
 out="$root/dist/dmcl-gtk4-windows"
-zipfile="$root/dist/dmcl-gtk4-windows.zip"
 binary="target/release/dmcl.exe"
 
-rm -rf "$out" "$zipfile"
+rm -rf "$out"
 mkdir -p "$out" "$root/dist"
 
 cp "$binary" "$out/dmcl.exe"
@@ -103,9 +102,4 @@ DMCL (GTK4)
 需要 64 位 Windows 10/11。
 EOF
 
-(
-  cd "$root/dist"
-  zip -qr "dmcl-gtk4-windows.zip" "dmcl-gtk4-windows"
-)
-
-echo "已生成 $zipfile"
+echo "已准备 $out"

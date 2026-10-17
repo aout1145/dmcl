@@ -71,7 +71,6 @@ jobs:
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-gtk4
             mingw-w64-x86_64-libadwaita
-            zip
 
       - name: Clippy (gtk4)
         run: cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
@@ -82,13 +81,13 @@ jobs:
       - name: Build (gtk4)
         run: cargo build -p dmcl --features gtk4 --release
 
-      - name: Package (zip)
+      - name: Package (directory)
         run: bash .github/scripts/package-windows.sh
 
       - uses: actions/upload-artifact@v4
         with:
           name: dmcl-gtk4-windows
-          path: dist/dmcl-gtk4-windows.zip
+          path: dist/dmcl-gtk4-windows/
 
   # macOS 用 Homebrew 的 GTK4 / libadwaita。
   gui-macos:
