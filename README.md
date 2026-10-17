@@ -15,7 +15,7 @@
 - **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，**校验通过才改名**，失败自动重试。
 - **可配置** —— 镜像、并发度、分块阈值、内存、窗口尺寸、附加 JVM / 游戏参数、Java 选择……
 - **图形界面（开发中）** —— GTK4 + libadwaita，`dmcl gui`（用 `--features gtk4` 开启）。
-- **跨平台** —— Linux / Windows 有 CI 覆盖，macOS 也可用。
+- **跨平台** —— Linux / Windows / macOS 都有 CI 覆盖（默认构建与 GTK4 前端）。
 
 ## 构建
 
@@ -28,12 +28,21 @@ cargo build --release
 ```
 
 图形界面默认**不**编译；开启需要 `--features gtk4`，并装好 GTK4 / libadwaita 开发库
-（GTK ≥ 4.18、libadwaita ≥ 1.7，如 Debian / Ubuntu 的 `libgtk-4-dev libadwaita-1-dev`）：
+（GTK ≥ 4.18、libadwaita ≥ 1.7）：
 
 ```bash
 cargo build --release --features gtk4
 ./target/release/dmcl gui              # 默认前端 gtk4
 ```
+
+GTK 开发库的装法：Debian / Ubuntu 用 `libgtk-4-dev libadwaita-1-dev`；macOS 用
+`brew install gtk4 libadwaita`；Windows 用 MSYS2 的 `mingw-w64-x86_64-gtk4`
+`mingw-w64-x86_64-libadwaita`，并以 `--target x86_64-pc-windows-gnu` 构建。
+三个平台的 `dmcl gui` 默认前端都是 `gtk4`。
+
+CI 的 GTK4 任务会输出自包含包：Linux AppImage、Windows zip（双击 `dmcl.cmd` 启动）、
+macOS `.app`。Linux AppImage 在 Ubuntu 26.04 上构建，需要较新的 glibc；macOS 包是
+ad-hoc 签名，首次打开可能需要在 Finder 里右键 → 打开。
 
 ## 快速开始
 
