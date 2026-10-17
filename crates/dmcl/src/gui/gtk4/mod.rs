@@ -1,6 +1,4 @@
-//! GTK4 + libadwaita 前端（基于 relm4）。
-//!
-//! 组件按「界面框架（`app`）」与「页面（`pages`）」粗分，详见仓库的 GUI 设计草稿。
+#![doc = include_str!("ARCHITECTURE.md")]
 
 pub(crate) mod app;
 pub(crate) mod pages;

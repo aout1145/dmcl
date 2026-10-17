@@ -3,11 +3,11 @@
 //! 解析与合并全交给 `serde`：嵌套结构体直接对应嵌套 JSON，`#[serde(default)]`
 //! 表示"缺键保留默认值"。
 //!
-//! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由 [`crate::cli::run`]
-//! 持有并传下去；各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
+//! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由前端（CLI / GUI）持有并传下去；
+//! 各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
 //!
 //! 各段拆在子模块（`launch` / `account` / `download` / `cli`）；交互编辑用的展开 /
-//! 写回在 [`edit`]，java 管理的纯逻辑在 [`java`]。
+//! 写回在 `edit`，java 管理的纯逻辑在 `java`。
 //!
 //! ```json
 //! {

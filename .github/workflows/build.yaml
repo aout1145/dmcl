@@ -50,6 +50,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # 需要 GTK ≥4.18 / libadwaita ≥1.7（用到 AdwWrapBox / AdwSpinner / AdwDialog）。
       - name: Install GTK4 / libadwaita
         run: |
           sudo apt-get update

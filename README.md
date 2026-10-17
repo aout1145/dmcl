@@ -28,7 +28,7 @@ cargo build --release
 ```
 
 图形界面默认**不**编译；开启需要 `--features gtk4`，并装好 GTK4 / libadwaita 开发库
-（GTK ≥ 4.12、libadwaita ≥ 1.4，如 Debian / Ubuntu 的 `libgtk-4-dev libadwaita-1-dev`）：
+（GTK ≥ 4.18、libadwaita ≥ 1.7，如 Debian / Ubuntu 的 `libgtk-4-dev libadwaita-1-dev`）：
 
 ```bash
 cargo build --release --features gtk4
