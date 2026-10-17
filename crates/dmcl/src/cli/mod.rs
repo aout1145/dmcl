@@ -305,6 +305,12 @@ pub fn resolve_command(cli: Cli, config: &Config) -> Result<Commands> {
     }
 }
 
+/// 跑交互式菜单。GUI 前端不可用时从 [`crate::gui::run`] 回退到这里。
+pub(crate) fn run_prompt(config: &mut Config) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(dispatch(Commands::Prompt, config))
+}
+
 /// 执行一个命令。
 pub async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
     match command {

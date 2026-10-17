@@ -56,11 +56,8 @@ cargo build --release
 ./target/release/dmcl --help
 ```
 
-默认命令是 `gui`，所以**没有编译 `gtk4` 的构建**直接运行 `dmcl` 会报「没有可用的 gui
-前端」。这时可以：
-
-- 显式运行命令，例如 `dmcl prompt`、`dmcl launch 1.20.1`；或
-- 把配置里的 `cli.default_command` 改成 `"prompt"`。
+默认命令是 `gui`。没有编译 `gtk4` 的构建（或指定的前端不可用）会自动回退到交互式菜单；
+也可以显式运行 `dmcl prompt`，或把配置里的 `cli.default_command` 改成 `"prompt"`。
 
 ### 自包含包
 
@@ -119,7 +116,7 @@ dmcl list-mc --type=release,snapshot
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                            |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                         |
 | `java [list\|search\|add\|remove\|use]`                                     | 管理本机 Java；不带子命令进交互菜单                        |
-| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`，需 `--features gtk4` 构建） |
+| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时回退到 `prompt`） |
 | `prompt`                                                                    | 交互式菜单                                                 |
 | `config`                                                                    | 查看或编辑配置；非终端下只打印                             |
 | `version`                                                                   | 显示版本与构建时间                                         |
