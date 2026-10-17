@@ -283,7 +283,7 @@ pub enum JavaCommand {
 
 /// 解析最终要执行的命令。
 ///
-/// 没有子命令时执行配置里的 `cli.default_command`（默认 `prompt`）。这一步是同步的，
+/// 没有子命令时执行配置里的 `cli.default_command`（默认 `gui`）。这一步是同步的，
 /// 因此可以在建 tokio runtime / 启动 GUI **之前**先定下走哪条路（见 `main.rs`）。
 pub fn resolve_command(cli: Cli, config: &Config) -> Result<Commands> {
     match cli.command {

@@ -12,7 +12,7 @@ pub struct CliConfig {
 impl Default for CliConfig {
     fn default() -> Self {
         Self {
-            default_command: "prompt".to_string(),
+            default_command: "gui".to_string(),
         }
     }
 }

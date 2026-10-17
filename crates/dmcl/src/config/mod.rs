@@ -14,7 +14,7 @@
 //!   "launch":   { "java": "autoselect", "minecraft_root_path": "/…/.minecraft", … },
 //!   "account":  { "online_mode": false, "username": "player" },
 //!   "download": { "max_tasks": 64, "mirror": "official-first", … },
-//!   "cli":      { "default_command": "prompt" }
+//!   "cli":      { "default_command": "gui" }
 //! }
 //! ```
 
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(config.download.max_tasks, 64);
         assert_eq!(config.download.chunk_size_mib, 4);
         assert_eq!(config.account.username, "player");
-        assert_eq!(config.cli.default_command, "prompt");
+        assert_eq!(config.cli.default_command, "gui");
     }
 
     #[test]
