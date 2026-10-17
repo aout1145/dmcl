@@ -41,6 +41,20 @@ pixbuf_prefix="$(brew --prefix gdk-pixbuf)"
 icons_prefix="$(brew --prefix adwaita-icon-theme)"
 gsettings_prefix="$(brew --prefix gsettings-desktop-schemas)"
 
+# Homebrew 的模块目录不一定在 opt/<formula> 下，优先问 pkg-config。
+pkg_var() {
+  pkg-config --variable="$1" "$2" 2>/dev/null || true
+}
+
+pixbuf_moduledir="$(pkg_var gdk_pixbuf_moduledir gdk-pixbuf-2.0)"
+if [ -z "$pixbuf_moduledir" ] || [ ! -d "$pixbuf_moduledir" ]; then
+  pixbuf_moduledir="$pixbuf_prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+fi
+gio_moduledir="$(pkg_var giomoduledir gio-2.0)"
+if [ -z "$gio_moduledir" ] || [ ! -d "$gio_moduledir" ]; then
+  gio_moduledir="$glib_prefix/lib/gio/modules"
+fi
+
 # 合并 GLib schemas（GTK / libadwaita / glib / gsettings-desktop-schemas 各有一部分）。
 mkdir -p "$res/share/glib-2.0/schemas"
 for prefix in "$gtk_prefix" "$adw_prefix" "$glib_prefix" "$gsettings_prefix"; do
@@ -64,16 +78,15 @@ for prefix in "$gtk_prefix" "$adw_prefix"; do
   done
 done
 
-# gdk-pixbuf loaders / GIO modules / GTK 模块（Homebrew 不一定都带，缺了就跳过）。
-if [ -d "$pixbuf_prefix/lib/gdk-pixbuf-2.0" ]; then
-  cp -R "$pixbuf_prefix/lib/gdk-pixbuf-2.0" "$res/lib/"
+# gdk-pixbuf loaders / GIO modules（Homebrew 不一定都带，缺了就跳过）。
+pixbuf_loaders="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+if [ -d "$pixbuf_moduledir" ]; then
+  mkdir -p "$pixbuf_loaders"
+  cp -R "$pixbuf_moduledir/." "$pixbuf_loaders/"
 fi
-mkdir -p "$res/lib/gio"
-if [ -d "$glib_prefix/lib/gio/modules" ]; then
-  cp -R "$glib_prefix/lib/gio/modules" "$res/lib/gio/"
-fi
-if [ -d "$gtk_prefix/lib/gtk-4.0" ]; then
-  cp -R "$gtk_prefix/lib/gtk-4.0" "$res/lib/"
+if [ -d "$gio_moduledir" ]; then
+  mkdir -p "$res/lib/gio/modules"
+  cp -R "$gio_moduledir/." "$res/lib/gio/modules/"
 fi
 
 # 主程序和模块依赖的 Homebrew dylib 全部收进 Contents/Frameworks。
@@ -82,8 +95,16 @@ dylibbundler -od -b \
   -d "$frameworks" \
   -p "@executable_path/../Frameworks/"
 
-pixbuf_loaders="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+pixbuf_query="$pixbuf_prefix/bin/gdk-pixbuf-query-loaders"
+if [ ! -x "$pixbuf_query" ]; then
+  pixbuf_query="$(command -v gdk-pixbuf-query-loaders || true)"
+fi
+
 if [ -d "$pixbuf_loaders" ]; then
+  if [ -z "$pixbuf_query" ]; then
+    echo "找不到 gdk-pixbuf-query-loaders，无法生成 loaders.cache" >&2
+    exit 1
+  fi
   for so in "$pixbuf_loaders"/*.so; do
     [ -e "$so" ] || continue
     dylibbundler -od -b -x "$so" -d "$frameworks" -p "@loader_path/../../../../../Frameworks/"
@@ -91,7 +112,7 @@ if [ -d "$pixbuf_loaders" ]; then
   (
     cd "$res"
     GDK_PIXBUF_MODULEDIR="lib/gdk-pixbuf-2.0/2.10.0/loaders" \
-      "$pixbuf_prefix/bin/gdk-pixbuf-query-loaders" \
+      "$pixbuf_query" \
       > "$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
   )
   sed -i '' -E 's|"[^"]*/(lib/gdk-pixbuf-2.0/[^"]*)"|"\1"|g' \
@@ -103,10 +124,16 @@ if [ -d "$res/lib/gio/modules" ]; then
     [ -e "$so" ] || continue
     dylibbundler -od -b -x "$so" -d "$frameworks" -p "@loader_path/../../../../Frameworks/"
   done
-  (
-    cd "$res/lib/gio/modules"
-    "$glib_prefix/bin/gio-querymodules" .
-  )
+  gio_query="$glib_prefix/bin/gio-querymodules"
+  if [ ! -x "$gio_query" ]; then
+    gio_query="$(command -v gio-querymodules || true)"
+  fi
+  if [ -n "$gio_query" ]; then
+    (
+      cd "$res/lib/gio/modules"
+      "$gio_query" .
+    )
+  fi
 fi
 
 # 启动脚本：设置 GTK 的运行时路径并默认启动 GUI。
@@ -119,9 +146,12 @@ export GTK_DATA_PREFIX="$res"
 export GTK_EXE_PREFIX="$res"
 export XDG_DATA_DIRS="$res/share:/usr/local/share:/usr/share"
 export GSETTINGS_SCHEMA_DIR="$res/share/glib-2.0/schemas"
-export GDK_PIXBUF_MODULE_FILE="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
-export GIO_MODULE_DIR="$res/lib/gio/modules"
-export GTK_PATH="$res/lib/gtk-4.0"
+if [ -f "$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" ]; then
+  export GDK_PIXBUF_MODULE_FILE="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+fi
+if [ -d "$res/lib/gio/modules" ]; then
+  export GIO_MODULE_DIR="$res/lib/gio/modules"
+fi
 export DYLD_FALLBACK_LIBRARY_PATH="$dir/../Frameworks:${DYLD_FALLBACK_LIBRARY_PATH:-}"
 cd "$res"
 exec "$dir/dmcl-bin" gui "$@"
