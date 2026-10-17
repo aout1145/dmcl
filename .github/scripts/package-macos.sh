@@ -34,7 +34,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-git_prefix="$(brew --prefix gtk4)"
+gtk_prefix="$(brew --prefix gtk4)"
 adw_prefix="$(brew --prefix libadwaita)"
 glib_prefix="$(brew --prefix glib)"
 pixbuf_prefix="$(brew --prefix gdk-pixbuf)"
