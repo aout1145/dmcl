@@ -11,7 +11,6 @@ mod interact;
 mod progress;
 mod prompt;
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -281,31 +280,7 @@ pub enum JavaCommand {
     },
 }
 
-/// 解析最终要执行的命令。
-///
-/// 没有子命令时执行配置里的 `cli.default_command`（默认 `gui`）。这一步是同步的，
-/// 因此可以在建 tokio runtime / 启动 GUI **之前**先定下走哪条路（见 `main.rs`）。
-pub fn resolve_command(cli: Cli, config: &Config) -> Result<Commands> {
-    match cli.command {
-        Some(command) => Ok(command),
-        None => {
-            let default = config.cli.default_command.clone();
-            if default.is_empty() {
-                return Err(anyhow!("没有可执行的命令（cli.default_command 为空）"));
-            }
-            let argv: Vec<OsString> = vec![
-                OsString::from(env!("CARGO_PKG_NAME")),
-                OsString::from(default.clone()),
-            ];
-            match Cli::try_parse_from(argv) {
-                Ok(parsed) => parsed.command.ok_or_else(|| anyhow!("未知命令：{default}")),
-                Err(_) => Err(anyhow!("未知命令：{default}")),
-            }
-        }
-    }
-}
-
-/// 跑交互式菜单。GUI 前端不可用时从 [`crate::gui::run`] 回退到这里。
+/// 跑交互式菜单。无子命令且这份构建没有 GUI 前端时，从 [`crate::gui::run_default`] 回退到这里。
 pub(crate) fn run_prompt(config: &mut Config) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(dispatch(Commands::Prompt, config))

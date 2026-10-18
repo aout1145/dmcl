@@ -6,27 +6,24 @@
 //! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由前端（CLI / GUI）持有并传下去；
 //! 各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
 //!
-//! 各段拆在子模块（`launch` / `account` / `download` / `cli`）；交互编辑用的展开 /
+//! 各段拆在子模块（`launch` / `account` / `download`）；交互编辑用的展开 /
 //! 写回在 `edit`，java 管理的纯逻辑在 `java`。
 //!
 //! ```json
 //! {
 //!   "launch":   { "java": "autoselect", "minecraft_root_path": "/…/.minecraft", … },
 //!   "account":  { "online_mode": false, "username": "player" },
-//!   "download": { "max_tasks": 64, "mirror": "official-first", … },
-//!   "cli":      { "default_command": "gui" }
+//!   "download": { "max_tasks": 64, "mirror": "official-first", … }
 //! }
 //! ```
 
 mod account;
-mod cli;
 mod download;
 mod edit;
 pub(crate) mod java;
 mod launch;
 
 pub use account::AccountConfig;
-pub use cli::CliConfig;
 pub use download::DownloadConfig;
 pub use edit::{display_value, is_json_value, parse_edited_value};
 pub use launch::LaunchConfig;
@@ -54,7 +51,6 @@ pub struct Config {
     pub launch: LaunchConfig,
     pub account: AccountConfig,
     pub download: DownloadConfig,
-    pub cli: CliConfig,
 }
 
 impl Config {
@@ -88,9 +84,9 @@ impl Config {
         Ok(config)
     }
 
-    /// [`Config::load`] 的同步版本，只在**启动时**决定走哪个前端时用一次。
+    /// [`Config::load`] 的同步版本，只在**启动时**读一次配置。
     ///
-    /// 与 `load` 共用解析 / 补路径逻辑，避免两条路径漂移；其余任何地方都用 [`Config::load`]。
+    /// GUI 必须在 GLib 主循环启动前拿到配置，CLI 也走同一份；其余地方都用 [`Config::load`]。
     pub fn load_sync(path: Option<&Path>) -> Result<Self> {
         let path = path.map(Path::to_path_buf).unwrap_or_else(Self::path);
         let mut config = match std::fs::read_to_string(&path) {
@@ -234,7 +230,6 @@ mod tests {
         assert_eq!(config.download.max_tasks, 64);
         assert_eq!(config.download.chunk_size_mib, 4);
         assert_eq!(config.account.username, "player");
-        assert_eq!(config.cli.default_command, "gui");
     }
 
     #[test]
@@ -245,7 +240,7 @@ mod tests {
         assert!(value["account"]["online_mode"].is_boolean());
         assert!(value["download"]["max_tasks"].is_number());
         assert!(value["download"]["mirror"].is_string());
-        assert!(value["cli"]["default_command"].is_string());
+        assert!(value.get("cli").is_none());
     }
 
     #[test]

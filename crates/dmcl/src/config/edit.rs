@@ -26,7 +26,7 @@ impl Config {
     /// 把配置展开成「点分键 → JSON 值」的列表（`launch.window_width` …）。
     ///
     /// 键名来自 serde 序列化，因此新增字段不用改这里。只展开两层：顶层是各段
-    /// （`launch` / `account` / `download` / `cli`），段里的字段整体作为一个值
+    /// （`launch` / `account` / `download`），段里的字段整体作为一个值
     /// （`launch.java_configs` 这种就按 JSON 编辑）。
     pub fn fields(&self) -> Result<Vec<(String, serde_json::Value)>> {
         let root = serde_json::to_value(self)?;
@@ -142,7 +142,6 @@ mod tests {
             "launch.window_width",
             "account.username",
             "download.mirror",
-            "cli.default_command",
         ] {
             assert!(keys.contains(&expected), "缺少 {expected}: {keys:?}");
         }

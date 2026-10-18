@@ -16,10 +16,11 @@
   （Linux / Windows / macOS）。
 - 需要系统 **GTK ≥ 4.18 / libadwaita ≥ 1.7**（relm4 开 `gnome_48`；用到了 `AdwWrapBox`、
   `AdwSpinner`、`AdwDialog` 等较新的 Adw 控件）。
-- 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；这份构建没编译 `gtk4`（或前端不可用）时
-  回退到交互式菜单。
-- **GUI 必须占主线程**，所以 `main.rs` 不用 `#[tokio::main]`：先 `Config::load_sync` 读一次
-  配置、`cli::resolve_command` 定下命令，再决定走 GUI 还是建 tokio runtime 执行命令行。
+- 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；显式的 `gui` 命令在前端不可用时直接报错。
+- 无子命令是单独路径：`gui::run_default` 有 `gtk4` 就启动 GUI，否则进交互式菜单。
+- **GUI 必须占主线程**，所以 `main.rs` 不用 `#[tokio::main]`：直接匹配 `cli.command`
+  （`None` 走默认逻辑，`Some(gui)` 走显式 GUI），`Config::load_sync` 同步读一次配置，
+  再决定走 GUI 还是建 tokio runtime 执行命令行。
 - `RelmApp` 只把 `argv[0]` 传给 `GApplication`，避免 `gui` 被当成要打开的文件。
 
 ## 设计取向：遵循 GNOME HIG，优先 Adw 控件

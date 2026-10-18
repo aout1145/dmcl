@@ -30,7 +30,7 @@ libadwaita ≥ 1.7：
 
 ```bash
 cargo build --release --features gtk4
-./target/release/dmcl        # 默认命令是 gui，直接打开图形界面
+./target/release/dmcl        # 无子命令：打开图形界面
 ```
 
 各平台装 GTK 开发库：
@@ -56,8 +56,8 @@ cargo build --release
 ./target/release/dmcl --help
 ```
 
-默认命令是 `gui`。没有编译 `gtk4` 的构建（或指定的前端不可用）会自动回退到交互式菜单；
-也可以显式运行 `dmcl prompt`，或把配置里的 `cli.default_command` 改成 `"prompt"`。
+不带子命令时默认尝试打开图形界面；没有编译 `gtk4` 时会回退到交互式菜单。显式的
+`dmcl gui` 在前端不可用时直接报错，不会回退；也可以显式运行 `dmcl prompt`。
 
 ### 自包含包
 
@@ -70,7 +70,7 @@ CI 的 GTK4 任务会产出已经带上 GTK 运行时的包：
 
 ## 快速开始
 
-不带子命令时执行配置里的 `cli.default_command`（默认 `gui`），所以：
+不带子命令时默认打开图形界面（没有 `gtk4` 时回退到交互菜单），所以：
 
 ```bash
 dmcl                 # 打开图形界面
@@ -116,12 +116,12 @@ dmcl list-mc --type=release,snapshot
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                            |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                         |
 | `java [list\|search\|add\|remove\|use]`                                     | 管理本机 Java；不带子命令进交互菜单                        |
-| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时回退到 `prompt`） |
+| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错）      |
 | `prompt`                                                                    | 交互式菜单                                                 |
 | `config`                                                                    | 查看或编辑配置；非终端下只打印                             |
 | `version`                                                                   | 显示版本与构建时间                                         |
 
-不带子命令时执行 `cli.default_command`（默认 `gui`）。
+不带子命令时默认走 GUI；没有编译 `gtk4` 时回退到交互菜单。
 
 ### `java` 子命令
 
@@ -166,8 +166,7 @@ macOS `~/Library/Application Support`）。
     "chunk_size_mib": 4,
     "max_chunks_per_file": 8,
     "max_attempts": 3
-  },
-  "cli": { "default_command": "gui" }
+  }
 }
 ```
 
@@ -176,7 +175,6 @@ macOS `~/Library/Application Support`）。
 - `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
   失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
-- `cli.default_command` 决定不带子命令时执行什么；想默认进命令行菜单就改成 `"prompt"`。
 - `account.online_mode` 目前未使用；只有离线账号（`account.username`）。
 
 ## 开发与测试
