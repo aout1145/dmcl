@@ -1,8 +1,9 @@
 //! 主页：已安装实例的网格（组件）。
 //!
-//! 实例列表与「运行中」状态都归它；启动/停止的游戏进程也由它持有——启动链交给
-//! [`Shell`](crate::gui::gtk4::app::Shell) 跑，但它等结果并把 monitor 交给一个
-//! supervisor 任务异步等退出（**不轮询**）。
+//! 实例列表和运行状态都在 [`HomePage::instances`] 的工厂模型里；视图由 `view!`
+//! 声明，`#[watch]` 负责在状态变化后刷新文案 / 图标 / 小绿点。启动与停止的游戏进程
+//! 也由它持有——启动链交给 [`Shell`] 跑，但它等结果并把 monitor 交给一个 supervisor
+//! 任务异步等退出（**不轮询**）。
 
 mod instance_card;
 pub(crate) mod message;
@@ -22,6 +23,7 @@ use dmcl_task::CancelHandle;
 use crate::config::Config;
 use crate::gui::gtk4::app::Shell;
 
+use instance_card::{CardOut, InstanceCard};
 pub(crate) use message::HomeMsg;
 
 /// 主页的全局样式：底部胶囊操作栏、选中磁贴的高亮。
@@ -29,7 +31,7 @@ pub(crate) const CSS: &str = "\
 .dmcl-action-bar { border-radius: 9999px; padding: 4px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.18); }
 .dmcl-instance-selected { background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 12px; }";
 
-/// 实例的运行状态。界面文案、按钮动作、磁贴绿点都从它派生，避免多个布尔量打架。
+/// 实例的运行状态。界面文案、按钮动作、磁贴绿点都从它派生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstanceState {
     /// 没在启动，也没在运行。
@@ -42,33 +44,13 @@ pub(crate) enum InstanceState {
     Stopping,
 }
 
-/// 一个实例在界面上的视图。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InstanceView {
-    pub name: String,
-    pub state: InstanceState,
-}
-
-impl InstanceView {
-    /// 磁贴绿点只表示游戏进程真的在跑，启动链阶段不算。
-    pub(crate) fn is_running(&self) -> bool {
-        self.state == InstanceState::Running
-    }
-}
-
 pub(crate) struct HomePage {
     shell: Rc<Shell>,
     config: Config,
-    /// 网格 / 空状态用 `GtkStack` 切换。
-    stack: gtk::Stack,
-    grid: adw::WrapBox,
-    /// 底部胶囊操作栏（只在选中实例时显示）。
-    bar: gtk::Box,
-    /// 当前选中的实例名。
-    selected: Option<String>,
-    /// 磁贴（实例名 → 按钮），用于切换选中样式。
-    cards: HashMap<String, gtk::Button>,
-    instances: Vec<InstanceView>,
+    /// 实例磁贴：模型即状态源，工厂负责同步控件。
+    instances: FactoryVecDeque<InstanceCard>,
+    /// 当前选中的磁贴。
+    selected: Option<DynamicIndex>,
     /// 启动链的取消句柄：启动中（还没有游戏进程）用它取消。
     cancels: HashMap<String, CancelHandle>,
     /// 每个已启动实例的「停止信号」：supervisor 任务收到就 kill。
@@ -77,83 +59,124 @@ pub(crate) struct HomePage {
     stops: HashMap<String, tokio::sync::oneshot::Sender<()>>,
 }
 
+#[relm4::component(pub(crate))]
 impl SimpleComponent for HomePage {
     type Init = (Rc<Shell>, Config);
     type Input = HomeMsg;
     type Output = ();
-    type Widgets = ();
-    type Root = gtk::Overlay;
 
-    fn init_root() -> Self::Root {
-        gtk::Overlay::new()
+    view! {
+        gtk::Overlay {
+            #[wrap(Some)]
+            set_child = &gtk::Stack {
+                add_named[Some("grid")] = &gtk::ScrolledWindow {
+                    set_hscrollbar_policy: gtk::PolicyType::Never,
+                    set_vexpand: true,
+                    // 点空白处取消选中（点磁贴时按钮会 claim 掉点击，不会冒泡到这里）。
+                    add_controller = gtk::GestureClick {
+                        connect_pressed[sender] => move |_, _, _, _| sender.input(HomeMsg::Deselect),
+                    },
+
+                    #[local_ref]
+                    grid -> adw::WrapBox {
+                        set_child_spacing: 12,
+                        set_line_spacing: 12,
+                        set_margin_top: 18,
+                        set_margin_bottom: 80,
+                        set_margin_start: 18,
+                        set_margin_end: 18,
+                    },
+                },
+
+                add_named[Some("empty")] = &adw::StatusPage {
+                    set_icon_name: Some("view-grid-symbolic"),
+                    set_title: "还没有安装任何版本",
+                    set_description: Some("用 dmcl install 安装一个版本后再回来"),
+                },
+
+                // 放在 add_named 之后：初始化时两个页面已经存在。
+                #[watch]
+                set_visible_child_name: if model.instances.is_empty() { "empty" } else { "grid" },
+            },
+
+            // 底部胶囊操作栏：浮在网格上，只在选中实例时出现。
+            add_overlay = &gtk::Box {
+                set_orientation: gtk::Orientation::Horizontal,
+                set_spacing: 4,
+                set_halign: gtk::Align::Center,
+                set_valign: gtk::Align::End,
+                set_margin_bottom: 18,
+                add_css_class: "card",
+                add_css_class: "dmcl-action-bar",
+                #[watch]
+                set_visible: model.selected.is_some(),
+
+                gtk::Label {
+                    add_css_class: "heading",
+                    set_margin_start: 10,
+                    set_margin_end: 4,
+                    #[watch]
+                    set_label: model.selected_name(),
+                },
+
+                gtk::Button {
+                    add_css_class: "flat",
+                    #[watch]
+                    set_sensitive: model.action_enabled(),
+                    connect_clicked => HomeMsg::Toggle,
+                    #[wrap(Some)]
+                    set_child = &adw::ButtonContent {
+                        #[watch]
+                        set_label: model.action_text(),
+                        #[watch]
+                        set_icon_name: model.action_icon(),
+                    },
+                },
+
+                gtk::Button {
+                    add_css_class: "flat",
+                    connect_clicked => HomeMsg::Manage,
+                    #[wrap(Some)]
+                    set_child = &adw::ButtonContent {
+                        set_icon_name: "document-properties-symbolic",
+                        set_label: "管理",
+                    },
+                },
+
+                gtk::Button {
+                    set_icon_name: "window-close-symbolic",
+                    add_css_class: "flat",
+                    connect_clicked => HomeMsg::Deselect,
+                },
+            },
+        }
     }
 
     fn init(
         (shell, config): Self::Init,
-        overlay: Self::Root,
+        root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let grid = adw::WrapBox::builder()
-            .child_spacing(12)
-            .line_spacing(12)
-            .margin_top(18)
-            .margin_bottom(80)
-            .margin_start(18)
-            .margin_end(18)
-            .build();
-        let scrolled = gtk::ScrolledWindow::builder()
-            .child(&grid)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
-        {
-            // 点空白处取消选中（点磁贴时按钮会 claim 掉点击，不会冒泡到这里）。
-            let sender = sender.clone();
-            let background = gtk::GestureClick::new();
-            background.connect_pressed(move |_, _, _, _| sender.input(HomeMsg::Deselect));
-            scrolled.add_controller(background);
-        }
-
-        let empty = adw::StatusPage::builder()
-            .icon_name("view-grid-symbolic")
-            .title("还没有安装任何版本")
-            .description("用 dmcl install 安装一个版本后再回来")
-            .build();
-
-        let stack = gtk::Stack::new();
-        stack.add_named(&scrolled, Some("grid"));
-        stack.add_named(&empty, Some("empty"));
-        stack.set_visible_child_name("empty");
-
-        // 底部胶囊操作栏：浮在网格上，只在选中实例时出现。
-        let bar = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(4)
-            .halign(gtk::Align::Center)
-            .valign(gtk::Align::End)
-            .margin_bottom(18)
-            .build();
-        bar.add_css_class("card");
-        bar.add_css_class("dmcl-action-bar");
-        bar.set_visible(false);
-
-        overlay.set_child(Some(&stack));
-        overlay.add_overlay(&bar);
-
+        let instances = FactoryVecDeque::builder()
+            .launch(adw::WrapBox::new())
+            .forward(sender.input_sender(), |msg| match msg {
+                CardOut::Select(index) => HomeMsg::Select(index),
+                CardOut::Launch(index) => HomeMsg::Launch(index),
+            });
         let model = HomePage {
             shell,
             config,
-            stack,
-            grid,
-            bar,
+            instances,
             selected: None,
-            cards: HashMap::new(),
-            instances: Vec::new(),
             cancels: HashMap::new(),
             stops: HashMap::new(),
         };
+
+        let grid = model.instances.widget();
+        let widgets = view_output!();
+
         sender.input(HomeMsg::Reload);
-        ComponentParts { model, widgets: () }
+        ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
@@ -169,78 +192,53 @@ impl SimpleComponent for HomePage {
                 });
             }
             HomeMsg::Loaded(Ok(versions)) => {
-                self.instances = versions
-                    .into_iter()
-                    .map(|version| InstanceView {
-                        name: version.name,
-                        state: InstanceState::Idle,
-                    })
-                    .collect();
-                // 选中的实例如果没了，就取消选中。
-                let selected_present = self.selected.as_ref().is_some_and(|selected| {
-                    self.instances.iter().any(|item| &item.name == selected)
-                });
-                if !selected_present {
-                    self.selected = None;
+                {
+                    let mut guard = self.instances.guard();
+                    guard.clear();
+                    for version in versions {
+                        guard.push_back(version.name);
+                    }
                 }
-                self.render(&sender);
+                self.selected = None;
             }
             HomeMsg::Loaded(Err(err)) => {
                 self.shell.toast(&format!("读取已安装版本失败：{err}"));
             }
 
-            HomeMsg::Select(name) => {
-                self.selected = Some(name);
-                // 只改样式，不重建网格——重建会把正在双击的按钮换掉。
-                self.apply_selection();
-                self.render_bar(&sender);
-            }
-            HomeMsg::Deselect => {
-                self.selected = None;
-                self.apply_selection();
-                self.render_bar(&sender);
-            }
-
-            HomeMsg::Launch(name) => {
-                let Some(state) = self.state_of(&name) else {
+            HomeMsg::Select(index) => self.select(index),
+            HomeMsg::Deselect => self.deselect(),
+            HomeMsg::Launch(index) => {
+                let Some(name) = self.name_at(&index) else {
                     return;
                 };
-                match state {
-                    InstanceState::Starting => {
+                match self.state_at(&index) {
+                    Some(InstanceState::Idle) => self.start(name, &sender),
+                    Some(InstanceState::Starting) => {
                         self.shell.toast(&format!("{name} 正在启动"));
-                        return;
                     }
-                    InstanceState::Running => {
+                    Some(InstanceState::Running) => {
                         self.shell.toast(&format!("{name} 已在运行"));
-                        return;
                     }
-                    InstanceState::Stopping => {
+                    Some(InstanceState::Stopping) => {
                         self.shell.toast(&format!("{name} 正在停止"));
-                        return;
                     }
-                    InstanceState::Idle => {}
+                    None => {}
                 }
-                self.set_state(&name, InstanceState::Starting);
-                // 立刻把按钮切成「取消」，不等启动链返回。
-                self.render_bar(&sender);
-                let chain = self.launch_chain(&name);
-                self.cancels.insert(name.clone(), chain.cancel_handle());
-                let handle = self.shell.run(format!("启动 {name}"), chain, ());
-
-                // supervisor 任务：等游戏退出（或停止信号），完了汇报。
-                let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-                self.stops.insert(name.clone(), stop_tx);
-                let sender = sender.clone();
-                relm4::spawn(async move {
-                    match handle.finished().await {
-                        Ok(monitor) => {
-                            sender.input(HomeMsg::GameStarted(name.clone()));
-                            supervise(monitor, stop_rx, sender.clone(), name).await;
-                        }
-                        Err(_) => sender.input(HomeMsg::LaunchFailed(name)),
-                    }
-                });
             }
+            HomeMsg::Toggle => {
+                let Some(index) = self.selected.clone() else {
+                    return;
+                };
+                let Some(name) = self.name_at(&index) else {
+                    return;
+                };
+                match self.state_at(&index) {
+                    Some(InstanceState::Idle) => self.start(name, &sender),
+                    Some(InstanceState::Starting | InstanceState::Running) => self.stop(&name),
+                    _ => {}
+                }
+            }
+
             HomeMsg::GameStarted(name) => {
                 self.cancels.remove(&name);
                 // 取消和启动完成撞车：停止信号已经发出，supervisor 一开始等就会
@@ -249,13 +247,11 @@ impl SimpleComponent for HomePage {
                     return;
                 }
                 self.set_state(&name, InstanceState::Running);
-                self.render(&sender);
             }
             HomeMsg::GameExited { name, abnormal } => {
                 self.stops.remove(&name);
                 self.cancels.remove(&name);
                 self.set_state(&name, InstanceState::Idle);
-                self.render(&sender);
                 self.shell.toast(&if abnormal {
                     format!("{name} 异常退出")
                 } else {
@@ -266,27 +262,13 @@ impl SimpleComponent for HomePage {
                 self.stops.remove(&name);
                 self.cancels.remove(&name);
                 self.set_state(&name, InstanceState::Idle);
-                self.render_bar(&sender);
             }
-            HomeMsg::Stop(name) => {
-                if let Some(InstanceState::Starting | InstanceState::Running) = self.state_of(&name)
-                {
-                    // 启动中：取消启动链；运行中：让 supervisor kill 进程。
-                    // 两个都发，覆盖「链刚好跑完、进程已经起来」的竞态。
-                    if let Some(cancel) = self.cancels.remove(&name) {
-                        cancel.cancel();
-                    }
-                    if let Some(stop) = self.stops.remove(&name) {
-                        let _ = stop.send(());
-                    }
-                    self.set_state(&name, InstanceState::Stopping);
-                    // 只重绘操作栏：磁贴绿点保持点击前的样子，等 GameExited 再收。
-                    self.render_bar(&sender);
+            HomeMsg::Manage => {
+                let name = self.selected_name();
+                if !name.is_empty() {
+                    self.shell
+                        .toast(&format!("打开 {name} 的管理页（尚未实现）"));
                 }
-            }
-            HomeMsg::Manage(name) => {
-                self.shell
-                    .toast(&format!("打开 {name} 的管理页（尚未实现）"));
             }
         }
     }
@@ -301,136 +283,128 @@ impl HomePage {
         dmcl_launch::launch_chain(option, install)
     }
 
-    /// 查某个实例当前的状态；实例已经不在列表里就返回 `None`。
+    fn selected_card(&self) -> Option<&InstanceCard> {
+        self.instances.get(self.selected.as_ref()?.current_index())
+    }
+
+    /// 操作栏上的实例名；没有选中时为空串（操作栏此时隐藏）。
+    fn selected_name(&self) -> &str {
+        self.selected_card()
+            .map(|card| card.name.as_str())
+            .unwrap_or_default()
+    }
+
+    fn action_state(&self) -> Option<InstanceState> {
+        self.selected_card().map(|card| card.state)
+    }
+
+    fn action_text(&self) -> &'static str {
+        match self.action_state() {
+            Some(InstanceState::Starting) => "取消",
+            Some(InstanceState::Running) => "停止",
+            Some(InstanceState::Stopping) => "停止中…",
+            _ => "启动",
+        }
+    }
+
+    fn action_icon(&self) -> &'static str {
+        match self.action_state() {
+            Some(InstanceState::Starting) => "process-stop-symbolic",
+            Some(InstanceState::Running) => "media-playback-stop-symbolic",
+            Some(InstanceState::Stopping) => "content-loading-symbolic",
+            _ => "media-playback-start-symbolic",
+        }
+    }
+
+    fn action_enabled(&self) -> bool {
+        !matches!(self.action_state(), Some(InstanceState::Stopping))
+    }
+
+    fn name_at(&self, index: &DynamicIndex) -> Option<String> {
+        self.instances
+            .get(index.current_index())
+            .map(|card| card.name.clone())
+    }
+
+    fn state_at(&self, index: &DynamicIndex) -> Option<InstanceState> {
+        self.instances
+            .get(index.current_index())
+            .map(|card| card.state)
+    }
+
     fn state_of(&self, name: &str) -> Option<InstanceState> {
         self.instances
             .iter()
-            .find(|item| item.name == name)
-            .map(|item| item.state)
+            .find(|card| card.name == name)
+            .map(|card| card.state)
+    }
+
+    fn select(&mut self, index: DynamicIndex) {
+        let current = index.current_index();
+        if self.instances.get(current).is_none() {
+            return;
+        }
+        {
+            let mut guard = self.instances.guard();
+            for (position, card) in guard.iter_mut().enumerate() {
+                card.selected = position == current;
+            }
+        }
+        self.selected = Some(index);
+    }
+
+    fn deselect(&mut self) {
+        {
+            let mut guard = self.instances.guard();
+            for card in guard.iter_mut() {
+                card.selected = false;
+            }
+        }
+        self.selected = None;
     }
 
     fn set_state(&mut self, name: &str, state: InstanceState) {
-        if let Some(instance) = self.instances.iter_mut().find(|item| item.name == name) {
-            instance.state = state;
-        }
-    }
-
-    /// 按模型重建网格与底部操作栏。
-    fn render(&mut self, sender: &ComponentSender<Self>) {
-        while let Some(child) = self.grid.first_child() {
-            self.grid.remove(&child);
-        }
-        self.cards.clear();
-        if self.instances.is_empty() {
-            self.stack.set_visible_child_name("empty");
-            self.bar.set_visible(false);
+        let Some(index) = self.instances.iter().position(|card| card.name == name) else {
             return;
+        };
+        let mut guard = self.instances.guard();
+        if let Some(card) = guard.get_mut(index) {
+            card.state = state;
         }
-        for instance in &self.instances {
-            let selected = self.selected.as_deref() == Some(instance.name.as_str());
-            let card = instance_card::build(instance, selected, sender);
-            self.grid.append(&card);
-            self.cards.insert(instance.name.clone(), card);
-        }
-        self.stack.set_visible_child_name("grid");
-        self.render_bar(sender);
     }
 
-    /// 只更新磁贴的选中样式，不重建网格（否则双击会被打断）。
-    fn apply_selection(&self) {
-        for (name, card) in &self.cards {
-            if self.selected.as_deref() == Some(name.as_str()) {
-                card.add_css_class("dmcl-instance-selected");
-            } else {
-                card.remove_css_class("dmcl-instance-selected");
+    fn start(&mut self, name: String, sender: &ComponentSender<Self>) {
+        self.set_state(&name, InstanceState::Starting);
+        let chain = self.launch_chain(&name);
+        self.cancels.insert(name.clone(), chain.cancel_handle());
+        let handle = self.shell.run(format!("启动 {name}"), chain, ());
+
+        // supervisor 任务：等游戏退出（或停止信号），完了汇报。
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        self.stops.insert(name.clone(), stop_tx);
+        let sender = sender.clone();
+        relm4::spawn(async move {
+            match handle.finished().await {
+                Ok(monitor) => {
+                    sender.input(HomeMsg::GameStarted(name.clone()));
+                    supervise(monitor, stop_rx, sender.clone(), name).await;
+                }
+                Err(_) => sender.input(HomeMsg::LaunchFailed(name)),
             }
-        }
+        });
     }
 
-    /// 重建底部胶囊操作栏的内容（只显示选中的实例）。
-    fn render_bar(&self, sender: &ComponentSender<Self>) {
-        while let Some(child) = self.bar.first_child() {
-            self.bar.remove(&child);
+    fn stop(&mut self, name: &str) {
+        // 启动中：取消启动链；运行中：让 supervisor kill 进程。
+        // 两个都发，覆盖「链刚好跑完、进程已经起来」的竞态。
+        if let Some(cancel) = self.cancels.remove(name) {
+            cancel.cancel();
         }
-        let Some(name) = self.selected.as_deref() else {
-            self.bar.set_visible(false);
-            return;
-        };
-        let Some(state) = self.state_of(name) else {
-            self.bar.set_visible(false);
-            return;
-        };
-
-        let label = gtk::Label::new(Some(name));
-        label.add_css_class("heading");
-        label.set_margin_start(10);
-        label.set_margin_end(4);
-        self.bar.append(&label);
-
-        // 文案、图标、点击动作全部由同一个状态决定；`None` 表示按钮不可点。
-        let (text, icon, action) = match state {
-            InstanceState::Idle => (
-                "启动",
-                "media-playback-start-symbolic",
-                Some(HomeMsg::Launch(name.to_string())),
-            ),
-            InstanceState::Starting => (
-                "取消",
-                "process-stop-symbolic",
-                Some(HomeMsg::Stop(name.to_string())),
-            ),
-            InstanceState::Running => (
-                "停止",
-                "media-playback-stop-symbolic",
-                Some(HomeMsg::Stop(name.to_string())),
-            ),
-            InstanceState::Stopping => ("停止中…", "content-loading-symbolic", None),
-        };
-        let toggle = action_button(text, icon);
-        toggle.set_sensitive(action.is_some());
-        if let Some(action) = action {
-            let sender = sender.clone();
-            toggle.connect_clicked(move |_| sender.input(action.clone()));
+        if let Some(stop) = self.stops.remove(name) {
+            let _ = stop.send(());
         }
-        self.bar.append(&toggle);
-
-        let manage = action_button("管理", "document-properties-symbolic");
-        {
-            let sender = sender.clone();
-            let name = name.to_string();
-            manage.connect_clicked(move |_| sender.input(HomeMsg::Manage(name.clone())));
-        }
-        self.bar.append(&manage);
-
-        let close = icon_button("window-close-symbolic");
-        {
-            let sender = sender.clone();
-            close.connect_clicked(move |_| sender.input(HomeMsg::Deselect));
-        }
-        self.bar.append(&close);
-        self.bar.set_visible(true);
+        self.set_state(name, InstanceState::Stopping);
     }
-}
-
-/// 操作栏里的图标 + 文字按钮。
-///
-/// `GtkButton` 只有一个 child，`set_label` / `set_icon_name` 会互相覆盖，
-/// 所以图标和文字要交给 `AdwButtonContent` 一起放进 child。
-fn action_button(text: &str, icon: &str) -> gtk::Button {
-    let content = adw::ButtonContent::builder()
-        .icon_name(icon)
-        .label(text)
-        .build();
-    let button = gtk::Button::builder().child(&content).build();
-    button.add_css_class("flat");
-    button
-}
-
-/// 操作栏里的纯图标按钮。
-fn icon_button(icon: &str) -> gtk::Button {
-    let button = gtk::Button::builder().icon_name(icon).build();
-    button.add_css_class("flat");
-    button
 }
 
 /// 等游戏进程退出：要么它自己退出，要么收到「停止」信号后 kill。

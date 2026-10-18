@@ -52,6 +52,19 @@
 - **版本**：用到新的 Adw 控件时，把 relm4 的 `gnome_4x` feature 抬到对应版本（当前
   `gnome_48` → GTK 4.18 / adw 1.7）。
 
+## 状态驱动：状态放模型，界面用 `view!` 刷新
+
+- 页面优先用 **`#[relm4::component]` + `view!`** 声明视图，状态变化交给 `#[watch]` /
+  `#[track]`；**不要手写 `render` 重建子控件**。动态列表用 `FactoryVecDeque` /
+  `FactoryComponent` 同步增删，不要长期维护「名字 → widget」的旁路表。
+- **状态只有一份**：互斥状态用 enum（如 `InstanceState`），不要用几个布尔量 / 集合分别表示，
+  否则容易出现「状态改了但界面没刷新」或两个标志互相矛盾。
+- `update` 只改模型；只有一次性的构造、Pango 测量 / 运行时尺寸计算等 `view!` 表达不了的
+  东西，才放 `init` / `init_widgets`，且只跑一次。
+- 命令式 GTK 仍可用于静态组装或 `view!` 覆盖不到的控件，但不要让它和模型形成两套状态。
+- 参考实现：`pages/home` 的实例网格、空状态、底部操作栏都由 `InstanceState` + `#[watch]`
+  驱动。
+
 ## 目录结构
 
 ```text
@@ -70,9 +83,9 @@ gtk4/
 │       └── task_card.rs        #     单个任务卡片（AdwSpinner + 进度 + GtkExpander 日志）
 └── pages/                      # ── 页面：真组件 ──
     └── home/                   #   主页组件（实例 + 运行状态 + 游戏进程）
-        ├── mod.rs              #     组件：AdwWrapBox 网格 + GtkStack（空状态）+ 底部胶囊操作栏
+        ├── mod.rs              #     组件：view! 声明网格/空状态/操作栏，状态由 #[watch] 刷新
         ├── message.rs          #     HomeMsg
-        └── instance_card.rs    #     单个实例磁贴（透明 GtkButton；运行中右上角绿点）
+        └── instance_card.rs    #     单个实例磁贴（FactoryComponent；运行中右上角绿点）
 ```
 
 ## 组件与服务
@@ -88,13 +101,16 @@ gtk4/
   自己的 `update` 里处理：卡片列表（空状态用 `AdwStatusPage`，用 `GtkStack` 切换）、取消、
   警告确认（`confirm.rs`）、起止提示、关闭时清掉已结束的任务。它不认识任务是什么，事件由
   `Shell` 转发过来。
-- **`HomePage`（`pages/home`，组件）**：实例列表、「运行中」状态、游戏进程都归它。实例网格用
-  `AdwWrapBox`（`GtkStack` 切换空状态 `AdwStatusPage`），磁贴是**等宽**的透明 `GtkButton`
-  （类似 GNOME Files 的图标网格：大图标 + 两行名称，名称区固定两行高）；**运行中**时磁贴
-  右上角显示小绿点（`media-record-symbolic` + `.success`），不再显示底部状态文字。
-  **单击选中**，底部浮出**胶囊操作栏**（`GtkOverlay` + `.card` + `.dmcl-action-bar`，含
-  启动/停止、管理、取消选择）；**点空白处**或胶囊栏的 × 取消选中；**双击启动**（双击手势
-  放在捕获阶段，否则会被按钮自己的点击吞掉）。**运行中 / 启动中 / 停止中的实例拒绝再次启动**：
+- **`HomePage`（`pages/home`，组件）**：实例列表、「运行中」状态、游戏进程都归它。
+  **视图用 `view!` 声明**（`GtkOverlay` + `GtkStack` + `AdwWrapBox` + 底部胶囊操作栏），
+  `#[watch]` 负责在模型变化后刷新空状态/操作栏文案/图标/可用性；磁贴列表用
+  `FactoryVecDeque<InstanceCard>`，不再手写 `render` / `remove`+`append`。
+  磁贴是**等宽**的透明 `GtkButton`（类似 GNOME Files：大图标 + 最多三行名称；行高按内容
+  收缩，不预留三行）；**运行中**时右上角显示小绿点（`media-record-symbolic` + `.success`）。
+  磁贴的单击选中 / 双击启动通过 `CardOut` 上报给主页。
+  **单击选中**，底部浮出**胶囊操作栏**（`.card` + `.dmcl-action-bar`，含启动/停止、管理、
+  取消选择）；**点空白处**或胶囊栏的 × 取消选中；**双击启动**（双击手势放在捕获阶段，
+  否则会被按钮自己的点击吞掉）。**运行中 / 启动中 / 停止中的实例拒绝再次启动**：
   每个实例用 `InstanceState`（`Idle` / `Starting` / `Running` / `Stopping`）记录状态，底部栏的
   文案、图标、按钮动作都由它派生。**启动中可以直接取消**：用 `CancelHandle` 取消启动链，同时
   发停止信号，覆盖「链刚好跑完、进程已经起来」的竞态；按钮变成不可点的「停止中…」，等收尾
@@ -108,7 +124,7 @@ gtk4/
 
 | 类型 | 文件 | 说明 |
 | --- | --- | --- |
-| `HomeMsg` | `pages/home/message.rs` | 主页内部：`Reload` / `Loaded` / `Select` / `Deselect` / `Launch` / `GameStarted` / `GameExited { name, abnormal }` / `LaunchFailed` / `Stop` / `Manage` |
+| `HomeMsg` | `pages/home/message.rs` | 主页内部：`Reload` / `Loaded` / `Select(DynamicIndex)` / `Deselect` / `Launch(DynamicIndex)` / `Toggle` / `GameStarted` / `GameExited { name, abnormal }` / `LaunchFailed` / `Manage` |
 | `TaskMsg` | `app/task_popup/message.rs` | 任务对话框：`Open` / `Start` / `Event` / `Finished { id, ok, error }` / `Close` / `ClearFinished` |
 | `AppMsg` | 无 | 根没有消息（`Input = ()`） |
 
@@ -147,7 +163,9 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   （`select!` 的两个分支都不在处理器里碰 monitor，避免双重可变借用；要 kill 就先退出 select。）
 - **异常退出**：非 0 退出码（或拿不到退出状态）算异常，home 弹「xxx 异常退出」；用户主动
   停止不算异常。更详细的错误报告窗口是远期规划。
-- 停止：home 持有每个运行实例的「停止信号」发送端，`HomeMsg::Stop` 时发信号给 supervisor。
+- 启动/停止：操作栏只发 `HomeMsg::Toggle`，home 按选中实例的状态决定启动、取消还是停止。
+  停止时给 supervisor 发信号；启动中先用 `CancelHandle` 取消启动链，同时把停止信号也发出去，
+  覆盖「链刚好跑完、进程已经起来」的竞态。
 - 取消任务：任务组件持有 `CancelHandle`；卡片右上角的叉在运行中会取消（`TaskMsg::Close`）。
 
 ## 任务对话框与任务卡片
