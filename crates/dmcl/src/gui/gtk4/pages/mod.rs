@@ -1,3 +1,4 @@
-//! 页面：主页、实例设置（后者待做）。
+//! 页面：主页、下载（后者待做）。
 
+pub(crate) mod download;
 pub(crate) mod home;
