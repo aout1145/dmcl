@@ -7,7 +7,7 @@
 mod instance_card;
 pub(crate) mod message;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use relm4::adw;
@@ -17,6 +17,7 @@ use relm4::prelude::*;
 
 use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::installed_versions;
+use dmcl_task::CancelHandle;
 
 use crate::config::Config;
 use crate::gui::gtk4::app::Shell;
@@ -28,11 +29,31 @@ pub(crate) const CSS: &str = "\
 .dmcl-action-bar { border-radius: 9999px; padding: 4px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.18); }
 .dmcl-instance-selected { background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 12px; }";
 
+/// 实例的运行状态。界面文案、按钮动作、磁贴绿点都从它派生，避免多个布尔量打架。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstanceState {
+    /// 没在启动，也没在运行。
+    Idle,
+    /// 启动链还在跑，游戏进程尚未起来。
+    Starting,
+    /// 游戏进程已经起来。
+    Running,
+    /// 已经请求停止/取消，正在等启动链或游戏进程收尾。
+    Stopping,
+}
+
 /// 一个实例在界面上的视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstanceView {
     pub name: String,
-    pub running: bool,
+    pub state: InstanceState,
+}
+
+impl InstanceView {
+    /// 磁贴绿点只表示游戏进程真的在跑，启动链阶段不算。
+    pub(crate) fn is_running(&self) -> bool {
+        self.state == InstanceState::Running
+    }
 }
 
 pub(crate) struct HomePage {
@@ -48,9 +69,11 @@ pub(crate) struct HomePage {
     /// 磁贴（实例名 → 按钮），用于切换选中样式。
     cards: HashMap<String, gtk::Button>,
     instances: Vec<InstanceView>,
-    /// 正在启动（启动链还没跑完）的实例，防止重复启动。
-    starting: HashSet<String>,
-    /// 每个运行中实例的「停止信号」：supervisor 任务收到就 kill。
+    /// 启动链的取消句柄：启动中（还没有游戏进程）用它取消。
+    cancels: HashMap<String, CancelHandle>,
+    /// 每个已启动实例的「停止信号」：supervisor 任务收到就 kill。
+    ///
+    /// 启动中也先建好：取消和启动完成撞车时，信号会缓冲到 supervisor 开始等它。
     stops: HashMap<String, tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -126,7 +149,7 @@ impl SimpleComponent for HomePage {
             selected: None,
             cards: HashMap::new(),
             instances: Vec::new(),
-            starting: HashSet::new(),
+            cancels: HashMap::new(),
             stops: HashMap::new(),
         };
         sender.input(HomeMsg::Reload);
@@ -150,7 +173,7 @@ impl SimpleComponent for HomePage {
                     .into_iter()
                     .map(|version| InstanceView {
                         name: version.name,
-                        running: false,
+                        state: InstanceState::Idle,
                     })
                     .collect();
                 // 选中的实例如果没了，就取消选中。
@@ -179,20 +202,29 @@ impl SimpleComponent for HomePage {
             }
 
             HomeMsg::Launch(name) => {
-                if self.starting.contains(&name) {
-                    self.shell.toast(&format!("{name} 正在启动"));
+                let Some(state) = self.state_of(&name) else {
                     return;
+                };
+                match state {
+                    InstanceState::Starting => {
+                        self.shell.toast(&format!("{name} 正在启动"));
+                        return;
+                    }
+                    InstanceState::Running => {
+                        self.shell.toast(&format!("{name} 已在运行"));
+                        return;
+                    }
+                    InstanceState::Stopping => {
+                        self.shell.toast(&format!("{name} 正在停止"));
+                        return;
+                    }
+                    InstanceState::Idle => {}
                 }
-                if self
-                    .instances
-                    .iter()
-                    .any(|item| item.name == name && item.running)
-                {
-                    self.shell.toast(&format!("{name} 已在运行"));
-                    return;
-                }
-                self.starting.insert(name.clone());
+                self.set_state(&name, InstanceState::Starting);
+                // 立刻把按钮切成「取消」，不等启动链返回。
+                self.render_bar(&sender);
                 let chain = self.launch_chain(&name);
+                self.cancels.insert(name.clone(), chain.cancel_handle());
                 let handle = self.shell.run(format!("启动 {name}"), chain, ());
 
                 // supervisor 任务：等游戏退出（或停止信号），完了汇报。
@@ -210,14 +242,19 @@ impl SimpleComponent for HomePage {
                 });
             }
             HomeMsg::GameStarted(name) => {
-                self.starting.remove(&name);
-                self.set_running(&name, true);
+                self.cancels.remove(&name);
+                // 取消和启动完成撞车：停止信号已经发出，supervisor 一开始等就会
+                // 收到它。这里保持「停止中」，别闪一下「停止」。
+                if self.state_of(&name) == Some(InstanceState::Stopping) {
+                    return;
+                }
+                self.set_state(&name, InstanceState::Running);
                 self.render(&sender);
             }
             HomeMsg::GameExited { name, abnormal } => {
                 self.stops.remove(&name);
-                self.starting.remove(&name);
-                self.set_running(&name, false);
+                self.cancels.remove(&name);
+                self.set_state(&name, InstanceState::Idle);
                 self.render(&sender);
                 self.shell.toast(&if abnormal {
                     format!("{name} 异常退出")
@@ -227,12 +264,24 @@ impl SimpleComponent for HomePage {
             }
             HomeMsg::LaunchFailed(name) => {
                 self.stops.remove(&name);
-                self.starting.remove(&name);
+                self.cancels.remove(&name);
+                self.set_state(&name, InstanceState::Idle);
                 self.render_bar(&sender);
             }
             HomeMsg::Stop(name) => {
-                if let Some(stop) = self.stops.remove(&name) {
-                    let _ = stop.send(());
+                if let Some(InstanceState::Starting | InstanceState::Running) = self.state_of(&name)
+                {
+                    // 启动中：取消启动链；运行中：让 supervisor kill 进程。
+                    // 两个都发，覆盖「链刚好跑完、进程已经起来」的竞态。
+                    if let Some(cancel) = self.cancels.remove(&name) {
+                        cancel.cancel();
+                    }
+                    if let Some(stop) = self.stops.remove(&name) {
+                        let _ = stop.send(());
+                    }
+                    self.set_state(&name, InstanceState::Stopping);
+                    // 只重绘操作栏：磁贴绿点保持点击前的样子，等 GameExited 再收。
+                    self.render_bar(&sender);
                 }
             }
             HomeMsg::Manage(name) => {
@@ -252,9 +301,17 @@ impl HomePage {
         dmcl_launch::launch_chain(option, install)
     }
 
-    fn set_running(&mut self, name: &str, running: bool) {
+    /// 查某个实例当前的状态；实例已经不在列表里就返回 `None`。
+    fn state_of(&self, name: &str) -> Option<InstanceState> {
+        self.instances
+            .iter()
+            .find(|item| item.name == name)
+            .map(|item| item.state)
+    }
+
+    fn set_state(&mut self, name: &str, state: InstanceState) {
         if let Some(instance) = self.instances.iter_mut().find(|item| item.name == name) {
-            instance.running = running;
+            instance.state = state;
         }
     }
 
@@ -299,11 +356,10 @@ impl HomePage {
             self.bar.set_visible(false);
             return;
         };
-        let running = self
-            .instances
-            .iter()
-            .find(|item| item.name == name)
-            .is_some_and(|item| item.running);
+        let Some(state) = self.state_of(name) else {
+            self.bar.set_visible(false);
+            return;
+        };
 
         let label = gtk::Label::new(Some(name));
         label.add_css_class("heading");
@@ -311,28 +367,32 @@ impl HomePage {
         label.set_margin_end(4);
         self.bar.append(&label);
 
-        let starting = self.starting.contains(name);
-        let (text, icon) = if starting {
-            ("启动中…", "content-loading-symbolic")
-        } else if running {
-            ("停止", "media-playback-stop-symbolic")
-        } else {
-            ("启动", "media-playback-start-symbolic")
+        // 文案、图标、点击动作全部由同一个状态决定；`None` 表示按钮不可点。
+        let (text, icon, action) = match state {
+            InstanceState::Idle => (
+                "启动",
+                "media-playback-start-symbolic",
+                Some(HomeMsg::Launch(name.to_string())),
+            ),
+            InstanceState::Starting => (
+                "取消",
+                "process-stop-symbolic",
+                Some(HomeMsg::Stop(name.to_string())),
+            ),
+            InstanceState::Running => (
+                "停止",
+                "media-playback-stop-symbolic",
+                Some(HomeMsg::Stop(name.to_string())),
+            ),
+            InstanceState::Stopping => ("停止中…", "content-loading-symbolic", None),
         };
-        let start = action_button(text, icon);
-        start.set_sensitive(!starting);
-        {
+        let toggle = action_button(text, icon);
+        toggle.set_sensitive(action.is_some());
+        if let Some(action) = action {
             let sender = sender.clone();
-            let name = name.to_string();
-            start.connect_clicked(move |_| {
-                if running {
-                    sender.input(HomeMsg::Stop(name.clone()));
-                } else {
-                    sender.input(HomeMsg::Launch(name.clone()));
-                }
-            });
+            toggle.connect_clicked(move |_| sender.input(action.clone()));
         }
-        self.bar.append(&start);
+        self.bar.append(&toggle);
 
         let manage = action_button("管理", "document-properties-symbolic");
         {
@@ -342,11 +402,7 @@ impl HomePage {
         }
         self.bar.append(&manage);
 
-        let close = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
-            .tooltip_text("取消选择")
-            .build();
-        close.add_css_class("flat");
+        let close = icon_button("window-close-symbolic");
         {
             let sender = sender.clone();
             close.connect_clicked(move |_| sender.input(HomeMsg::Deselect));
@@ -356,9 +412,23 @@ impl HomePage {
     }
 }
 
-/// 操作栏里的一行图标 + 文字按钮。
-fn action_button(label: &str, icon: &str) -> gtk::Button {
-    let button = gtk::Button::builder().label(label).icon_name(icon).build();
+/// 操作栏里的图标 + 文字按钮。
+///
+/// `GtkButton` 只有一个 child，`set_label` / `set_icon_name` 会互相覆盖，
+/// 所以图标和文字要交给 `AdwButtonContent` 一起放进 child。
+fn action_button(text: &str, icon: &str) -> gtk::Button {
+    let content = adw::ButtonContent::builder()
+        .icon_name(icon)
+        .label(text)
+        .build();
+    let button = gtk::Button::builder().child(&content).build();
+    button.add_css_class("flat");
+    button
+}
+
+/// 操作栏里的纯图标按钮。
+fn icon_button(icon: &str) -> gtk::Button {
+    let button = gtk::Button::builder().icon_name(icon).build();
     button.add_css_class("flat");
     button
 }

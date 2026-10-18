@@ -3,7 +3,7 @@
 use dmcl_mcmeta::layout::InstalledVersion;
 
 /// 主页组件收到的消息。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum HomeMsg {
     /// 重新读取已安装的版本。
     Reload,

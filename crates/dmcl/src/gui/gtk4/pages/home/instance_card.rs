@@ -51,7 +51,7 @@ pub(crate) fn build(
     dot.set_valign(gtk::Align::Start);
     dot.set_margin_top(6);
     dot.set_margin_end(4);
-    dot.set_visible(instance.running);
+    dot.set_visible(instance.is_running());
 
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&content));
