@@ -1,8 +1,8 @@
 //! 页面宿主：把「实现了 [`Page`] 的组件」挂成标签页，并管它们的生命周期。
 //!
 //! 页面组件的 `Init` 固定是 [`PageInit`]（标签句柄 + 页面自己的参数）。打开页面用
-//! [`PageHost::open_page`]：它启动组件、把根控件 append 成新的标签页、绑好标题句柄，
-//! 并**保活**组件控制器；标签被移除时（`page-detached`）再把它丢掉。
+//! [`PageHost::open_page`]：它启动组件、把根控件 append 成新的标签页、绑好标题句柄、切到新
+//! 标签页，并**保活**组件控制器；标签被移除时（`page-detached`）再把它丢掉。
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -92,6 +92,8 @@ impl PageHost {
         });
         let page = self.tab_view.append(connector.widget());
         tab_title.bind(&page);
+        // 新开的页面直接切过去，不用等用户再点一下标签。
+        self.tab_view.set_selected_page(&page);
         self.opened
             .borrow_mut()
             .insert(page.clone(), Box::new(connector.detach()));

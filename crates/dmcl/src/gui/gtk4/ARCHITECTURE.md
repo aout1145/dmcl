@@ -105,8 +105,9 @@ gtk4/
 - **`PageHost` 与 `Page`（`app/page_host.rs`）**：**页面宿主**——把「实现了 `Page` 的 relm4
   组件」挂成标签页，并保活。页面组件的 `Init` 固定是 `PageInit`（`TabTitle` + 页面自己的
   参数）；`PageHost::open_page::<C>(args)` 启动组件、`AdwTabView::append` 出标签页、绑好标题
-  句柄，并把控制器存进保活表（`page-detached` 时丢弃）。`TabTitle` 是页面**直接**改标签标题的
-  句柄（不经消息）：`open_page` 先启动组件再 append，所以绑定前 `set_title` 会缓存、绑定后补写。
+  句柄、切到新标签页，并把控制器存进保活表（`page-detached` 时丢弃）。`TabTitle` 是页面**直接**
+  改标签标题的句柄（不经消息）：`open_page` 先启动组件再 append，所以绑定前 `set_title` 会缓存、
+  绑定后补写。
   新增页面：在 `pages/` 下写一个 `impl Page` + `#[relm4::component]` 的组件，`type Args` 是它的
   实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page` 即可。
 - **`TaskCenter`（`app/task_popup`，组件）**：**它本身就是那个模态任务窗口**（`Root = AdwWindow`，用户可拖动改尺寸）。
