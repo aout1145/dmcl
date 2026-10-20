@@ -1,8 +1,12 @@
 //! 安装计划（"装哪个版本、带哪些加载器"）与两个顶层任务链。
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use dmcl_task::TaskChain;
+use anyhow::Context;
+use dmcl_mcmeta::layout::version_dir;
+use dmcl_task::{task_fn, BoxFuture, Task, TaskChain};
 
 use crate::fabric::install_fabric_task;
 use crate::files::{client_jar_task, game_files_task};
@@ -131,12 +135,90 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
     name
 }
 
+/// 占用版本目录：已存在就直接报错，不存在则创建它并允许中止清理。
+///
+/// 只有这一步成功后才把 `armed` 置为真，因此「版本已存在」不会触发删除清理。
+fn create_version_dir(
+    root_path: PathBuf,
+    version_name: String,
+    armed: Arc<AtomicBool>,
+) -> impl Task<(), ()> + 'static {
+    task_fn("检查版本是否已存在", move |_ctx| {
+        let root_path = root_path.clone();
+        let version_name = version_name.clone();
+        let armed = armed.clone();
+        async move {
+            let dir = version_dir(&root_path, &version_name);
+            if let Some(parent) = dir.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .with_context(|| format!("无法创建 {}", parent.display()))?;
+            }
+            match tokio::fs::create_dir(&dir).await {
+                Ok(()) => {
+                    armed.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    anyhow::bail!("版本「{version_name}」已存在：{}", dir.display())
+                }
+                Err(err) => Err(err).with_context(|| format!("无法创建版本目录 {}", dir.display())),
+            }
+        }
+    })
+}
+
+/// 安装中止（失败或被取消）时删除写到一半的版本目录。
+///
+/// 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚；只要版本目录不在，
+/// 这个版本就不会被当成已安装，下次安装会重新补齐。
+///
+/// `armed` 由 [`create_version_dir`] 在确认目录是本次新建后置真：版本本来就存在时
+/// 安装会直接失败，不能把用户已有的版本删掉。
+fn remove_version_dir_on_abort(
+    root_path: PathBuf,
+    version_name: String,
+    armed: Arc<AtomicBool>,
+) -> impl Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static {
+    move || {
+        let path = version_dir(&root_path, &version_name);
+        let armed = armed.clone();
+        Box::pin(async move {
+            if !armed.load(Ordering::SeqCst) {
+                return;
+            }
+            match tokio::fs::remove_dir_all(&path).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    eprintln!("警告：无法删除未完成的安装 {}：{err}", path.display());
+                }
+            }
+        })
+    }
+}
+
 /// 完整的安装链：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
 ///
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
+///
+/// 安装是「版本级原子」的：第一步就占用 `versions/<version_name>`，目录已存在时直接
+/// 报错（不会碰已有版本）；之后任何一步失败或被取消，都会删掉本次新建的版本目录，
+/// 不留下半装的版本。
 pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
+    let armed = Arc::new(AtomicBool::new(false));
+    let cleanup = remove_version_dir_on_abort(
+        options.root_path.clone(),
+        spec.version_name.clone(),
+        armed.clone(),
+    );
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
+        .on_abort(cleanup)
+        .then(
+            create_version_dir(options.root_path.clone(), spec.version_name.clone(), armed),
+            "检查版本是否已存在",
+        )
         .then(
             vanilla_metadata_task(
                 options.clone(),
@@ -200,6 +282,7 @@ mod tests {
         assert_eq!(
             steps,
             vec![
+                "检查版本是否已存在",
                 "获取原版元数据",
                 "下载客户端 jar",
                 "安装 Fabric",
@@ -207,6 +290,79 @@ mod tests {
             ]
         );
         assert_eq!(chain.name(), "安装 1.20.1");
+    }
+
+    #[tokio::test]
+    async fn a_failed_install_removes_the_version_directory() {
+        let root = std::env::temp_dir().join(format!("dmcl-install-abort-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let dir = version_dir(&root, "1.0");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("1.0.json"), "{}").await.unwrap();
+
+        let armed = Arc::new(AtomicBool::new(true));
+        let chain = TaskChain::new("安装 1.0")
+            .on_abort(remove_version_dir_on_abort(
+                root.clone(),
+                "1.0".into(),
+                armed,
+            ))
+            .then(
+                dmcl_task::task_fn("boom", |_ctx| async move {
+                    Err::<(), _>(anyhow::anyhow!("故意失败"))
+                }),
+                "会失败的一步",
+            );
+        chain.run(()).await.unwrap_err();
+
+        assert!(!dir.exists(), "失败的安装不应留下版本目录");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_successful_install_keeps_the_version_directory() {
+        let root = std::env::temp_dir().join(format!("dmcl-install-ok-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let dir = version_dir(&root, "1.0");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let armed = Arc::new(AtomicBool::new(true));
+        let chain = TaskChain::new("安装 1.0")
+            .on_abort(remove_version_dir_on_abort(
+                root.clone(),
+                "1.0".into(),
+                armed,
+            ))
+            .then(
+                dmcl_task::task_fn("ok", |_ctx| async move { Ok(()) }),
+                "成功的一步",
+            );
+        chain.run(()).await.unwrap();
+
+        assert!(dir.exists(), "成功的安装必须保留版本目录");
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn an_existing_version_is_rejected_without_deleting_it() {
+        let root = std::env::temp_dir().join(format!("dmcl-install-exists-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let dir = version_dir(&root, "1.0");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("1.0.json"), "{}").await.unwrap();
+
+        let options = Arc::new(InstallOptions::new(
+            &root,
+            DownloadSource::new(Mirror::Official),
+        ));
+        let err = install_task(options, InstallSpec::new("1.0", "1.0"))
+            .run(())
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("已存在"), "{err:#}");
+        assert!(dir.exists(), "已存在的版本目录不能被删除清理误删");
+        let _ = tokio::fs::remove_dir_all(&root).await;
     }
 
     #[test]
