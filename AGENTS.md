@@ -89,6 +89,9 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
   `feat` / `fix` / `refactor` / `docs` / `chore` …，scope 一般是 crate 名或模块名
   （如 `fix(launch): …`、`refactor(mcmeta): …`）。
 - 一次提交只做一件事；重构与行为改动尽量分开提交。
+- 只有**单纯的文档更新**才单独用 `docs` 提交；实现新功能 / 重构时同步修改的文档
+  （README、ARCHITECTURE、crate 文档等）必须和代码放在同一个提交里，不要拆成单独的
+  `docs` 提交。
 - **提交前先请用户 review 并得到同意**（见上文「汇报与确认」）；不要自作主张地 commit。
 - 提交前确保 fmt / clippy / test 全过。
 
