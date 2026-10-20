@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use dmcl_install::{install_task, InstallSpec, LoaderKind};
+use dmcl_install::{default_version_name, install_task, InstallSpec, LoaderKind};
 use dmcl_mcmeta::source::DownloadSource;
 use dmcl_task::BoxFuture;
 
@@ -112,25 +112,6 @@ pub(crate) fn loader_flag_arg(id: &str) -> Option<LoaderKind> {
         "fabric" => Some(LoaderKind::Fabric),
         _ => None,
     }
-}
-
-/// 默认的本地版本目录名：`mcversion-[loadername[-loaderversion]]*n`。
-///
-/// 加载器版本未知（`None`）时只写加载器名（`1.20.1-forge`），不硬凑版本号。
-pub(crate) fn default_version_name(
-    mc_version: &str,
-    loaders: &[(LoaderKind, Option<&str>)],
-) -> String {
-    let mut name = mc_version.to_string();
-    for (kind, version) in loaders {
-        name.push('-');
-        name.push_str(kind.as_str());
-        if let Some(version) = version {
-            name.push('-');
-            name.push_str(version);
-        }
-    }
-    name
 }
 
 /// 从 prompt 收集到的答案里拼默认版本名（`version-name` 的默认值）。
@@ -241,30 +222,6 @@ impl<L: LoaderVersions> ArgDefaults for InstallDefaults<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_name_follows_mcversion_and_loaders() {
-        assert_eq!(default_version_name("1.20.1", &[]), "1.20.1");
-        assert_eq!(
-            default_version_name("1.20.1", &[(LoaderKind::Forge, Some("47.2.0"))]),
-            "1.20.1-forge-47.2.0"
-        );
-        // 没给版本的加载器只写名字
-        assert_eq!(
-            default_version_name("1.20.1", &[(LoaderKind::Forge, None)]),
-            "1.20.1-forge"
-        );
-        assert_eq!(
-            default_version_name(
-                "1.20.1",
-                &[
-                    (LoaderKind::Forge, Some("47.2.0")),
-                    (LoaderKind::Fabric, Some("0.15.0")),
-                ]
-            ),
-            "1.20.1-forge-47.2.0-fabric-0.15.0"
-        );
-    }
 
     #[test]
     fn loader_arguments_map_to_loader_kinds() {

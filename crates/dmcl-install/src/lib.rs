@@ -76,5 +76,5 @@ pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_game_files,
     plan_libraries, plan_native_jars, plan_natives, PlanContext, PlannedFile,
 };
-pub use spec::{install_task, InstallSpec, LoaderKind, LoaderRequest};
+pub use spec::{default_version_name, install_task, InstallSpec, LoaderKind, LoaderRequest};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};

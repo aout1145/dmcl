@@ -114,6 +114,23 @@ impl InstallSpec {
     }
 }
 
+/// 默认的本地版本目录名：`mcversion-[loadername[-loaderversion]]*n`。
+///
+/// 加载器版本未知（`None`）时只写加载器名（`1.20.1-forge`），不硬凑版本号。
+/// CLI 与 GUI 共用（新实例页的自动命名）。
+pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&str>)]) -> String {
+    let mut name = mc_version.to_string();
+    for (kind, version) in loaders {
+        name.push('-');
+        name.push_str(kind.as_str());
+        if let Some(version) = version {
+            name.push('-');
+            name.push_str(version);
+        }
+    }
+    name
+}
+
 /// 完整的安装链：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
 ///
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
@@ -190,5 +207,29 @@ mod tests {
             ]
         );
         assert_eq!(chain.name(), "安装 1.20.1");
+    }
+
+    #[test]
+    fn default_name_follows_mcversion_and_loaders() {
+        assert_eq!(default_version_name("1.20.1", &[]), "1.20.1");
+        assert_eq!(
+            default_version_name("1.20.1", &[(LoaderKind::Forge, Some("47.2.0"))]),
+            "1.20.1-forge-47.2.0"
+        );
+        // 没给版本的加载器只写名字
+        assert_eq!(
+            default_version_name("1.20.1", &[(LoaderKind::Forge, None)]),
+            "1.20.1-forge"
+        );
+        assert_eq!(
+            default_version_name(
+                "1.20.1",
+                &[
+                    (LoaderKind::Forge, Some("47.2.0")),
+                    (LoaderKind::Fabric, Some("0.15.0")),
+                ]
+            ),
+            "1.20.1-forge-47.2.0-fabric-0.15.0"
+        );
     }
 }
