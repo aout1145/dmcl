@@ -1,7 +1,6 @@
 //! 安装计划（"装哪个版本、带哪些加载器"）与两个顶层任务链。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -135,18 +134,14 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
     name
 }
 
-/// 占用版本目录：已存在就直接报错，不存在则创建它并允许中止清理。
+/// 占用版本目录：已存在就直接报错，不存在则创建它。
 ///
-/// 只有这一步成功后才把 `armed` 置为真，因此「版本已存在」不会触发删除清理。
-fn create_version_dir(
-    root_path: PathBuf,
-    version_name: String,
-    armed: Arc<AtomicBool>,
-) -> impl Task<(), ()> + 'static {
+/// 删除清理由安装链在**这一步成功之后**通过 `set_cleanup` 登记；因此版本已存在时
+/// 清理不会生效，也就不会误删用户已有的版本。
+fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(), ()> + 'static {
     task_fn("检查版本是否已存在", move |_ctx| {
         let root_path = root_path.clone();
         let version_name = version_name.clone();
-        let armed = armed.clone();
         async move {
             let dir = version_dir(&root_path, &version_name);
             if let Some(parent) = dir.parent() {
@@ -155,10 +150,7 @@ fn create_version_dir(
                     .with_context(|| format!("无法创建 {}", parent.display()))?;
             }
             match tokio::fs::create_dir(&dir).await {
-                Ok(()) => {
-                    armed.store(true, Ordering::SeqCst);
-                    Ok(())
-                }
+                Ok(()) => Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::bail!("版本「{version_name}」已存在：{}", dir.display())
                 }
@@ -172,21 +164,13 @@ fn create_version_dir(
 ///
 /// 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚；只要版本目录不在，
 /// 这个版本就不会被当成已安装，下次安装会重新补齐。
-///
-/// `armed` 由 [`create_version_dir`] 在确认目录是本次新建后置真：版本本来就存在时
-/// 安装会直接失败，不能把用户已有的版本删掉。
-fn remove_version_dir_on_abort(
+fn remove_version_dir_cleanup(
     root_path: PathBuf,
     version_name: String,
-    armed: Arc<AtomicBool>,
 ) -> impl Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static {
     move || {
         let path = version_dir(&root_path, &version_name);
-        let armed = armed.clone();
         Box::pin(async move {
-            if !armed.load(Ordering::SeqCst) {
-                return;
-            }
             match tokio::fs::remove_dir_all(&path).await {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -204,21 +188,18 @@ fn remove_version_dir_on_abort(
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
 ///
 /// 安装是「版本级原子」的：第一步就占用 `versions/<version_name>`，目录已存在时直接
-/// 报错（不会碰已有版本）；之后任何一步失败或被取消，都会删掉本次新建的版本目录，
-/// 不留下半装的版本。
+/// 报错（不会碰已有版本）；只有这一步成功后才会走到 `set_cleanup` 登记删除动作，
+/// 之后任何一步失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
 pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
-    let armed = Arc::new(AtomicBool::new(false));
-    let cleanup = remove_version_dir_on_abort(
-        options.root_path.clone(),
-        spec.version_name.clone(),
-        armed.clone(),
-    );
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
-        .on_abort(cleanup)
         .then(
-            create_version_dir(options.root_path.clone(), spec.version_name.clone(), armed),
+            create_version_dir(options.root_path.clone(), spec.version_name.clone()),
             "检查版本是否已存在",
         )
+        .set_cleanup(remove_version_dir_cleanup(
+            options.root_path.clone(),
+            spec.version_name.clone(),
+        ))
         .then(
             vanilla_metadata_task(
                 options.clone(),
@@ -297,16 +278,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("dmcl-install-abort-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&root).await;
         let dir = version_dir(&root, "1.0");
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        tokio::fs::write(dir.join("1.0.json"), "{}").await.unwrap();
 
-        let armed = Arc::new(AtomicBool::new(true));
         let chain = TaskChain::new("安装 1.0")
-            .on_abort(remove_version_dir_on_abort(
-                root.clone(),
-                "1.0".into(),
-                armed,
-            ))
+            .then(
+                create_version_dir(root.clone(), "1.0".into()),
+                "检查版本是否已存在",
+            )
+            .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
             .then(
                 dmcl_task::task_fn("boom", |_ctx| async move {
                     Err::<(), _>(anyhow::anyhow!("故意失败"))
@@ -324,15 +302,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("dmcl-install-ok-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&root).await;
         let dir = version_dir(&root, "1.0");
-        tokio::fs::create_dir_all(&dir).await.unwrap();
 
-        let armed = Arc::new(AtomicBool::new(true));
         let chain = TaskChain::new("安装 1.0")
-            .on_abort(remove_version_dir_on_abort(
-                root.clone(),
-                "1.0".into(),
-                armed,
-            ))
+            .then(
+                create_version_dir(root.clone(), "1.0".into()),
+                "检查版本是否已存在",
+            )
+            .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
             .then(
                 dmcl_task::task_fn("ok", |_ctx| async move { Ok(()) }),
                 "成功的一步",
