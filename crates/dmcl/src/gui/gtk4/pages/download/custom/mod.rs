@@ -5,14 +5,18 @@
 //! * [`InstanceSummary`]：图标 + 名称（自动命名 / 用户改过后不再覆盖）+ 分类（v1 禁用）
 //!   + 安装按钮；
 //! * 四个 [`VersionSelect`]：Minecraft、Forge、Fabric、NeoForge。加载器列表随所选 MC
-//!   版本动态取；「最新 / 推荐」的判定与徽标在下面的适配函数里做，组件本身只展示。
+//!   版本动态取；「最新 / 推荐」的判定与徽标在 `versions` 子模块里做，组件本身只展示。
 //!
-//! 加载器互斥按**组**配置（[`LoaderDef::mutex_group`]），现阶段 Forge / Fabric /
+//! 加载器互斥按**组**配置（`LoaderDef::mutex_group`），现阶段 Forge / Fabric /
 //! NeoForge 同属 `"loader"` 组：选中一个后，同组其它行会被禁用并提示「与 xx 冲突」，
 //! 取消选择后恢复。以后要允许叠加（如双加载器整合包）只需改表里的组。
 //!
 //! 用户点安装后立即关闭本页并主动打开任务列表（[`Shell::open_tasks`]）；任务结果由
 //! 任务窗口展示。标签的移除走根组件的 `close-page`。
+
+mod loaders;
+mod message;
+mod versions;
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,7 +27,6 @@ use relm4::prelude::*;
 
 use dmcl_install::{default_version_name, InstallSpec, LoaderKind};
 use dmcl_mcmeta::layout::version_dir;
-use dmcl_mcmeta::source::DownloadSource;
 
 use crate::config::Config;
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
@@ -32,59 +35,12 @@ use crate::gui::gtk4::pages::download::common::instance_summary::{
     IconSource, InstanceSummary, SummaryIn, SummaryOut,
 };
 use crate::gui::gtk4::pages::download::common::version_select::{
-    Badge, FetchVersions, KindChip, SelectIn, SelectOut, VersionItem, VersionSelect,
-    VersionSelectInit,
+    KindChip, SelectIn, SelectOut, VersionItem, VersionSelect, VersionSelectInit,
 };
 
-/// 一个加载器下拉的静态定义。
-struct LoaderDef {
-    kind: LoaderKind,
-    /// 冲突组：同组里只能选一个；选中一个后其它同组行会被禁用（`None` = 不参与冲突）。
-    ///
-    /// 现在三个加载器同属 `"loader"`；将来若要允许叠加（比如双加载器整合包），改这里
-    /// 的组名即可，页面逻辑不用动。
-    mutex_group: Option<&'static str>,
-}
-
-/// 加载器下拉表（也是页面上的显示顺序）。
-const LOADER_DEFS: &[LoaderDef] = &[
-    LoaderDef {
-        kind: LoaderKind::Forge,
-        mutex_group: Some("loader"),
-    },
-    LoaderDef {
-        kind: LoaderKind::Fabric,
-        mutex_group: Some("loader"),
-    },
-    LoaderDef {
-        kind: LoaderKind::NeoForge,
-        mutex_group: Some("loader"),
-    },
-];
-
-/// 页面消息。
-#[derive(Debug)]
-pub(crate) enum CustomMsg {
-    /// Minecraft 版本下拉的选择变化。
-    McChanged(Option<VersionItem>),
-    /// 第 `slot` 个加载器下拉的选择变化。
-    LoaderChanged {
-        slot: usize,
-        item: Option<VersionItem>,
-    },
-    /// 实例名称显示值变化（自动命名 / 用户编辑都会发）。
-    NameChanged(String),
-    /// 用户点了安装按钮。
-    Install { name: String },
-}
-
-/// 一个加载器下拉 + 它当前的选择。
-struct LoaderSlot {
-    kind: LoaderKind,
-    mutex_group: Option<&'static str>,
-    select: Controller<VersionSelect>,
-    selection: Option<VersionItem>,
-}
+use loaders::{loader_init, LoaderSlot, LOADER_DEFS};
+use message::CustomMsg;
+use versions::mc_fetcher;
 
 pub(crate) struct CustomPage {
     /// 标签标题句柄：改标题、安装发起后关页都走它。
@@ -380,224 +336,9 @@ fn take_selection(out: SelectOut) -> Option<VersionItem> {
     }
 }
 
-/// 加载器下拉的 Init（取数器捕获下载源，按上下文取列表）。
-fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSelectInit {
-    match kind {
-        // Forge：列表新→旧；推荐版本来自 `branch == "recommended"`。
-        // 类别 chips 留给后续（TODO）。
-        LoaderKind::Forge => VersionSelectInit {
-            title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
-                let source = source.clone();
-                let context = context.to_string();
-                Box::pin(async move {
-                    let entries = source.fetch_forge_versions(&context).await?;
-                    Ok(forge_items(entries))
-                })
-            }),
-            chips: Vec::new(),
-            show_search: false,
-            allow_none: true,
-            initially_expanded: false,
-        },
-        // Fabric：不区分版本类型；第一条「最新版本」，第一条 stable「推荐版本」。
-        LoaderKind::Fabric => VersionSelectInit {
-            title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
-                let source = source.clone();
-                let context = context.to_string();
-                Box::pin(async move {
-                    let entries = source.fetch_fabric_loaders(&context).await?;
-                    Ok(fabric_items(entries))
-                })
-            }),
-            chips: Vec::new(),
-            show_search: false,
-            allow_none: true,
-            initially_expanded: false,
-        },
-        // NeoForge：只有 1.20.1 之后的版本，空列表是常态（Empty 状态）。
-        LoaderKind::NeoForge => VersionSelectInit {
-            title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
-                let source = source.clone();
-                let context = context.to_string();
-                Box::pin(async move {
-                    let entries = source.fetch_neoforge_versions(&context).await?;
-                    Ok(neoforge_items(entries))
-                })
-            }),
-            chips: Vec::new(),
-            show_search: false,
-            allow_none: true,
-            initially_expanded: false,
-        },
-    }
-}
-
-/// Minecraft 版本清单的取数器：**忽略上下文**，一次取全清单。
-fn mc_fetcher(source: DownloadSource) -> FetchVersions {
-    Arc::new(move |_context: &str| {
-        let source = source.clone();
-        Box::pin(async move {
-            let manifest = source.fetch_version_manifest().await?;
-            Ok(mc_items(manifest))
-        })
-    })
-}
-
-fn badge(key: &str, label: &str) -> Badge {
-    Badge {
-        key: key.to_string(),
-        label: label.to_string(),
-    }
-}
-
-/// 原版清单 → 条目：`latest.release` / `latest.snapshot` 置顶，类型合并「远古」。
-fn mc_items(manifest: dmcl_mcmeta::vanilla::manifest::VersionManifest) -> Vec<VersionItem> {
-    let latest_release = manifest
-        .latest
-        .as_ref()
-        .map(|latest| latest.release.clone())
-        .unwrap_or_default();
-    let latest_snapshot = manifest
-        .latest
-        .as_ref()
-        .map(|latest| latest.snapshot.clone())
-        .unwrap_or_default();
-
-    manifest
-        .versions
-        .iter()
-        .map(|entry| {
-            // old_alpha / old_beta（以及部分镜像的 alpha / beta）统一并成「远古」，
-            // 免得筛选 chips 跟着远程数据的措辞变化。
-            let kind = match entry.kind.as_str() {
-                "old_alpha" | "old_beta" | "alpha" | "beta" => "old",
-                other => other,
-            };
-            let mut badges = Vec::new();
-            if entry.id == latest_release {
-                badges.push(badge("latest", "最新正式版"));
-            } else if entry.id == latest_snapshot {
-                badges.push(badge("latest", "最新预览版"));
-            }
-            VersionItem {
-                id: entry.id.clone(),
-                label: entry.id.clone(),
-                kind: kind.to_string(),
-                badges,
-                detail: entry
-                    .release_time
-                    .as_deref()
-                    .map(|time| time.chars().take(10).collect()),
-            }
-        })
-        .collect()
-}
-
-/// Forge 列表 → 条目：第一条「最新版本」，`branch == "recommended"` 的「推荐版本」。
-///
-/// 展示与自动命名用 `version` 字段（如 `47.2.0`）；安装 id 仍是 `full_name`
-/// （如 `1.20.1-47.2.0`）。
-fn forge_items(entries: Vec<dmcl_mcmeta::forge::ForgeVersionEntry>) -> Vec<VersionItem> {
-    let first = entries.first().map(|entry| entry.full_name());
-    let recommended = entries
-        .iter()
-        .find(|entry| entry.branch.as_deref() == Some("recommended"))
-        .map(|entry| entry.full_name());
-
-    entries
-        .into_iter()
-        .map(|entry| {
-            let full_name = entry.full_name();
-            let mut badges = Vec::new();
-            if first.as_deref() == Some(full_name.as_str()) {
-                badges.push(badge("latest", "最新版本"));
-            }
-            if recommended.as_deref() == Some(full_name.as_str()) {
-                badges.push(badge("recommended", "推荐版本"));
-            }
-            VersionItem {
-                id: full_name,
-                label: entry.version,
-                kind: String::new(),
-                badges,
-                detail: Some(format!("构建 {}", entry.build)),
-            }
-        })
-        .collect()
-}
-
-/// Fabric 列表 → 条目：第一条「最新版本」，第一条 stable「推荐版本」；不区分类型。
-fn fabric_items(entries: Vec<dmcl_mcmeta::fabric::FabricLoaderEntry>) -> Vec<VersionItem> {
-    let first_stable = entries
-        .iter()
-        .position(|entry| entry.loader.stable == Some(true));
-
-    entries
-        .into_iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let mut badges = Vec::new();
-            if index == 0 {
-                badges.push(badge("latest", "最新版本"));
-            }
-            if first_stable == Some(index) {
-                badges.push(badge("stable", "推荐版本"));
-            }
-            VersionItem {
-                id: entry.loader.version.clone(),
-                label: entry.loader.version,
-                kind: String::new(),
-                badges,
-                detail: None,
-            }
-        })
-        .collect()
-}
-
-/// NeoForge 列表 → 条目：第一条「最新版本」（已按版本号新→旧排序）。
-fn neoforge_items(entries: Vec<dmcl_mcmeta::neoforge::NeoForgeListEntry>) -> Vec<VersionItem> {
-    entries
-        .into_iter()
-        .enumerate()
-        .map(|(index, entry)| VersionItem {
-            id: entry.version.clone(),
-            label: entry.version,
-            kind: String::new(),
-            badges: if index == 0 {
-                vec![badge("latest", "最新版本")]
-            } else {
-                Vec::new()
-            },
-            detail: None,
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use dmcl_mcmeta::fabric::{FabricLoader, FabricLoaderEntry};
-    use dmcl_mcmeta::forge::ForgeVersionEntry;
-    use dmcl_mcmeta::neoforge::NeoForgeListEntry;
-    use dmcl_mcmeta::vanilla::manifest::{LatestVersions, VersionManifest, VersionManifestEntry};
-
-    fn labels(item: &VersionItem) -> Vec<&str> {
-        item.badges
-            .iter()
-            .map(|badge| badge.label.as_str())
-            .collect()
-    }
-
-    fn manifest_entry(id: &str, kind: &str) -> VersionManifestEntry {
-        VersionManifestEntry {
-            id: id.to_string(),
-            kind: kind.to_string(),
-            ..Default::default()
-        }
-    }
+    use super::install_tab_title;
 
     #[test]
     fn tab_title_has_install_prefix() {
@@ -608,117 +349,5 @@ mod tests {
             install_tab_title("26.3-forge-47.2.0"),
             "安装 26.3-forge-47.2.0"
         );
-    }
-
-    #[test]
-    fn mc_items_merge_old_kinds_and_badge_latest() {
-        let manifest = VersionManifest {
-            versions: vec![
-                manifest_entry("24w00a", "snapshot"),
-                manifest_entry("1.21.10", "release"),
-                manifest_entry("a1.0", "old_alpha"),
-            ],
-            latest: Some(LatestVersions {
-                release: "1.21.10".to_string(),
-                snapshot: "24w00a".to_string(),
-            }),
-        };
-
-        let items = mc_items(manifest);
-        assert_eq!(labels(&items[0]), vec!["最新预览版"]);
-        assert_eq!(labels(&items[1]), vec!["最新正式版"]);
-        // old_alpha / old_beta 合并成 old，供「远古」chip 过滤。
-        assert_eq!(items[2].kind, "old");
-        assert!(items[2].badges.is_empty());
-    }
-
-    #[test]
-    fn forge_items_badge_first_and_recommended() {
-        let entries = vec![
-            ForgeVersionEntry {
-                mcversion: "1.20.1".to_string(),
-                version: "47.2.0".to_string(),
-                build: 3,
-                ..Default::default()
-            },
-            ForgeVersionEntry {
-                mcversion: "1.20.1".to_string(),
-                version: "47.1.0".to_string(),
-                branch: Some("recommended".to_string()),
-                build: 2,
-                ..Default::default()
-            },
-        ];
-
-        let items = forge_items(entries);
-        // 安装 id 仍是 full_name；展示与自动命名用 version 字段。
-        assert_eq!(items[0].id, "1.20.1-47.2.0");
-        assert_eq!(items[0].label, "47.2.0");
-        assert_eq!(labels(&items[0]), vec!["最新版本"]);
-        assert_eq!(labels(&items[1]), vec!["推荐版本"]);
-        assert_eq!(items[1].id, "1.20.1-47.1.0-recommended");
-        assert_eq!(items[1].label, "47.1.0");
-        assert_eq!(items[1].detail.as_deref(), Some("构建 2"));
-    }
-
-    fn fabric_entry(version: &str, stable: bool) -> FabricLoaderEntry {
-        FabricLoaderEntry {
-            loader: FabricLoader {
-                version: version.to_string(),
-                stable: Some(stable),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn fabric_items_badge_first_and_first_stable() {
-        let items = fabric_items(vec![
-            fabric_entry("0.16.0", false),
-            fabric_entry("0.15.11", true),
-            fabric_entry("0.15.10", true),
-        ]);
-
-        // 第一条拿「最新版本」，第一条 stable 拿「推荐版本」；两者可以不是同一条。
-        assert_eq!(labels(&items[0]), vec!["最新版本"]);
-        assert_eq!(labels(&items[1]), vec!["推荐版本"]);
-        assert!(items[2].badges.is_empty());
-        // 加载器列表不区分版本类型，类型列留空。
-        assert!(items.iter().all(|item| item.kind.is_empty()));
-    }
-
-    #[test]
-    fn fabric_items_can_carry_both_badges_on_the_first_entry() {
-        let items = fabric_items(vec![fabric_entry("0.16.0", true)]);
-        assert_eq!(labels(&items[0]), vec!["最新版本", "推荐版本"]);
-    }
-
-    #[test]
-    fn fabric_items_without_stable_only_badge_the_first() {
-        let items = fabric_items(vec![
-            fabric_entry("0.16.0", false),
-            fabric_entry("0.15.0", false),
-        ]);
-
-        assert_eq!(labels(&items[0]), vec!["最新版本"]);
-        assert!(items[1].badges.is_empty());
-    }
-
-    #[test]
-    fn neoforge_items_badge_only_the_first() {
-        let items = neoforge_items(vec![
-            NeoForgeListEntry {
-                version: "21.1.80".to_string(),
-                ..Default::default()
-            },
-            NeoForgeListEntry {
-                version: "21.1.79".to_string(),
-                ..Default::default()
-            },
-        ]);
-
-        assert_eq!(labels(&items[0]), vec!["最新版本"]);
-        assert!(items[1].badges.is_empty());
     }
 }

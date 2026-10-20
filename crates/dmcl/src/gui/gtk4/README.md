@@ -104,7 +104,10 @@ gtk4/
         │   └── version_select.rs
         └── custom/
             ├── README.md        # 「自定义」新建实例页
-            └── mod.rs
+            ├── mod.rs           # 页面组件、状态与安装
+            ├── message.rs       # CustomMsg
+            ├── loaders.rs       # 加载器定义 / 槽位 / Init
+            └── versions.rs      # 版本取数器与清单适配
 ```
 
 ## 组件索引
@@ -162,8 +165,8 @@ GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway�
 - 任务进度 reducer（`app/task_popup/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
   结束状态；
 - 版本目录快照（`pages/home/mod.rs`）：只列直接子目录、排序、目录不存在；
-- 版本适配与命名（`pages/download/custom/mod.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、
-  Fabric 最新 / 推荐规则、NeoForge 置顶、标签标题；
+- 版本适配（`pages/download/custom/versions.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、
+  Fabric 最新 / 推荐规则、NeoForge 置顶；标签标题在 `custom/mod.rs`；
 - 过滤（`pages/download/common/version_select.rs`）：类别、搜索、保持顺序、未列出类别；
 - 前端选择（`gui/mod.rs`）：有 / 无 `gtk4` feature 时的回退。
 

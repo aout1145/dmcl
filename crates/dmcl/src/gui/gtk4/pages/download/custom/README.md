@@ -4,6 +4,13 @@
 下载域与公共组件见 [../README.md](../README.md)，整体架构见
 [gtk4/README.md](../../../README.md)。
 
+## 模块
+
+- `mod.rs`：页面组件、状态、`init` / `update` 与安装流程；
+- `message.rs`：`CustomMsg`；
+- `loaders.rs`：`LoaderDef` / `LOADER_DEFS`、运行时 `LoaderSlot` 与 `loader_init`；
+- `versions.rs`：各数据源的取数器与 `VersionItem` 适配。
+
 ## 装配
 
 `CustomPage` 的 `Init = PageInit<(Rc<Shell>, Config)>`。页面由 `InstanceSummary` 与四个
@@ -54,7 +61,7 @@ MC 或任一加载器选择变化后，页面用
 
 ## 版本适配层
 
-页面里的纯函数把各数据源转成 `VersionItem`：
+`versions.rs` 里的纯函数把各数据源转成 `VersionItem`：
 
 - **MC**：`latest.release` → 「最新正式版」，`latest.snapshot` → 「最新预览版」；两者都可进
   置顶区。`old_alpha` / `old_beta`（以及部分镜像的 `alpha` / `beta`）合并成 `old` 类别，
@@ -85,9 +92,8 @@ MC 或任一加载器选择变化后，页面用
 
 ## 测试
 
-`custom/mod.rs` 的单测覆盖：
+`mod.rs` 的单测覆盖标签标题（空名称回退到「安装 新实例」）；`versions.rs` 覆盖：
 
-- 标签标题（空名称回退到「安装 新实例」）；
 - MC 类型合并与最新徽标；
 - Forge 展示 `version` / 安装 `full_name`、第一条与 recommended 徽标；
 - Fabric 第一条 + 第一条 stable（可以重合，也可以没有 stable）；
