@@ -27,6 +27,8 @@ pub(crate) struct TabTitle {
 struct TabTitleInner {
     /// 绑定后的真实标签页。
     page: Option<adw::TabPage>,
+    /// 所属标签视图：`close()` 要用它请求关闭页面。
+    view: Option<adw::TabView>,
     /// 绑定前设过、还没写进去的标题。
     pending: Option<String>,
 }
@@ -41,10 +43,19 @@ impl TabTitle {
         }
     }
 
-    /// 绑定真正的标签页，并补写绑定前设置的标题。
-    fn bind(&self, page: &adw::TabPage) {
+    /// 请求关闭这个标签页（页面自己可以关闭自己；走 `close-page` 信号，根组件放行）。
+    pub fn close(&self) {
+        let inner = self.inner.borrow();
+        if let (Some(page), Some(view)) = (&inner.page, &inner.view) {
+            view.close_page(page);
+        }
+    }
+
+    /// 绑定真正的标签页与视图，并补写绑定前设置的标题。
+    fn bind(&self, page: &adw::TabPage, view: &adw::TabView) {
         let mut inner = self.inner.borrow_mut();
         inner.page = Some(page.clone());
+        inner.view = Some(view.clone());
         if let Some(title) = inner.pending.take() {
             page.set_title(&title);
         }
@@ -91,7 +102,7 @@ impl PageHost {
             args,
         });
         let page = self.tab_view.append(connector.widget());
-        tab_title.bind(&page);
+        tab_title.bind(&page, &self.tab_view);
         // 新开的页面直接切过去，不用等用户再点一下标签。
         self.tab_view.set_selected_page(&page);
         self.opened

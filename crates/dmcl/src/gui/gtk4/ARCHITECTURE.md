@@ -88,7 +88,11 @@ gtk4/
     │   ├── message.rs          #     HomeMsg
     │   └── instance_card.rs    #     单个实例磁贴（FactoryComponent；运行中右上角绿点）
     └── download/               #   下载相关页面
-        └── custom/mod.rs       #     「新实例」页（空白占位；标签标题「新实例」）
+        ├── common/             #     download 域公共组件（不是全 app 通用小部件）
+        │   ├── mod.rs          #       公共 CSS（版本列表选中行）
+        │   ├── instance_summary.rs  #  实例概要：图标 / 名称 / 分类 / 安装按钮
+        │   └── version_select.rs    #  版本下拉：置顶 + 搜索 / chips + 动态取数
+        └── custom/mod.rs       #     「自定义」页：装配两个组件、联动与安装
 ```
 
 ## 组件与服务
@@ -106,8 +110,9 @@ gtk4/
   组件」挂成标签页，并保活。页面组件的 `Init` 固定是 `PageInit`（`TabTitle` + 页面自己的
   参数）；`PageHost::open_page::<C>(args)` 启动组件、`AdwTabView::append` 出标签页、绑好标题
   句柄、切到新标签页，并把控制器存进保活表（`page-detached` 时丢弃）。`TabTitle` 是页面**直接**
-  改标签标题的句柄（不经消息）：`open_page` 先启动组件再 append，所以绑定前 `set_title` 会缓存、
-  绑定后补写。
+  改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动组件再 append，所以绑定前
+  `set_title` 会缓存、绑定后补写；`close()` 内置 `tab_view` + `tab_page` 引用，调
+  `tab_view.close_page` 走根组件的 `close-page`（主页仍会被拒），页面可据此「安装成功后关页」。
   新增页面：在 `pages/` 下写一个 `impl Page` + `#[relm4::component]` 的组件，`type Args` 是它的
   实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page` 即可。
 - **`TaskCenter`（`app/task_popup`，组件）**：**它本身就是那个模态任务窗口**（`Root = AdwWindow`，用户可拖动改尺寸）。
@@ -118,6 +123,10 @@ gtk4/
   **视图用 `view!` 声明**（`GtkOverlay` + `GtkStack` + `AdwWrapBox` + 底部胶囊操作栏），
   `#[watch]` 负责在模型变化后刷新空状态/操作栏文案/图标/可用性；磁贴列表用
   `FactoryVecDeque<InstanceCard>`，不再手写 `render` / `remove`+`append`。
+  **实例列表自动跟随 `versions` 目录**：后台每秒对比顶层版本目录快照（名字 + 目录
+  mtime），变化就发 `HomeMsg::Reload`——安装成功关页、外部新增/删除版本都能立刻看到。
+  这里用轮询而不是事件监听库：版本目录很小、跨平台，且不必处理「目录还不存在 / 被整体
+  替换」等监听器边界，也不用新增依赖。
   磁贴是**等宽**的透明 `GtkButton`（类似 GNOME Files：大图标 + 最多三行名称；行高按内容
   收缩，不预留三行）；**运行中**时右上角显示小绿点（`media-record-symbolic` + `.success`）。
   磁贴的单击选中 / 双击启动通过 `CardOut` 上报给主页。
@@ -128,6 +137,23 @@ gtk4/
   文案、图标、按钮动作都由它派生。**启动中可以直接取消**：用 `CancelHandle` 取消启动链，同时
   发停止信号，覆盖「链刚好跑完、进程已经起来」的竞态；按钮变成不可点的「停止中…」，等收尾
   完成再回到 `Idle`。启动链交给 `Shell` 跑，自己等结果并监督进程（见下）。
+- **`CustomPage`（`pages/download/custom`，页面组件）**：「下载 / 自定义」= 新建实例页。
+  整页包在 `GtkScrolledWindow` 里（展开多个版本列表时页面可以滚），顶部 `InstanceSummary`
+  （图标 + 名称 + 分类 + 安装按钮），下面一个 `.boxed-list` 里排 Minecraft / Forge /
+  Fabric / NeoForge 四个 `VersionSelect`。负责 MC → 加载器的联动、加载器互斥、自动命名 /
+  图标、组装 `InstallSpec` 并跑安装任务（成功后自动关页）。
+- **`InstanceSummary`（`pages/download/common`，组件）**：实例概要。名称 / 图标各带
+  「当前值 + 用户是否改过」；外部 `SetAutoName` / `SetAutoIcon` 只在没改过时生效。分类下拉
+  v1 禁用（`set_sensitive(false)` + TODO），安装按钮可用性由页面推。
+  **名称输入框不能写成 `#[watch] set_text` + `connect_changed` 回写模型**：视图每次刷新都会
+  重设文本，GTK 可能先发一条中间态 `changed("")`（先清空再写入），被当成用户清空后自动命名
+  又写回，形成无限来回（表现为选中版本后整个窗口 100% CPU、无响应）。现在由组件持有
+  `EntryRow`，只在 `SetAutoName` 里显式写文本；`NameEdited` 只接受「事件文本 == 输入框当前
+  文本」的事件，中间态直接丢掉，用户真正清空时仍按用户修改处理。
+- **`VersionSelect`（`pages/download/common`，组件）**：通用版本选择器。行 = `AdwExpanderRow`，
+  标题 / 副标题显示状态，展开区里是搜索框、可选 chips、置顶区 + 完整列表（两个
+  `FactoryVecDeque<VersionRow>`），loading / failed 由 `GtkStack` 切换。取数器、chips 全部
+  由页面在 Init 注入，组件不认识 Minecraft。选中版本后**不自动收起**，由用户再点标题栏收起。
 - **`header.rs`**：`AdwHeaderBar`，title widget 是**整行内容**自己排的 `GtkBox`：`+`、
   `AdwTabBar`、账号/任务/设置、窗口按钮。之所以不把标签栏直接当 title widget、其余按钮分头
   `pack_start`/`pack_end`，是因为头栏把 title widget 摆在 `GtkCenterBox` 正中（中间宽度 =
@@ -144,6 +170,9 @@ gtk4/
 | 类型 | 文件 | 说明 |
 | --- | --- | --- |
 | `HomeMsg` | `pages/home/message.rs` | 主页内部：`Reload` / `Loaded` / `Select(DynamicIndex)` / `Deselect` / `Launch(DynamicIndex)` / `Toggle` / `GameStarted` / `GameExited { name, abnormal }` / `LaunchFailed` / `Manage` |
+| `CustomMsg` | `pages/download/custom/mod.rs` | 新实例页：`McChanged` / `LoaderChanged { slot, item }` / `NameChanged` / `Install` / `Installed` |
+| `SummaryIn` / `SummaryOut` | `pages/download/common/instance_summary.rs` | 概要：`SetAutoName` / `SetAutoIcon` / `SetInstallEnabled` / 图标菜单与名称编辑；输出 `Install { name }` / `NameChanged` |
+| `SelectIn` / `SelectOut` | `pages/download/common/version_select.rs` | 版本下拉：`SetContext` / `Reload` / `Clear` / `Deselect` / `SearchChanged` / `ToggleChip` / `RowClicked` / `Loaded`；输出 `Changed(Option<VersionItem>)` |
 | `TaskMsg` | `app/task_popup/message.rs` | 任务对话框：`Open` / `Start` / `Event` / `Finished { id, ok, error }` / `Close` / `ClearFinished` |
 | `AppMsg` | 无 | 根没有消息（`Input = ()`） |
 
@@ -186,6 +215,73 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   停止时给 supervisor 发信号；启动中先用 `CancelHandle` 取消启动链，同时把停止信号也发出去，
   覆盖「链刚好跑完、进程已经起来」的竞态。
 - 取消任务：任务组件持有 `CancelHandle`；卡片右上角的叉在运行中会取消（`TaskMsg::Close`）。
+
+## 新建实例页（download）
+
+- **装配**：`CustomPage` 的 `Init = PageInit<(Rc<Shell>, Config)>`。页面由 `InstanceSummary`
+  与四个 `VersionSelect` 组成；打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单
+  取数跑起来（MC 取数器忽略上下文）。根组件「添加实例 → 自定义」把 `Rc<Shell>` 与 `Config`
+  的克隆传进来，并把 `download::common::CSS` 注册到全局样式。
+- **自动命名 / 图标**：MC 或任一加载器选择变化后，页面用
+  `dmcl_install::default_version_name(mc, [(LoaderKind, Some(id))…])`（CLI 与 GUI 共用）
+  算默认名，推 `SetAutoName`；有选中的加载器就推 `SetAutoIcon(Loader(kind))`，否则
+  `Initials`。`InstanceSummary` 用 `name_user_modified` / `icon_user_modified` 守住用户输入：
+  改过就**永不**再应用自动值；图标菜单的「自动」会清掉修改标记、恢复跟随。
+  输入框的 `#[watch] set_text` 每次刷新都会重设文本，所以 `NameEdited` 只有「文本 != 模型值」
+  才算用户修改（避免程序同步被误判成用户输入）。
+- **版本下拉的取数接口**：
+
+  ```rust
+  type FetchVersions =
+      Arc<dyn Fn(&str) -> BoxFuture<'_, Result<Vec<VersionItem>>> + Send + Sync>;
+  ```
+
+  页面构造闭包时捕获 `DownloadSource`；组件不知道数据从哪来。动态取数带**代际计数**
+  （`gen`）：换上下文就 +1，回来时代数不匹配的响应直接丢弃。上下文变化、或新列表里不再
+  包含旧选择时，清空选择并发 `Changed(None)`。
+- **状态与交互**：`Idle`（还没给上下文，行不可展开）/ `Loading` / `Ready` / `Empty`
+  （列表为空，行不可展开、副标题「无可用版本」）/ `Failed`（展开区里显示错误 + 重试）。
+  `Ready` 时副标题显示已选 `label`；加载器未选显示「不安装」，MC 未选显示「请选择版本…」。
+  加载器行已选时出现 ×（`Deselect`，发 `Changed(None)`）；`Clear` 是给页面编排互斥用的
+  静默清空（不发输出）。
+- **置顶与筛选**：`VersionItem.badges` 非空即进置顶区，`Badge { key, label }` 是开放词汇
+  （不给枚举；`key` 留给以后做样式钩子，v1 只显示 `label`）。列表头与置顶同一条去重；没有
+  置顶项时「全部版本」标题隐藏（置顶区本身不加标题）。v1 行文案直接把徽标并进主文案
+  （`1.20.1（最新、推荐）`），没有药丸样式。
+  搜索对 `id` / `label` 做大小写不敏感子串匹配；chips（`KindChip`）由页面给，全开 =
+  只显示列出的类别，全关 = 不按类别筛；chips 用 `caption` 字号 + `.dmcl-version-chip`
+  收紧 `.pill` 的默认 padding。过滤是纯函数 `filter_items`（保持数据源的新→旧
+  顺序），有单测。选中标记只更新真正变化的两行（`iter_mut` 会把整张表标脏，900 行的 MC
+  列表会因此重绘整表）。
+- **展开承载**：行 = `AdwExpanderRow`；展开区随内容变长，列表区 220–480 高（超过 480
+  在内部滚动）。页面外层有 `GtkScrolledWindow`，展开多个列表时可以滚。不用 `AdwComboRow`：
+  它的弹出层是单层平铺列表，放不下分节标题与 chips。版本行外层 `GtkListBox` 会再套一层
+  可悬停的隐式 row，所以列表加 `.dmcl-version-list`、在 CSS 里清掉外层 row 的 hover 背景，
+  否则会和外层 Button 的 hover 叠成「外浅内深」两圈强调色。展开内容本身也被包成一行，
+  该行设为不可激活（`.dmcl-version-panel-row`），否则鼠标进入整块展开区会变深。
+- **展开时机**：所有行默认收起，只有用户点标题才展开；选中版本后也不自动收起。
+  libadwaita 的 `set_enable_expansion(false → true)` 会**顺手把行展开**，所以 `sync_view`
+  在启用后显式 `set_expanded(false)`，并且不能把 `set_enable_expansion` 写成 `#[watch]`
+  （每次视图刷新都会重新触发、把用户刚收起的行再弹开）。
+- **加载器互斥按组配置**：`LOADER_DEFS` 是
+  `LoaderDef { kind, mutex_group }` 常量表，页面持 `Vec<LoaderSlot>`（定义 + 控制器 +
+  当前选择），同组里选中一个就对其它项发 `Clear`。现阶段 Forge / Fabric / NeoForge 同属
+  `"loader"`；将来允许叠加（双加载器整合包）或加新加载器只改表，`mutex_group: None` 即
+  不参与互斥。
+- **适配层（页面里的纯函数）**：
+  - MC：`latest.release` → 「最新」，`latest.snapshot` → 「最新快照」；`old_alpha` /
+    `old_beta`（以及部分镜像的 `alpha` / `beta`）合并成 `old` 类别，供「远古」chip 过滤。
+  - Forge：第一条 → 「最新」，`branch == "recommended"` → 「推荐」；类别 chips 暂缺
+    （TODO），目前只有搜索。
+  - Fabric：第一条 `stable` → 「最新」+「稳定」（CLI 的 latest 语义：优先稳定版；没有
+    稳定版才退回第一条）；按 `stable` 分「稳定 / 不稳定」两个 chip。
+  - NeoForge：第一条 → 「最新」，没有 recommended / stable，也没有 chips。
+  - 空列表是常态（Forge 对不少 MC 版本没有构建、NeoForge 只覆盖 1.20.1+），走 `Empty`
+    而不是错误。
+- **安装**：`SummaryOut::Install { name }` → 校验 MC 已选、名称非空 → 按装配态组
+  `InstallSpec`（加载器按 `LOADER_DEFS` 顺序）→
+  `Shell::run(dmcl_install::install_task(...))`；安装期间按钮禁用。成功 toast
+  「… 安装完成」并 `tab.close()` 自动关页；失败 toast 错误、页面留着。
 
 ## 任务对话框与任务卡片
 
@@ -240,22 +336,25 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
     闭按钮，只能按 CSS 节点链（`tabbar` → `tab`）把 `.dmcl-home-tab` 打在主页那个标签上
     （`header::mark_home_tab`，等标签栏建好标签后调用），选择器写成 `tab.dmcl-home-tab`，
     其余标签保持可见的 `×`；
+  - `download::common::CSS`：版本列表里选中行 `.dmcl-version-selected` 的高亮，以及清掉
+    `GtkListBox` 隐式行 hover 背景、避免内外两圈强调色；
   - `task_popup::CSS`：给任务日志区 `.dmcl-task-log` 一个明确的边框。
 
 ## 图标
 
 - **UI 图标**用 Adwaita 主题的 `*-symbolic`（按名字引用、不打包；随主题换色、随缩放）。
   只挑稳定常见的名字（个别名字在旧版 adwaita-icon-theme 里缺失）。
-- **实例图标**：目前用 `AdwAvatar` 首字母彩色头像（零素材、零版权风险）；以后再加「按加载器
-  区分」与「自定义图片」。**不内置 Mojang 贴图**。
+- **实例图标**：默认用 `AdwAvatar` 首字母彩色头像（零素材、零版权风险）。新建实例页支持
+  自动按加载器显示首字母（Forge → F）与用户自选本地图片（`GdkTexture`，载入失败回落首字母）。
+  **不内置 Mojang 贴图**。
 - **运行状态**用彩色文字/圆点（CSS class）而不是图标。
 
 ## 待办
 
 - 实例设置页（`Manage` 打开新标签）：`PageHost::open_page` 已就绪，写个 `Page` 组件接上即可。
-- 「自定义」页的实际内容（选择版本 / 加载器等）。
+- Forge 版本下拉的类别 chips（稳定 / 推荐）——目前只有搜索与置顶徽标。
+- 实例分类下拉启用与持久化（v1 禁用于 `InstanceSummary`）。
 - 任务按钮的「运行中数量」角标。
-- 实例分类（分组）UI。
 - 账号 / 设置 popup 的实际功能。
 - 游戏异常退出的错误报告窗口（远期）。
 - 删除实例等破坏性操作。

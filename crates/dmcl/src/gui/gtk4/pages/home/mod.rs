@@ -4,12 +4,17 @@
 //! 声明，`#[watch]` 负责在状态变化后刷新文案 / 图标 / 小绿点。启动与停止的游戏进程
 //! 也由它持有——启动链交给 [`Shell`] 跑，但它等结果并把 monitor 交给一个 supervisor
 //! 任务异步等退出（**不轮询**）。
+//!
+//! 实例列表会自动跟随 `versions` 目录的变化（轻量目录轮询）：安装 / 删除版本后无需
+//! 手动刷新。
 
 mod instance_card;
 pub(crate) mod message;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, SystemTime};
 
 use relm4::adw;
 use relm4::gtk;
@@ -175,6 +180,11 @@ impl SimpleComponent for HomePage {
         let grid = model.instances.widget();
         let widgets = view_output!();
 
+        // 安装 / 删除版本后自动刷新：主页是常驻页面，不能只靠切标签触发。
+        // 先同步拍一份快照再触发首次 Reload，避免「Reload 读完到监听开始」之间漏掉变化。
+        let versions_dir = model.config.launch.minecraft_root_path.join("versions");
+        let snapshot = versions_snapshot(&versions_dir);
+        relm4::spawn(watch_versions(versions_dir, snapshot, sender.clone()));
         sender.input(HomeMsg::Reload);
         ComponentParts { model, widgets }
     }
@@ -426,4 +436,75 @@ async fn supervise(
         }
     };
     sender.input(HomeMsg::GameExited { name, abnormal });
+}
+
+/// `versions` 目录快照：顶层子目录名 + 目录自身 mtime。
+///
+/// 主页列表就来自这些子目录（见 `installed_versions`）；目录里增删文件会更新目录
+/// mtime，足以发现安装 / 删除。按名字排序，便于直接比较两份快照。
+fn versions_snapshot(dir: &Path) -> Vec<(String, Option<SystemTime>)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        // 目录还不存在（全新 root）视作空快照。
+        return Vec::new();
+    };
+    let mut snapshot: Vec<(String, Option<SystemTime>)> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .map(|entry| {
+            let modified = entry.metadata().ok().and_then(|meta| meta.modified().ok());
+            (entry.file_name().to_string_lossy().into_owned(), modified)
+        })
+        .collect();
+    snapshot.sort();
+    snapshot
+}
+
+/// 轮询 `versions` 目录；有变化就给主页发一次 `Reload`。
+///
+/// `previous` 是调用方在首次 `Reload` **之前**拍下的快照，这样「首次读取」和「监听
+/// 开始」之间不会有空档。
+///
+/// 不用事件监听是刻意的：版本目录很小，1s 一次目录快照的成本可以忽略；这样跨平台，
+/// 也不用处理「目录还不存在 / 被整体替换」等监听器边界，更不用引入新依赖。
+/// 发送失败（页面已关）就退出，避免往已销毁的组件里发消息。
+async fn watch_versions(
+    dir: PathBuf,
+    mut previous: Vec<(String, Option<SystemTime>)>,
+    sender: ComponentSender<HomePage>,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let current = versions_snapshot(&dir);
+        if current != previous {
+            previous = current;
+            if sender.input_sender().send(HomeMsg::Reload).is_err() {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versions_snapshot_lists_only_directories_sorted() {
+        let root = std::env::temp_dir().join(format!("dmcl-home-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("1.21.10")).unwrap();
+        std::fs::create_dir_all(root.join("1.20.1-forge")).unwrap();
+        std::fs::write(root.join("note.txt"), "x").unwrap();
+
+        let names: Vec<String> = versions_snapshot(&root)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(names, vec!["1.20.1-forge", "1.21.10"]);
+
+        // 目录不存在 = 空快照（全新 root 也能起监听）。
+        assert!(versions_snapshot(&root.join("missing")).is_empty());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

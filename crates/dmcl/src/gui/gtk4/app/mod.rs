@@ -20,6 +20,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::config::Config;
+use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{self, HomePage};
 use page_host::PageHost;
@@ -89,8 +90,10 @@ impl SimpleComponent for AppModel {
         // 「添加实例」下拉里的「自定义」→ 开一个「新实例」页。
         {
             let page_host = page_host.clone();
+            let shell = shell.clone();
+            let config = config.clone();
             header.add_custom.connect_clicked(move |_| {
-                page_host.open_page::<CustomPage>(());
+                page_host.open_page::<CustomPage>((shell.clone(), config.clone()));
             });
         }
 
@@ -150,7 +153,13 @@ pub(crate) fn run(config: Config) -> anyhow::Result<()> {
     }
     let app = RelmApp::new("io.github.aout1145.DMCL").with_args(args);
     // 各模块自带自己的全局 CSS，这里统一挂上。
-    for css in [header::CSS, home::CSS, task_popup::CSS, toast::CSS] {
+    for css in [
+        header::CSS,
+        home::CSS,
+        common::CSS,
+        task_popup::CSS,
+        toast::CSS,
+    ] {
         relm4::set_global_css_with_priority(css, relm4::gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
     app.run::<AppModel>(config);
