@@ -82,6 +82,8 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
   - 路径比较注意：`PathBuf` 相等是**按 components** 的；而走 `absolute()` / `Config::load`
     的路径在 Windows 会被补上盘符，所以别拿字面量 `/tmp/...` 去比，用 `std::env::temp_dir()`
     或与 `absolute(...)` 比。
+- **不写显而易见的测试**：不要把步骤名、字段默认值、常量映射这类看一眼实现就能确认的
+  内容原样抄成断言；测试应覆盖行为、边界和容易回归的逻辑。
 
 ## 提交
 
