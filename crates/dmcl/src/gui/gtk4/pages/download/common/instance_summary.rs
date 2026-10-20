@@ -2,10 +2,12 @@
 //!
 //! 名称与图标都有「当前值 + 用户是否改过」两个状态：外部推自动值
 //! （[`SummaryIn::SetAutoName`] / [`SummaryIn::SetAutoIcon`]）只在用户没改过时生效，
-//! 用户一改过就永不覆盖——CLI/GUI 共用的自动命名语义。
+//! 用户一改过就永不覆盖——CLI/GUI 共用的自动命名语义。名称被清空时视为「从未编辑」，
+//! 自动命名可以重新接管。
 //!
 //! 自动命名规则（`dmcl_install::default_version_name`）由页面计算后推送，
-//! 组件自身不知道版本与加载器怎么命名。
+//! 组件自身不知道版本与加载器怎么命名。名称冲突提示由页面检查后通过
+//! [`SummaryIn::SetNameError`] 推进来；有冲突时在安装按钮左侧显示红色提示，输入框不变色。
 
 use std::path::PathBuf;
 
@@ -38,6 +40,8 @@ pub(crate) enum SummaryIn {
     SetAutoIcon(IconSource),
     /// 安装按钮可用性。
     SetInstallEnabled(bool),
+    /// 名称冲突提示（如名称已存在）；`Some` 时在安装按钮左侧显示该文案。
+    SetNameError(Option<String>),
     /// 用户在图标菜单里选了某项。
     PickIcon(IconSource),
     /// 用户在图标菜单里选了「自动」。
@@ -66,8 +70,10 @@ pub(crate) struct InstanceSummary {
     name_row: adw::EntryRow,
     /// 显示中的名称。
     name: String,
-    /// 用户改过名称后，自动命名永不再应用。
+    /// 用户改过名称后，自动命名永不再应用；清空名称会重置为 `false`。
     name_user_modified: bool,
+    /// 名称错误提示（由页面检查）。
+    name_error: Option<String>,
     /// 当前图标 / 自动图标（用户点了「自动」时恢复成它）。
     icon: IconSource,
     /// 用户改过图标后，自动图标永不再应用。
@@ -201,14 +207,28 @@ impl SimpleComponent for InstanceSummary {
                         },
                     },
 
-                    gtk::Button {
-                        set_label: "安装",
-                        add_css_class: "suggested-action",
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_spacing: 8,
                         set_halign: gtk::Align::End,
                         set_margin_top: 4,
-                        #[watch]
-                        set_sensitive: model.install_enabled,
-                        connect_clicked[sender] => move |_| sender.input(SummaryIn::InstallClicked),
+
+                        gtk::Label {
+                            add_css_class: "error",
+                            set_valign: gtk::Align::Center,
+                            #[watch]
+                            set_label: model.name_error.as_deref().unwrap_or_default(),
+                            #[watch]
+                            set_visible: model.name_error.is_some(),
+                        },
+
+                        gtk::Button {
+                            set_label: "安装",
+                            add_css_class: "suggested-action",
+                            #[watch]
+                            set_sensitive: model.install_enabled,
+                            connect_clicked[sender] => move |_| sender.input(SummaryIn::InstallClicked),
+                        },
                     },
                 },
             },
@@ -231,6 +251,7 @@ impl SimpleComponent for InstanceSummary {
             name_row,
             name: String::new(),
             name_user_modified: false,
+            name_error: None,
             icon: IconSource::Initials,
             icon_user_modified: false,
             auto_icon: IconSource::Initials,
@@ -261,6 +282,7 @@ impl SimpleComponent for InstanceSummary {
                 }
             }
             SummaryIn::SetInstallEnabled(enabled) => self.install_enabled = enabled,
+            SummaryIn::SetNameError(error) => self.name_error = error,
             SummaryIn::PickIcon(icon) => {
                 self.icon_user_modified = true;
                 self.apply_icon(icon);
@@ -278,9 +300,14 @@ impl SimpleComponent for InstanceSummary {
                 if text != self.name_row.text() || text == self.name {
                     return;
                 }
-                self.name = text.clone();
-                self.name_user_modified = true;
-                let _ = sender.output(SummaryOut::NameChanged(text));
+                // 清空 = 放弃手动命名，交还给自动命名；页面收到空名后会重新推自动值。
+                self.name_user_modified = !text.trim().is_empty();
+                self.name = if self.name_user_modified {
+                    text
+                } else {
+                    String::new()
+                };
+                let _ = sender.output(SummaryOut::NameChanged(self.name.clone()));
             }
             SummaryIn::InstallClicked => {
                 let _ = sender.output(SummaryOut::Install {
@@ -302,7 +329,10 @@ fn pick_icon_file(sender: ComponentSender<InstanceSummary>) {
         .build();
     dialog.open(Some(&parent), None::<&gio::Cancellable>, move |result| {
         if let Some(path) = result.ok().and_then(|file| file.path()) {
-            sender.input(SummaryIn::PickIcon(IconSource::File(path)));
+            // 文件对话框可能比页面活得久：页面关了就当用户放弃选择。
+            let _ = sender
+                .input_sender()
+                .send(SummaryIn::PickIcon(IconSource::File(path)));
         }
     });
 }

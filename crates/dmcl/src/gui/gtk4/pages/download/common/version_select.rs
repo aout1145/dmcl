@@ -4,8 +4,11 @@
 //! （[`KindChip`]）都由页面在 Init 里给；「最新 / 推荐 / 稳定」这类置顶判定由取数
 //! 适配层做好（条目带 [`Badge`] 就进置顶区），组件只负责展示与过滤。
 //!
-//! 形态：行 = `AdwExpanderRow`，标题 / 副标题显示当前状态，展开区里是搜索、筛选
-//! chips 与版本列表。选中某个版本后**不自动收起**，由用户再点标题栏收起。
+//! 形态：行 = `AdwExpanderRow`，标题 / 副标题显示当前状态，展开区里是可选搜索框、
+//! 可选筛选 chips 与版本列表（加载器可以两者都不显示）。选中某个版本后立即收起；MC 行
+//! 可由页面配置为首次可展开时自动展开。带 [`Badge`] 的条目全部进置顶区（可多条），徽标
+//! 只在置顶行显示；下方完整列表不重复标签。类型列直接复用 chip 文案，没有 chip 就不显示。
+//! 搜索框非空时置顶区整体隐藏，只保留过滤后的完整列表。
 //!
 //! 状态机：
 //!
@@ -14,7 +17,7 @@
 //! * `Ready` —— 正常列表（置顶区 + 过滤后的完整列表）；
 //! * `Empty` —— 取到了但列表为空（Forge 对不少版本没有构建）：行不可展开、副标题
 //!   「无可用版本」；
-//! * `Failed` —— 展开区里显示错误与重试。
+//! * `Failed` —— 行尾显示刷新按钮，展开区只显示左对齐的错误信息。
 //!
 //! 动态取数带**代际计数**：上下文变化（换 MC 版本）时重新发起，过期响应直接丢弃，
 //! 不会被慢响应覆盖。取到新列表后，原来选中的条目若不在其中会自动清掉并发
@@ -34,7 +37,8 @@ use dmcl_task::BoxFuture;
 pub(crate) struct VersionItem {
     /// 传给安装器的版本 id（forge full_name / neoforge version / loader version）。
     pub(crate) id: String,
-    /// 列表里显示的主文案（多数与 id 相同）。
+    /// 列表里显示的主文案，也用于自动命名（多数与 id 相同；Forge 是不带 mcversion 的
+    /// `version` 字段，而 id 仍是安装用的 `full_name`）。
     pub(crate) label: String,
     /// 筛选用的类别（chips 的 kind 值），空串 = 无类别（不吃类别筛选但吃搜索）。
     pub(crate) kind: String,
@@ -50,7 +54,7 @@ pub(crate) struct VersionItem {
 pub(crate) struct Badge {
     /// 样式 / 识别用的小写 key（"latest" / "recommended" / "stable" / 任意新值）。
     pub(crate) key: String,
-    /// 界面文案（「最新」「推荐」「稳定」……）。
+    /// 界面文案（「最新正式版」「推荐版本」……）。
     pub(crate) label: String,
 }
 
@@ -61,13 +65,16 @@ pub(crate) struct KindChip {
     pub(crate) kind: String,
     /// 显示文案。
     pub(crate) label: String,
+    /// 初始是否参与筛选（由页面按版本类型给默认值，不再无脑全选）。
+    pub(crate) default_selected: bool,
 }
 
 impl KindChip {
-    pub(crate) fn new(kind: &str, label: &str) -> Self {
+    pub(crate) fn new(kind: &str, label: &str, default_selected: bool) -> Self {
         Self {
             kind: kind.to_string(),
             label: label.to_string(),
+            default_selected,
         }
     }
 }
@@ -82,10 +89,14 @@ pub(crate) struct VersionSelectInit {
     /// 行标题，如「Forge 版本」。
     pub(crate) title: String,
     pub(crate) fetch: FetchVersions,
-    /// 筛选 chips（空 = 只有搜索，没有类别筛选）。
+    /// 筛选 chips（空 = 没有类别筛选，也不显示版本类型列）；每个 chip 自带默认选中状态。
     pub(crate) chips: Vec<KindChip>,
+    /// 是否显示搜索框（MC = true；加载器 = false）。
+    pub(crate) show_search: bool,
     /// 是否允许未选择（加载器 = true，空选择即「不安装」；MC = false 必选）。
     pub(crate) allow_none: bool,
+    /// 第一次变为可展开时是否自动展开（MC 行 = true；加载器行 = false）。
+    pub(crate) initially_expanded: bool,
 }
 
 /// 组件输入。
@@ -94,10 +105,10 @@ pub(crate) enum SelectIn {
     /// 动态取数的上下文（MC 版本 id）；`None` → 回到 `Idle` 并清空。
     /// 上下文变化会清掉旧选择并发 [`SelectOut::Changed(None)`]（旧选择已失效）。
     SetContext(Option<String>),
-    /// 重新取数（Failed 状态的重试按钮）。
+    /// 同组已有别的加载器被选中：`Some("Forge")` → 副标题显示「与 Forge 冲突」并禁用本行。
+    SetConflict(Option<String>),
+    /// 重新取数（Failed 状态的行尾刷新按钮）。
     Reload,
-    /// 静默清空选择（不发输出）：页面编排「互斥」时用。
-    Clear,
     /// 用户点了行上的 ×，清除选择（发输出）。
     Deselect,
     /// 搜索词变化。
@@ -151,6 +162,10 @@ pub(crate) struct VersionSelect {
     fetch: FetchVersions,
     chips: Vec<KindChip>,
     allow_none: bool,
+    /// 同组已选加载器的名字；`Some` 时本行禁用并显示冲突提示。
+    conflict: Option<String>,
+    /// 首次可展开时自动展开；消费一次后置 false，避免用户手动收起又被状态同步展开。
+    expand_on_first_show: bool,
     /// 当前上下文（== MC 版本 id；对 MC 版本本体的取数器没意义）。
     context: Option<String>,
     state: LoadState,
@@ -159,9 +174,9 @@ pub(crate) struct VersionSelect {
     gen: u64,
     /// 搜索词（小写比较在过滤函数里做）。
     search: String,
-    /// 每个 chip 是否参与过滤（顺序对应 `chips`；初始全部开启 = 不过滤）。
+    /// 每个 chip 是否参与过滤（顺序对应 `chips`；初始值取自 `KindChip::default_selected`）。
     kinds_on: Vec<bool>,
-    /// 置顶区的列表（badge 非空的条目，与完整列表头同为同条去重）。
+    /// 置顶区的列表（所有 badge 非空的条目，可多条）。
     pinned_rows: FactoryVecDeque<VersionRow>,
     /// 完整列表（经搜索 / 类别过滤，保持数据源的新→旧顺序）。
     rows: FactoryVecDeque<VersionRow>,
@@ -176,8 +191,11 @@ pub(crate) struct VersionSelect {
 }
 
 impl VersionSelect {
-    /// 行副标题（当前选择 / 状态文案）。
+    /// 行副标题（冲突提示 / 当前选择 / 状态文案）。
     fn display_text(&self) -> String {
+        if let Some(conflict) = &self.conflict {
+            return format!("与 {conflict} 冲突");
+        }
         match &self.state {
             LoadState::Idle => "（先选择 Minecraft 版本）".to_string(),
             LoadState::Loading => "载入中…".to_string(),
@@ -191,25 +209,28 @@ impl VersionSelect {
         }
     }
 
-    /// 这一行是否允许展开（Idle / Empty 不可；Loading / Failed 允许展开看状态与重试）。
+    /// 这一行是否允许展开（Idle / Empty / 冲突不可；Loading / Failed 允许展开看状态与错误）。
     fn can_expand(&self) -> bool {
-        !matches!(self.state, LoadState::Idle | LoadState::Empty)
+        self.conflict.is_none() && !matches!(self.state, LoadState::Idle | LoadState::Empty)
     }
 
     /// 置顶区是否有内容（决定「全部版本」小节标题是否显示）。
-    ///
-    /// 列表头自己带着「最新」徽标，但它本来就在「全部版本」最上面，不重复置顶。
+    /// 搜索时置顶区隐藏，避免不匹配的置顶版本混在搜索结果里。
     fn pinned_visible(&self) -> bool {
+        if !self.search.is_empty() {
+            return false;
+        }
         match &self.state {
-            LoadState::Ready(items) => items.iter().skip(1).any(|item| !item.badges.is_empty()),
+            LoadState::Ready(items) => items.iter().any(|item| !item.badges.is_empty()),
             _ => false,
         }
     }
 
-    /// 选中某个条目（发输出）。
+    /// 选中某个条目（发输出），并立即收起展开区。
     fn select(&mut self, item: VersionItem, sender: &ComponentSender<VersionSelect>) {
         self.selected = Some(item);
         self.refresh_selection_flags();
+        self.expander.set_expanded(false);
         let _ = sender.output(SelectOut::Changed(self.selected.clone()));
     }
 
@@ -241,23 +262,48 @@ impl VersionSelect {
             _ => Vec::new(),
         };
 
-        let head_id = items.first().map(|item| item.id.clone());
+        // 类型列直接复用筛选 chip 的文案：页面给 `kind` + 文案，组件不硬编码版本类型。
+        let kind_label = |item: &VersionItem| {
+            self.chips
+                .iter()
+                .find(|chip| chip.kind == item.kind)
+                .map(|chip| chip.label.clone())
+        };
+        let pinned_items: Vec<VersionRowInit> = if self.search.is_empty() {
+            items
+                .iter()
+                .filter(|item| !item.badges.is_empty())
+                .map(|item| VersionRowInit {
+                    item: item.clone(),
+                    show_badges: true,
+                    kind_label: kind_label(item),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let row_items: Vec<VersionRowInit> =
+            filter_items(&items, &self.search, &self.kinds_on, &self.chips)
+                .into_iter()
+                .map(|item| VersionRowInit {
+                    item: item.clone(),
+                    show_badges: false,
+                    kind_label: kind_label(item),
+                })
+                .collect();
+
         {
             let mut pinned = self.pinned_rows.guard();
             pinned.clear();
-            for item in &items {
-                // 列表头本来就显示在「全部版本」最上面，不重复置顶。
-                if item.badges.is_empty() || head_id.as_deref() == Some(&item.id) {
-                    continue;
-                }
-                pinned.push_back(item.clone());
+            for init in pinned_items {
+                pinned.push_back(init);
             }
         }
         {
             let mut rows = self.rows.guard();
             rows.clear();
-            for item in filter_items(&items, &self.search, &self.kinds_on, &self.chips) {
-                rows.push_back(item.clone());
+            for init in row_items {
+                rows.push_back(init);
             }
         }
         self.refresh_selection_flags();
@@ -270,6 +316,7 @@ impl VersionSelect {
     fn sync_view(&mut self) {
         self.stack.set_visible_child_name(self.state.stack_page());
         let pinned = self.pinned_visible();
+        self.pinned_rows.widget().set_visible(pinned);
         self.all_label.set_visible(pinned);
         if let LoadState::Failed(err) = &self.state {
             self.failed_label
@@ -282,8 +329,10 @@ impl VersionSelect {
             self.expander.set_enable_expansion(can_expand);
             if can_expand {
                 // libadwaita 在 enable-expansion 从 false 变 true 时会顺手展开；
-                // 从 Idle / Empty 变为可展开时保持收起，等用户自己点标题栏。
-                self.expander.set_expanded(false);
+                // 除了配置了首次自动展开的行（MC），其余保持收起，等用户点标题栏。
+                // 自动展开只消费一次，之后用户手动收起不会被后续状态同步重新展开。
+                self.expander.set_expanded(self.expand_on_first_show);
+                self.expand_on_first_show = false;
             }
         }
         if !can_expand {
@@ -307,7 +356,9 @@ impl VersionSelect {
         let sender = sender.clone();
         relm4::spawn(async move {
             let result = fetch(&context).await.map_err(|err| format!("{err:#}"));
-            sender.input(SelectIn::Loaded { gen, result });
+            // 页面可能已经关掉（例如点安装后立即关页）：组件通道关了只说明没人要结果，
+            // 用 `input_sender().send` 静默丢弃，别让后台取数把进程 panic 掉。
+            let _ = sender.input_sender().send(SelectIn::Loaded { gen, result });
         });
     }
 }
@@ -344,12 +395,25 @@ fn filter_items<'a>(
         .collect()
 }
 
+/// 一行版本的工厂初始化参数。
+struct VersionRowInit {
+    item: VersionItem,
+    /// 是否在文案后显示「最新 / 推荐」等徽标；只有置顶区为 true。
+    show_badges: bool,
+    /// 右侧的类型列（如「正式版」）；由 `VersionItem::kind` 对应的 chip 文案得出。
+    kind_label: Option<String>,
+}
+
 /// 一行版本（工厂组件）：主文案 + 徽标文字 + 次要信息；点击上报给 [`VersionSelect`]。
 #[derive(Debug)]
 struct VersionRow {
     item: VersionItem,
     /// 选中标记（由 [`VersionSelect::refresh_selection_flags`] 维护）。
     selected: bool,
+    /// 是否显示徽标文字；下方完整列表不显示，避免重复标签。
+    show_badges: bool,
+    /// 右侧的类型列（如「正式版」）；无对应 chip 时为 `None`。
+    kind_label: Option<String>,
 }
 
 impl VersionRow {
@@ -361,9 +425,9 @@ impl VersionRow {
         classes
     }
 
-    /// 主文案：badge 非空时附在后面（`1.21.10（最新）`）。
+    /// 主文案：只有置顶区才把 badge 附在后面（`1.21.10（最新）`）；下方列表不显示标签。
     fn main_text(&self) -> String {
-        if self.item.badges.is_empty() {
+        if !self.show_badges || self.item.badges.is_empty() {
             self.item.label.clone()
         } else {
             let badges: Vec<&str> = self
@@ -384,7 +448,7 @@ enum RowOut {
 
 #[relm4::factory(pub(crate))]
 impl FactoryComponent for VersionRow {
-    type Init = VersionItem;
+    type Init = VersionRowInit;
     type Input = ();
     type Output = RowOut;
     type CommandOutput = ();
@@ -411,6 +475,12 @@ impl FactoryComponent for VersionRow {
                 },
 
                 gtk::Label {
+                    set_visible: self.kind_label.is_some(),
+                    set_label: self.kind_label.as_deref().unwrap_or(""),
+                    add_css_class: "caption",
+                },
+
+                gtk::Label {
                     #[watch]
                     set_visible: self.item.detail.is_some(),
                     set_label: self.item.detail.as_deref().unwrap_or(""),
@@ -421,10 +491,17 @@ impl FactoryComponent for VersionRow {
         }
     }
 
-    fn init_model(item: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+    fn init_model(init: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        let VersionRowInit {
+            item,
+            show_badges,
+            kind_label,
+        } = init;
         Self {
             item,
             selected: false,
+            show_badges,
+            kind_label,
         }
     }
 }
@@ -440,17 +517,33 @@ impl SimpleComponent for VersionSelect {
             add_css_class: "dmcl-version-select",
             set_title: &model.title,
             #[watch]
+            set_sensitive: model.conflict.is_none(),
+            #[watch]
             set_subtitle: &model.display_text(),
 
             // 已选时出现在展开箭头左侧的 ×（只有可"不安装"的加载器行才有）。
+            // Failed 时让位给刷新按钮，同一位置只显示一个。
             add_suffix = &gtk::Button {
                 set_icon_name: "window-close-symbolic",
                 add_css_class: "flat",
                 set_valign: gtk::Align::Center,
                 set_tooltip_text: Some("取消选择（不安装）"),
                 #[watch]
-                set_visible: model.allow_none && model.selected.is_some(),
+                set_visible: model.allow_none
+                    && model.selected.is_some()
+                    && !matches!(model.state, LoadState::Failed(_)),
                 connect_clicked[sender] => move |_| sender.input(SelectIn::Deselect),
+            },
+
+            // Failed 时在 × 的位置显示刷新；展开区只保留错误信息。
+            add_suffix = &gtk::Button {
+                set_icon_name: "view-refresh-symbolic",
+                add_css_class: "flat",
+                set_valign: gtk::Align::Center,
+                set_tooltip_text: Some("刷新版本列表"),
+                #[watch]
+                set_visible: matches!(model.state, LoadState::Failed(_)),
+                connect_clicked[sender] => move |_| sender.input(SelectIn::Reload),
             },
         }
     }
@@ -466,7 +559,9 @@ impl SimpleComponent for VersionSelect {
             title,
             fetch,
             chips,
+            show_search,
             allow_none,
+            initially_expanded,
         } = init;
 
         let pinned_rows = FactoryVecDeque::builder()
@@ -496,21 +591,24 @@ impl SimpleComponent for VersionSelect {
 
         // ---------- 展开区内容（静态组装；状态相关的可见性由 `sync_view` 跟进） ----------
         let stack = gtk::Stack::new();
+        // 高度跟随当前页：Failed 只占错误文案的高度，不被列表页的 220 最小高度撑开。
+        stack.set_vhomogeneous(false);
         let all_label = gtk::Label::new(Some("全部版本"));
         let failed_label = gtk::Label::new(None);
         failed_label.set_wrap(true);
 
-        // 搜索框。
-        let search = gtk::SearchEntry::new();
-        search.set_placeholder_text(Some("搜索版本…"));
-        {
+        // 搜索框（加载器不显示）。
+        let search = show_search.then(|| {
+            let search = gtk::SearchEntry::new();
+            search.set_placeholder_text(Some("搜索版本…"));
             let sender = sender.clone();
             search.connect_search_changed(move |entry| {
                 sender.input(SelectIn::SearchChanged(entry.text().into()));
             });
-        }
+            search
+        });
 
-        // 筛选 chips（Init 静态内容）：先 `set_active` 再连信号，
+        // 筛选 chips（Init 静态内容）：先按页面给的默认值 `set_active` 再连信号，
         // 免得初始化本身就发一次 ToggleChip。
         let chips_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         for (index, chip) in chips.iter().enumerate() {
@@ -518,7 +616,7 @@ impl SimpleComponent for VersionSelect {
             button.add_css_class("pill");
             button.add_css_class("caption");
             button.add_css_class("dmcl-version-chip");
-            button.set_active(true);
+            button.set_active(chip.default_selected);
             {
                 let sender = sender.clone();
                 button.connect_toggled(move |_| sender.input(SelectIn::ToggleChip(index)));
@@ -559,26 +657,21 @@ impl SimpleComponent for VersionSelect {
             stack.add_named(&loading, Some("loading"));
         }
 
-        // failed 页：错误 + 重试。
+        // failed 页：只显示错误信息，靠左上，不居中；刷新按钮在行尾。
         {
-            let failed = gtk::Box::new(gtk::Orientation::Vertical, 8);
-            failed.set_valign(gtk::Align::Center);
-            failed.set_halign(gtk::Align::Center);
             failed_label.add_css_class("error");
-            let retry = gtk::Button::with_label("重试");
-            {
-                let sender = sender.clone();
-                retry.connect_clicked(move |_| sender.input(SelectIn::Reload));
-            }
-            failed.append(&failed_label);
-            failed.append(&retry);
-            stack.add_named(&failed, Some("failed"));
+            failed_label.set_xalign(0.0);
+            failed_label.set_halign(gtk::Align::Fill);
+            failed_label.set_valign(gtk::Align::Start);
+            stack.add_named(&failed_label, Some("failed"));
         }
 
         {
             let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
             content.set_margin_all(12);
-            content.append(&search);
+            if let Some(search) = &search {
+                content.append(search);
+            }
             content.append(&chips_box);
             content.append(&stack);
             stack.set_visible_child_name("content");
@@ -597,12 +690,14 @@ impl SimpleComponent for VersionSelect {
             }
         }
 
-        let kinds_on = vec![true; chips.len()];
+        let kinds_on = chips.iter().map(|chip| chip.default_selected).collect();
         let mut model = VersionSelect {
             title,
             fetch,
             chips,
             allow_none,
+            conflict: None,
+            expand_on_first_show: initially_expanded,
             context: None,
             state: LoadState::Idle,
             selected: None,
@@ -648,12 +743,11 @@ impl SimpleComponent for VersionSelect {
                     }
                 }
             }
-            SelectIn::Reload => self.start_fetch(sender.clone()),
-            SelectIn::Clear => {
-                // 静默：页面编排互斥时用，不发输出。
-                self.selected = None;
-                self.refresh_selection_flags();
+            SelectIn::SetConflict(conflict) => {
+                self.conflict = conflict;
+                self.sync_view();
             }
+            SelectIn::Reload => self.start_fetch(sender.clone()),
             SelectIn::Deselect => {
                 if self.selected.is_some() {
                     self.selected = None;
@@ -664,6 +758,7 @@ impl SimpleComponent for VersionSelect {
             SelectIn::SearchChanged(text) => {
                 self.search = text;
                 self.refresh_rows();
+                self.sync_view();
             }
             SelectIn::ToggleChip(index) => {
                 if let Some(state) = self.kinds_on.get_mut(index) {
@@ -738,8 +833,8 @@ mod tests {
 
     fn chips() -> Vec<KindChip> {
         vec![
-            KindChip::new("release", "正式版"),
-            KindChip::new("snapshot", "快照"),
+            KindChip::new("release", "正式版", true),
+            KindChip::new("snapshot", "快照版", false),
         ]
     }
 

@@ -4,6 +4,7 @@
 //!
 //! * [`Shell::run`] 把一条任务链跑起来，把进度事件转发给任务 popup，并返回一个
 //!   **可 `await` 的结果句柄**（不是回调）；
+//! * [`Shell::open_tasks`] 主动打开任务列表窗口；
 //! * [`Shell::toast`] 在主界面弹一行提示。
 
 use std::cell::Cell;
@@ -75,6 +76,11 @@ impl Shell {
         });
 
         TaskHandle { rx }
+    }
+
+    /// 主动打开任务列表窗口（任务按钮走的是同一条 `TaskMsg::Open`）。
+    pub fn open_tasks(&self) {
+        let _ = self.tasks.send(TaskMsg::Open);
     }
 
     /// 在主界面弹一行提示。
