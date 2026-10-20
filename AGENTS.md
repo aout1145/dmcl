@@ -100,10 +100,11 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 ## 文档分工
 
 - [README.md](README.md)：面向使用者 —— 功能、构建、快速开始、命令、配置文件。
-- [ARCHITECTURE.md](ARCHITECTURE.md)：面向开发者 —— 目录结构、依赖关系、各 crate 职责、
-  设计要点（URL 模板、任务 / 下载 / 安装规划 / 启动解耦）、GUI 扩展点、测试策略。
-- 架构相关的新设计写进 ARCHITECTURE.md，别堆进 README。代码注释解释「为什么」，
-  不要复述显而易见的「是什么」。
+- [ARCHITECTURE.md](ARCHITECTURE.md)：面向开发者 —— workspace 的目录结构、依赖关系、
+  各 crate 职责、设计要点（URL 模板、任务 / 下载 / 安装规划 / 启动解耦）、GUI 扩展点、
+  GTK4 前端文档入口、总体测试策略。
+- 架构相关的新设计按 `ARCHITECTURE.md` 的文档分工落位，别堆进 README。代码注释解释
+  「为什么」，不要复述显而易见的「是什么」。
 
 ## 许可
 

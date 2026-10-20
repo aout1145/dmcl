@@ -1,6 +1,6 @@
 //! download 页面的公共组件。
 //!
-//! 设计草案：`custom/DESIGN.md`（不入库；定稿以后架构写进 `gui/gtk4/ARCHITECTURE.md`）。
+//! 组件与交互细节见下载域的 `../README.md`。
 
 pub(crate) mod instance_summary;
 pub(crate) mod version_select;

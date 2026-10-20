@@ -199,9 +199,8 @@ CI 分两个 workflow：`build.yaml` 跑 Linux / Windows / macOS 的默认构建
 ## 架构
 
 本项目是一个 cargo workspace，由六个 crate 组成（配置读取、业务逻辑、任务链、下载、
-元数据等各司其职）。目录结构、依赖关系与设计说明见 [ARCHITECTURE.md](ARCHITECTURE.md)；
-GTK4 前端的组件划分见
-[crates/dmcl/src/gui/gtk4/ARCHITECTURE.md](crates/dmcl/src/gui/gtk4/ARCHITECTURE.md)。
+元数据等各司其职）。目录结构、依赖关系、GTK4 前端文档与设计说明见
+[ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 许可
 

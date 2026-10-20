@@ -384,7 +384,7 @@ fn take_selection(out: SelectOut) -> Option<VersionItem> {
 fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSelectInit {
     match kind {
         // Forge：列表新→旧；推荐版本来自 `branch == "recommended"`。
-        // 加载器不显示搜索栏；类别 chips 留给后续（TODO）。
+        // 类别 chips 留给后续（TODO）。
         LoaderKind::Forge => VersionSelectInit {
             title: format!("{} 版本", kind.display_name()),
             fetch: Arc::new(move |context: &str| {

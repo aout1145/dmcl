@@ -1,4 +1,4 @@
-#![doc = include_str!("ARCHITECTURE.md")]
+#![doc = include_str!("README.md")]
 
 pub(crate) mod app;
 pub(crate) mod pages;

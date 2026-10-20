@@ -303,20 +303,37 @@ CLI 用 `clap` derive 定义命令，交互式菜单用 `dialoguer`。命令定�
 `命令：`）与常见报错（`错误：缺少必填参数：…`）。命令名、参数名、配置键名保持英文
 （它们是标识符，不是文案）。
 
-## 为 GUI 预留的扩展点
+## GTK4 前端
 
-- 业务逻辑全在 `dmcl-*` 库里，`main.rs` 只做「读配置 → 解析参数 → 分发」；
-- 每个操作都是 `TaskChain`，GUI 可以 `subscribe()` 事件流自己渲染进度，
-  也可以用 `CancelHandle` 取消；
-- `dmcl-mcmeta` / `dmcl-download` / `dmcl-install` / `dmcl-launch` 都不读配置，
-  可以直接用自定义的选项结构调用；
-- `GameMonitor` 支持 `kill()` / `try_status()`，可实现「停止游戏」。
+GTK4 + libadwaita 前端在 `crates/dmcl/src/gui/gtk4`，用 relm4，由 cargo feature `gtk4`
+门控（默认关）。与 CLI 共用业务 crate：把 `Config` 翻译成 `*Options`、用 `Shell` 跑
+`TaskChain`、把 `TaskEvent` 渲染成页面与任务窗口；业务 crate 不读配置。
+
+文档按目录拆分，入口是
+[crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)
+（整体架构、编译运行、GNOME HIG 约定与 GTK 测试方法）：
+
+- [app/README.md](crates/dmcl/src/gui/gtk4/app/README.md)：根组件、`Shell`、`PageHost`、
+  标题栏、toast；
+- [app/task_popup/README.md](crates/dmcl/src/gui/gtk4/app/task_popup/README.md)：任务窗口、
+  任务卡片、警告确认；
+- [pages/home/README.md](crates/dmcl/src/gui/gtk4/pages/home/README.md)：主页、实例磁贴、
+  启动 / 停止；
+- [pages/download/README.md](crates/dmcl/src/gui/gtk4/pages/download/README.md)：下载域数据流、
+  `InstanceSummary`、`VersionSelect`；
+- [pages/download/custom/README.md](crates/dmcl/src/gui/gtk4/pages/download/custom/README.md)：
+  「自定义」新建实例页的装配、联动与安装。
+
+新增页面或组件时，细节写进对应目录的 `README.md`；本文件只保留整个前端的分层与入口。
 
 ## 测试策略
 
 - **离线单测**（`cargo test --workspace`）：规划纯函数、URL 模板化 / 解析、规则判定、
   哈希与校验、任务链 / 事件转发、CLI 参数与交互流程（把「跟终端打交道」抽成接口后用
   脚本化回答测试）；
+- **GTK4 前端**（`cargo test -p dmcl --features gtk4 --lib`）：不创建控件的纯逻辑单测
+  （任务进度、版本过滤 / 适配等），不需要显示；界面验证用 Broadway + Chromium CDP，
+  具体见 GTK4 前端入口文档。CI 在 Linux / Windows / macOS 跑 clippy / test / build；
 - **联网冒烟测试**（`cargo test --workspace -- --ignored`）：真实版本清单 / 版本 JSON /
   资源索引 / 加载器列表的取数与模板化、真下载几个文件并验证「第二次全跳过」、
   完整性检查与命令行生成（断言不含未替换的模板）。需要能访问 Mojang / bmclapi。
