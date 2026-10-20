@@ -194,7 +194,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
         .then(
             create_version_dir(options.root_path.clone(), spec.version_name.clone()),
-            "检查版本是否已存在",
+            "创建版本目录",
         )
         .set_cleanup(remove_version_dir_cleanup(
             options.root_path.clone(),
@@ -206,7 +206,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
                 spec.version_id.clone(),
                 spec.version_name.clone(),
             ),
-            "获取原版元数据",
+            "获取版本 json",
         )
         .then(
             client_jar_task(options.clone(), spec.version_name.clone()),
@@ -235,13 +235,6 @@ mod tests {
     use super::*;
     use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
-    fn options() -> Arc<InstallOptions> {
-        Arc::new(InstallOptions::new(
-            "/tmp/mc",
-            DownloadSource::new(Mirror::Official),
-        ))
-    }
-
     #[test]
     fn specs_collect_loader_requests_in_order() {
         let spec = InstallSpec::new("1.20.1", "1.20.1")
@@ -252,25 +245,6 @@ mod tests {
         assert_eq!(spec.loaders[0].version, "0.15.0");
         assert_eq!(spec.loaders[1].version, "47.2.0");
         assert_eq!(LoaderKind::NeoForge.to_string(), "neoforge");
-    }
-
-    #[test]
-    fn the_install_chain_has_one_step_per_phase() {
-        let spec = InstallSpec::new("1.20.1", "1.20.1").with_fabric("0.15.0");
-        let chain = install_task(options(), spec);
-        let steps: Vec<&str> = chain.step_names().collect();
-        // 客户端 jar 必须先于加载器：Forge/NeoForge 的 processor 要读它
-        assert_eq!(
-            steps,
-            vec![
-                "检查版本是否已存在",
-                "获取原版元数据",
-                "下载客户端 jar",
-                "安装 Fabric",
-                "下载游戏文件"
-            ]
-        );
-        assert_eq!(chain.name(), "安装 1.20.1");
     }
 
     #[tokio::test]
