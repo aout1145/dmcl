@@ -356,6 +356,8 @@ impl SimpleComponent for Header {
         // 单个标签时也一直显示标签栏：否则从 2 个标签关到 1 个时，整条标签栏会跟着
         // `GtkRevealer`（slide-down，200ms）滑走，和标签自身的收缩动画叠在一起，看着不顺。
         tab_bar.set_autohide(false);
+        // 标签按内容取最小宽度、从左边依次排开（类似 Chrome），而不是平分标签栏的整条宽度。
+        tab_bar.set_expand_tabs(false);
 
         let theme = ThemeChoice::from_color_scheme(adw::StyleManager::default().color_scheme());
 
