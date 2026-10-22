@@ -4,6 +4,7 @@
 //! 独立组件、各带自己的消息；页面的打开/关闭/保活交给 [`PageHost`](page_host::PageHost)，
 //! 共享能力（跑任务、弹提示、打开任务对话框）在 [`Shell`] 里。这里没有业务逻辑。
 
+mod config_warning;
 mod header;
 pub(crate) mod page_host;
 pub(crate) mod shell;
@@ -20,7 +21,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 use relm4::Sender;
 
-use crate::config::Config;
+use crate::config::{Config, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{self, HomePage};
@@ -55,7 +56,7 @@ struct AppModel {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for AppModel {
-    type Init = Config;
+    type Init = LoadedConfig;
     type Input = AppMsg;
     type Output = ();
 
@@ -98,10 +99,11 @@ impl SimpleComponent for AppModel {
     }
 
     fn init(
-        config: Self::Init,
+        loaded: Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let LoadedConfig { config, error } = loaded;
         let tab_view = adw::TabView::new();
 
         // 页面宿主：把实现了 Page 的组件挂成标签页，并管它们的生命周期。
@@ -116,6 +118,13 @@ impl SimpleComponent for AppModel {
         let tab_view_widget = &tab_view;
         let widgets = view_output!();
         let toast_layer = widgets.toast_layer.clone();
+
+        // 配置加载有问题时，等主窗口显示后再弹汇总警告；关掉后按默认值继续。
+        if let Some(error) = error {
+            let window = root.clone();
+            let config = config.clone();
+            gtk::glib::idle_add_local_once(move || config_warning::show(&window, &config, &error));
+        }
 
         // 任务对话框：组件本身就是那个模态窗口，自己管卡片/确认/提示/关闭清理。
         let tasks = TaskCenter::builder()
@@ -194,7 +203,7 @@ impl SimpleComponent for AppModel {
 }
 
 /// 启动 GTK4 界面；窗口关闭前一直阻塞在主线程。
-pub(crate) fn run(config: Config) -> anyhow::Result<()> {
+pub(crate) fn run(loaded: LoadedConfig) -> anyhow::Result<()> {
     // 只把程序名传给 GApplication：`dmcl gui` 里的 `gui` 是给我们自己解析的，
     // 别让它被当成要打开的文件（否则 GLib 会警告 "can not open files"）。
     let mut args: Vec<String> = std::env::args().take(1).collect();
@@ -209,9 +218,10 @@ pub(crate) fn run(config: Config) -> anyhow::Result<()> {
         common::CSS,
         task_popup::CSS,
         toast::CSS,
+        config_warning::CSS,
     ] {
         relm4::set_global_css_with_priority(css, relm4::gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    app.run::<AppModel>(config);
+    app.run::<AppModel>(loaded);
     Ok(())
 }

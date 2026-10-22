@@ -1,7 +1,8 @@
 //! 配置。
 //!
 //! 解析与合并全交给 `serde`：嵌套结构体直接对应嵌套 JSON，`#[serde(default)]`
-//! 表示"缺键保留默认值"。
+//! 表示"缺键保留默认值"。加载时逐项容错：不合法的配置项回退成默认值并汇总成
+//! [`ConfigError`]，缺键仍然静默用默认值。
 //!
 //! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由前端（CLI / GUI）持有并传下去；
 //! 各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
@@ -53,6 +54,60 @@ pub struct Config {
     pub download: DownloadConfig,
 }
 
+/// 一次配置加载的结果。
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+    /// 已经逐项回退成默认值的配置。
+    pub config: Config,
+    /// 加载中发现的问题；`None` 表示配置完全正常。
+    pub error: Option<ConfigError>,
+}
+
+/// 配置加载中发现的问题汇总（可能有多条）。
+#[derive(Debug, Clone)]
+pub struct ConfigError {
+    /// 出问题的配置文件。
+    pub path: PathBuf,
+    /// 逐条给用户看的警告。
+    pub warnings: Vec<ConfigWarning>,
+}
+
+/// 一条配置警告：主文字说处理结果，`detail` 小字说错误类型 / 细节。
+#[derive(Debug, Clone)]
+pub struct ConfigWarning {
+    /// 主文字，例如「配置项「launch.window_width」使用默认值 854」。
+    pub message: String,
+    /// 小字，例如「值不合法：invalid value: integer `-1`, expected u32」。
+    pub detail: String,
+}
+
+impl std::fmt::Display for ConfigWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}（{}）", self.message, self.detail)
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "配置文件 {} 有 {} 处问题，请修正后重试",
+            self.path.display(),
+            self.warnings.len()
+        )
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+/// 「整份配置回退默认值」类的警告（读文件 / JSON 语法 / 顶层结构 / 整体校验）。
+fn whole_default_warning(detail: String) -> ConfigWarning {
+    ConfigWarning {
+        message: "整份配置使用默认值".to_string(),
+        detail,
+    }
+}
+
 impl Config {
     /// 配置文件路径：`<平台配置目录>/dmcl.json`。
     ///
@@ -70,39 +125,133 @@ impl Config {
     }
 
     /// 读配置（文件不存在就用默认值），并把 `.minecraft` 路径补成绝对路径。
-    pub async fn load(path: Option<&Path>) -> Result<Self> {
+    ///
+    /// 配置项本身的问题不会让加载失败：逐项回退默认值，汇总到
+    /// [`LoadedConfig::error`] 里交给前端处理。
+    pub async fn load(path: Option<&Path>) -> LoadedConfig {
         let path = path.map(Path::to_path_buf).unwrap_or_else(Self::path);
-        let mut config = match tokio::fs::read_to_string(&path).await {
-            Ok(text) => Self::parse(&path, &text)?,
-            // 文件不存在就用默认值；其它读错误（权限等）要报出来
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Config::default(),
-            Err(err) => {
-                return Err(err).with_context(|| format!("无法读取配置文件 {}", path.display()))
+        let (config, warnings) = match tokio::fs::read_to_string(&path).await {
+            Ok(text) => Self::parse(&text),
+            // 文件不存在就用默认值；其它读错误（权限等）也回退默认值并报警告
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                (Config::default(), Vec::new())
             }
+            Err(err) => (
+                Config::default(),
+                vec![whole_default_warning(format!("无法读取配置文件：{err}"))],
+            ),
         };
-        config.absolutize_root();
-        Ok(config)
+        Self::into_loaded(config, path, warnings)
     }
 
     /// [`Config::load`] 的同步版本，只在**启动时**读一次配置。
     ///
     /// GUI 必须在 GLib 主循环启动前拿到配置，CLI 也走同一份；其余地方都用 [`Config::load`]。
-    pub fn load_sync(path: Option<&Path>) -> Result<Self> {
+    pub fn load_sync(path: Option<&Path>) -> LoadedConfig {
         let path = path.map(Path::to_path_buf).unwrap_or_else(Self::path);
-        let mut config = match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&path, &text)?,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Config::default(),
-            Err(err) => {
-                return Err(err).with_context(|| format!("无法读取配置文件 {}", path.display()))
+        let (config, warnings) = match std::fs::read_to_string(&path) {
+            Ok(text) => Self::parse(&text),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                (Config::default(), Vec::new())
             }
+            Err(err) => (
+                Config::default(),
+                vec![whole_default_warning(format!("无法读取配置文件：{err}"))],
+            ),
         };
+        Self::into_loaded(config, path, warnings)
+    }
+
+    /// 补绝对路径并把警告包成 [`LoadedConfig`]（`load` / `load_sync` 共用）。
+    fn into_loaded(mut config: Self, path: PathBuf, warnings: Vec<ConfigWarning>) -> LoadedConfig {
         config.absolutize_root();
-        Ok(config)
+        let error = (!warnings.is_empty()).then_some(ConfigError { path, warnings });
+        LoadedConfig { config, error }
     }
 
     /// 解析配置文本（`load` / `load_sync` 共用）。
-    fn parse(path: &Path, text: &str) -> Result<Self> {
-        serde_json::from_str(text).with_context(|| format!("无法解析配置文件 {}", path.display()))
+    ///
+    /// 逐项容错：坏掉的字段 / 段 / 整份文档都回退默认值，并把原因写进返回的警告列表；
+    /// 只有缺键才静默用默认值。
+    fn parse(text: &str) -> (Self, Vec<ConfigWarning>) {
+        let mut warnings = Vec::new();
+        let value: serde_json::Value = match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(err) => {
+                warnings.push(whole_default_warning(format!("无法解析 JSON：{err}")));
+                return (Self::default(), warnings);
+            }
+        };
+        let default = Self::default();
+        let mut root = match serde_json::to_value(&default) {
+            Ok(serde_json::Value::Object(root)) => root,
+            // 默认值总能序列化成对象；真出意外就整体退回默认
+            _ => {
+                warnings.push(ConfigWarning {
+                    message: "整份配置使用内置默认值".to_string(),
+                    detail: "无法展开默认配置".to_string(),
+                });
+                return (default, warnings);
+            }
+        };
+        let serde_json::Value::Object(sections) = value else {
+            warnings.push(whole_default_warning(
+                "配置文件的顶层不是 JSON 对象".to_string(),
+            ));
+            return (Self::default(), warnings);
+        };
+
+        for (section, body) in sections {
+            if !root.get(&section).is_some_and(serde_json::Value::is_object) {
+                warnings.push(ConfigWarning {
+                    message: format!("配置段「{section}」已忽略"),
+                    detail: "未知配置段".to_string(),
+                });
+                continue;
+            }
+            let serde_json::Value::Object(entries) = body else {
+                warnings.push(ConfigWarning {
+                    message: format!("配置段「{section}」使用默认值"),
+                    detail: "该段不是 JSON 对象".to_string(),
+                });
+                continue;
+            };
+            let known: Vec<String> = root[section.as_str()]
+                .as_object()
+                .map(|object| object.keys().cloned().collect())
+                .unwrap_or_default();
+
+            for (field, raw) in entries {
+                if !known.contains(&field) {
+                    warnings.push(ConfigWarning {
+                        message: format!("配置项「{section}.{field}」已忽略"),
+                        detail: "未知配置项".to_string(),
+                    });
+                    continue;
+                }
+                // 用「默认配置 + 这一项原值」试反序列化；失败就保留默认值
+                let mut candidate = root.clone();
+                candidate[section.as_str()][field.as_str()] = raw.clone();
+                match serde_json::from_value::<Self>(serde_json::Value::Object(candidate)) {
+                    Ok(_) => root[section.as_str()][field.as_str()] = raw,
+                    Err(err) => {
+                        let fallback = &root[section.as_str()][field.as_str()];
+                        warnings.push(ConfigWarning {
+                            message: format!("配置项「{section}.{field}」使用默认值 {fallback}"),
+                            detail: format!("值不合法：{err}"),
+                        });
+                    }
+                }
+            }
+        }
+
+        match serde_json::from_value::<Self>(serde_json::Value::Object(root)) {
+            Ok(config) => (config, warnings),
+            Err(err) => {
+                warnings.push(whole_default_warning(format!("配置整体校验失败：{err}")));
+                (Self::default(), warnings)
+            }
+        }
     }
 
     /// 把 `.minecraft` 路径补成绝对路径（`load` / `load_sync` 共用）。
@@ -121,6 +270,19 @@ impl Config {
         }
         tokio::fs::write(&path, text)
             .await
+            .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
+        Ok(())
+    }
+
+    /// [`Config::save`] 的同步版本，给 GTK 回调这类不能等待 future 的地方用。
+    pub fn save_sync(&self) -> Result<()> {
+        let path = Self::path();
+        let text = serde_json::to_string_pretty(self)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
+        }
+        std::fs::write(&path, text)
             .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
         Ok(())
     }
@@ -252,10 +414,89 @@ mod tests {
     }
 
     #[test]
-    fn negative_sizes_are_rejected_instead_of_wrapping() {
+    fn invalid_values_fall_back_to_defaults_with_warnings() {
         // D 的 `int` 会接受这些值并一路传给 JVM
-        assert!(serde_json::from_str::<Config>(r#"{"launch":{"window_width":-1}}"#).is_err());
-        assert!(serde_json::from_str::<Config>(r#"{"launch":{"max_memory":-2048}}"#).is_err());
+        let (config, warnings) = Config::parse(
+            r#"{
+                "launch": { "window_width": -1, "window_height": 720, "max_memory": -2048 },
+                "download": { "max_tasks": 8 }
+            }"#,
+        );
+        assert_eq!(config.launch.window_width, 854);
+        assert_eq!(config.launch.max_memory, 2048);
+        // 合法的项照常生效
+        assert_eq!(config.launch.window_height, 720);
+        assert_eq!(config.download.max_tasks, 8);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.window_width")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.max_memory")));
+        assert!(warnings
+            .iter()
+            .all(|warning| warning.detail.contains("值不合法")));
+    }
+
+    #[test]
+    fn unknown_keys_and_sections_are_ignored_with_warnings() {
+        let (config, warnings) = Config::parse(
+            r#"{
+                "cli": { "anything": true },
+                "launch": { "nope": 1, "window_width": 1024 },
+                "account": { "username": "steve" }
+            }"#,
+        );
+        assert_eq!(config.launch.window_width, 1024);
+        assert_eq!(config.account.username, "steve");
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.iter().any(
+            |warning| warning.message.contains("cli") && warning.detail.contains("未知配置段")
+        ));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.nope")
+                && warning.detail.contains("未知配置项")));
+    }
+
+    #[test]
+    fn a_broken_section_falls_back_as_a_whole() {
+        let (config, warnings) =
+            Config::parse(r#"{"launch": 1, "account": {"username": "steve"}}"#);
+        assert_eq!(config.launch.window_width, 854);
+        assert_eq!(config.account.username, "steve");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("launch"));
+        assert!(warnings[0].detail.contains("不是 JSON 对象"));
+    }
+
+    #[test]
+    fn a_broken_nested_field_falls_back_as_a_whole() {
+        let (config, warnings) = Config::parse(
+            r#"{
+                "launch": {
+                    "java": "jdk",
+                    "java_configs": { "jdk": 1, "jre": "/usr/bin/java" }
+                }
+            }"#,
+        );
+        // 对象里有一个坏条目，整个字段回退默认（空表），其它字段保留
+        assert!(config.launch.java_configs.is_empty());
+        assert_eq!(config.launch.java, JavaChoice::Named("jdk".to_string()));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("launch.java_configs"));
+        assert!(warnings[0].detail.contains("值不合法"));
+    }
+
+    #[test]
+    fn malformed_json_falls_back_to_all_defaults() {
+        let (config, warnings) = Config::parse("{ this is not json");
+        assert_eq!(config.launch.custom_info, LAUNCHER_NAME);
+        assert_eq!(config.download.mirror, MirrorPolicy::OfficialFirst);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].message, "整份配置使用默认值");
+        assert!(warnings[0].detail.contains("无法解析 JSON"));
     }
 
     #[test]
@@ -308,7 +549,9 @@ mod tests {
             .await
             .unwrap();
 
-        let loaded = Config::load(Some(&path)).await.unwrap();
+        let loaded = Config::load(Some(&path)).await;
+        assert!(loaded.error.is_none());
+        let loaded = loaded.config;
         assert_eq!(loaded.account.username, "tester");
         assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
         // 相对路径会被补成绝对路径（相对于进程当前目录）
@@ -331,18 +574,38 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
-        let loaded = Config::load_sync(Some(&path)).unwrap();
-        assert_eq!(loaded.account.username, "tester");
-        assert_eq!(loaded.launch.minecraft_root_path, absolute("mc-root"));
-
-        // 文件不存在 ⇒ 默认值（而不是报错）
+        let loaded = Config::load_sync(Some(&path));
+        assert!(loaded.error.is_none());
+        assert_eq!(loaded.config.account.username, "tester");
         assert_eq!(
-            Config::load_sync(Some(&dir.join("missing.json")))
-                .unwrap()
-                .account
-                .username,
-            "player"
+            loaded.config.launch.minecraft_root_path,
+            absolute("mc-root")
         );
+
+        // 文件不存在 ⇒ 默认值（而不是报错 / 警告）
+        let missing = Config::load_sync(Some(&dir.join("missing.json")));
+        assert!(missing.error.is_none());
+        assert_eq!(missing.config.account.username, "player");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 坏配置项走 `load_sync` 时会被包进 `LoadedConfig::error`，配置本身仍可用。
+    #[test]
+    fn load_reports_problems_through_the_error_field() {
+        let dir = std::env::temp_dir().join(format!("dmcl-config-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dmcl.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"launch":{"window_width":-1}}"#).unwrap();
+
+        let loaded = Config::load_sync(Some(&path));
+        assert_eq!(loaded.config.launch.window_width, 854);
+        let error = loaded.error.as_ref().expect("应当有警告");
+        assert_eq!(error.path, path);
+        assert_eq!(error.warnings.len(), 1);
+        assert!(error.warnings[0].message.contains("launch.window_width"));
+        assert!(error.warnings[0].detail.contains("值不合法"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

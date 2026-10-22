@@ -17,7 +17,7 @@ use anyhow::{anyhow, Result};
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
@@ -281,13 +281,27 @@ pub enum JavaCommand {
 }
 
 /// 跑交互式菜单。无子命令且这份构建没有 GUI 前端时，从 [`crate::gui::run_default`] 回退到这里。
-pub(crate) fn run_prompt(config: &mut Config) -> Result<()> {
+pub(crate) fn run_prompt(config: &mut Config, error: Option<ConfigError>) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(dispatch(Commands::Prompt, config))
+    runtime.block_on(dispatch(Commands::Prompt, config, error))
 }
 
 /// 执行一个命令。
-pub async fn dispatch(command: Commands, config: &mut Config) -> Result<()> {
+///
+/// 配置加载有问题时（`error` 非空），CLI 把每条问题作为错误打到 stderr 并结束，
+/// 不继续执行命令。
+pub async fn dispatch(
+    command: Commands,
+    config: &mut Config,
+    error: Option<ConfigError>,
+) -> Result<()> {
+    if let Some(error) = error {
+        for warning in &error.warnings {
+            eprintln!("错误：{warning}");
+        }
+        return Err(error.into());
+    }
+
     match command {
         // GUI 必须在主线程启动（见 `main.rs`），不该走这条 tokio 路径。
         Commands::Gui { .. } => Err(anyhow!("gui 前端必须在主线程启动")),
