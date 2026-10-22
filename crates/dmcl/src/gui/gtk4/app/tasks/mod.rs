@@ -241,10 +241,10 @@ impl SimpleComponent for TaskCenter {
 }
 
 impl TaskCenter {
-    /// 隐藏窗口，并清掉已经结束的任务卡片。
+    /// 隐藏窗口，并清掉成功的任务卡片。
     fn hide(&mut self) {
         self.dialog.set_visible(false);
-        self.clear_finished();
+        self.clear_succeeded();
     }
 
     /// 关闭主窗口时还有任务在跑：确认后取消任务并退出。
@@ -296,13 +296,13 @@ impl TaskCenter {
         }
     }
 
-    /// 去掉所有已经结束的卡片（关闭窗口时用），运行中的保留。
-    fn clear_finished(&mut self) {
+    /// 去掉所有成功的卡片（关闭窗口时用），失败、已取消和运行中的保留。
+    fn clear_succeeded(&mut self) {
         let mut removed = Vec::new();
         {
             let mut guard = self.cards.guard();
             for index in (0..guard.len()).rev() {
-                if guard.get(index).is_some_and(TaskCard::is_finished) {
+                if guard.get(index).is_some_and(TaskCard::is_succeeded) {
                     if let Some(card) = guard.remove(index) {
                         removed.push(card.id);
                     }

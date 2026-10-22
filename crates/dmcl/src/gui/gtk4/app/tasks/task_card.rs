@@ -303,6 +303,11 @@ impl TaskCard {
         self.state.is_finished()
     }
 
+    /// 是否成功完成。
+    pub fn is_succeeded(&self) -> bool {
+        self.state.status == TaskStatus::Done
+    }
+
     fn overall_text(&self) -> String {
         let (done, total) = self.state.overall();
         match self.state.status {

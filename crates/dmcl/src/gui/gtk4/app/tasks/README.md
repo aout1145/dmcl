@@ -13,8 +13,8 @@ app 层见 [app/README.md](../README.md)，整体架构见
 - 关闭**主窗口**时由 `TaskCenter` 处理 `TaskMsg::CloseMain`：没有未结束任务就直接回
   `TaskCenterOut::Quit`；有任务则弹确认，确认后发 `TaskMsg::CancelAllAndQuit`，
   取消所有未结束任务再回 `Quit`。任务卡片进入「取消中」。
-- 窗口本身只是隐藏（保留尺寸与位置），下次打开沿用；隐藏时清掉**已结束**的任务卡片，
-  取消中的任务保留。
+- 窗口本身只是隐藏（保留尺寸与位置），下次打开沿用；隐藏时只清掉**成功**的任务卡片，
+  失败、已取消和取消中的任务保留。
 - **任务起止有提示**：`TaskMsg::Start` 时弹「任务「…」开始」，`TaskMsg::Finished` 时弹
   「任务「…」完成 / 失败 / 已取消」。
 - 没有任务时显示 `AdwStatusPage` 空状态（`GtkStack` 切换，由 `cards.is_empty()` 驱动）。
