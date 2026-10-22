@@ -2,6 +2,8 @@
 //!
 //! `AdwToastOverlay` 一次只显示一条，新的会顶掉旧的。这里用一个竖直的层：新的加在
 //! 已有的**下面**，每条停留 `TOAST_SECONDS` 秒后自动消失；超过上限先删最老的。
+//!
+//! 每条提示只占一行，超长文字省略；颜色取自主题，深色 / 浅色模式都能跟着变。
 
 use relm4::gtk;
 use relm4::gtk::glib;
@@ -13,8 +15,10 @@ const MAX_TOASTS: usize = 4;
 const TOAST_SECONDS: u32 = 4;
 
 /// 提示层的样式：圆角胶囊 + 阴影。
+///
+/// 背景和前景都取主题的 card 色，跟随深色 / 浅色模式切换；不要写死颜色。
 pub(crate) const CSS: &str = "\
-.dmcl-toast { padding: 8px 14px; border-radius: 9999px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.18); }";
+.dmcl-toast { padding: 8px 14px; border-radius: 9999px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.18); background-color: @card_bg_color; color: @card_fg_color; }";
 
 /// 往提示层里加一条。
 pub(crate) fn show(layer: &gtk::Box, text: &str) {
@@ -29,8 +33,12 @@ pub(crate) fn show(layer: &gtk::Box, text: &str) {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("card");
     label.add_css_class("dmcl-toast");
-    label.set_wrap(true);
+    // 只占一行，超出宽度用省略号；`max_width_chars` 同时限制胶囊的自然宽度。
+    label.set_wrap(false);
+    label.set_lines(1);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_max_width_chars(48);
+    label.set_xalign(0.0);
     label.set_halign(gtk::Align::Start);
     layer.append(&label);
 

@@ -96,7 +96,7 @@ impl SimpleComponent for HomePage {
                 add_named[Some("empty")] = &adw::StatusPage {
                     set_icon_name: Some("view-grid-symbolic"),
                     set_title: "还没有安装任何版本",
-                    set_description: Some("用 dmcl install 安装一个版本后再回来"),
+                    set_description: Some("点击左上角按钮添加新的 Minecraft 实例"),
                 },
 
                 // 放在 add_named 之后：初始化时两个页面已经存在。

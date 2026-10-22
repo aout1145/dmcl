@@ -22,110 +22,119 @@ pub(crate) use message::TaskMsg;
 pub(crate) use task_card::CSS;
 
 use super::toast;
-use task_card::TaskCard;
+use task_card::{CardOut, TaskCard};
+
+/// 任务窗口发给 root 的消息。
+#[derive(Debug)]
+pub(crate) enum TaskCenterOut {
+    /// 当前运行中（含取消中）的任务数，用来更新标题栏角标。
+    RunningCount(usize),
+    /// 可以退出主窗口了（没有任务，或用户确认取消任务）。
+    Quit,
+}
 
 pub(crate) struct TaskCenter {
     /// 组件本身就是那个模态窗口。
     dialog: adw::Window,
-    /// 任务卡片列表 / 空状态用 `GtkStack` 切换。
-    stack: gtk::Stack,
-    /// 任务卡片的容器（在对话框的滚动区里）。
-    container: gtk::Box,
-    cards: HashMap<u64, TaskCard>,
+    /// 任务卡片列表；空列表时 `GtkStack` 切到空状态。
+    cards: FactoryVecDeque<TaskCard>,
     cancels: HashMap<u64, CancelHandle>,
     /// 弹起止提示用。
     toast: gtk::Box,
     /// 主窗口：任务窗口关着时，确认框挂它。
     window: adw::ApplicationWindow,
+    /// 上次上报给标题栏的未结束任务数，只在变化时发消息。
+    reported_running: usize,
 }
 
+#[relm4::component(pub(crate))]
 impl SimpleComponent for TaskCenter {
     type Init = (adw::ApplicationWindow, gtk::Box);
     type Input = TaskMsg;
-    type Output = ();
-    type Widgets = ();
-    type Root = adw::Window;
+    type Output = TaskCenterOut;
 
-    fn init_root() -> Self::Root {
-        // 用真正的窗口而不是 AdwDialog：AdwDialog 不能由用户拖动改尺寸。
-        adw::Window::builder()
-            .title("任务")
-            .default_width(420)
-            .default_height(520)
-            .modal(true)
-            .destroy_with_parent(true)
-            .build()
+    view! {
+        adw::Window {
+            set_title: Some("任务"),
+            set_default_width: 640,
+            set_default_height: 720,
+            set_modal: true,
+            set_destroy_with_parent: true,
+
+            // 关闭后隐藏，保留窗口本身（尺寸与内容），下次打开沿用；任务继续运行。
+            // 取消任务由关闭主窗口时的确认流程负责。
+            connect_close_request[sender] => move |_| {
+                sender.input(TaskMsg::CloseRequested);
+                gtk::glib::Propagation::Stop
+            },
+
+            #[wrap(Some)]
+            set_content = &adw::ToolbarView {
+                add_top_bar = &adw::HeaderBar {},
+
+                #[wrap(Some)]
+                set_content = &gtk::Stack {
+                    add_named[Some("list")] = &gtk::ScrolledWindow {
+                        set_vexpand: true,
+
+                        #[local_ref]
+                        cards_box -> gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 6,
+                            set_margin_top: 6,
+                            set_margin_bottom: 6,
+                            set_margin_start: 6,
+                            set_margin_end: 6,
+                        },
+                    },
+
+                    add_named[Some("empty")] = &adw::StatusPage {
+                        set_icon_name: Some("view-list-symbolic"),
+                        set_title: "暂无任务",
+                        set_description: Some("启动或安装时，任务会出现在这里"),
+                    },
+
+                    #[watch]
+                    set_visible_child_name: if model.cards.is_empty() { "empty" } else { "list" },
+                },
+            },
+        }
     }
 
     fn init(
         (window, toast): Self::Init,
-        dialog: Self::Root,
+        root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let container = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-        let empty = adw::StatusPage::builder()
-            .icon_name("view-list-symbolic")
-            .title("暂无任务")
-            .description("启动或安装时，任务会出现在这里")
-            .build();
-
-        let scrolled = gtk::ScrolledWindow::builder()
-            .child(&container)
-            .vexpand(true)
-            .build();
-        let stack = gtk::Stack::new();
-        stack.add_named(&scrolled, Some("list"));
-        stack.add_named(&empty, Some("empty"));
-        stack.set_visible_child_name("empty");
-
-        let dialog_header = adw::HeaderBar::new();
-        let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&dialog_header);
-        toolbar.set_content(Some(&stack));
-        dialog.set_transient_for(Some(&window));
-        dialog.set_content(Some(&toolbar));
-
-        {
-            let sender = sender.clone();
-            let dialog = dialog.clone();
-            // 关闭只是隐藏，保留窗口本身（尺寸与内容），下次打开沿用。
-            dialog.connect_close_request(move |dialog| {
-                sender.input(TaskMsg::ClearFinished);
-                dialog.set_visible(false);
-                gtk::glib::Propagation::Stop
+        let cards = FactoryVecDeque::builder()
+            .launch(gtk::Box::new(gtk::Orientation::Vertical, 6))
+            .forward(sender.input_sender(), |out| match out {
+                CardOut::Close(index) => TaskMsg::CloseCard(index),
             });
-        }
 
-        ComponentParts {
-            model: TaskCenter {
-                dialog,
-                stack,
-                container,
-                cards: HashMap::new(),
-                cancels: HashMap::new(),
-                toast,
-                window,
-            },
-            widgets: (),
-        }
+        root.set_transient_for(Some(&window));
+
+        let model = TaskCenter {
+            dialog: root.clone(),
+            cards,
+            cancels: HashMap::new(),
+            toast,
+            window,
+            reported_running: 0,
+        };
+
+        let cards_box = model.cards.widget();
+        let widgets = view_output!();
+
+        ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             TaskMsg::Open => self.dialog.present(),
             TaskMsg::Start { id, name, cancel } => {
-                let card = TaskCard::new(id, &name, &sender);
-                self.container.prepend(&card.root);
-                self.cards.insert(id, card);
+                self.cards.guard().push_front((id, name.clone()));
                 self.cancels.insert(id, cancel);
-                self.stack.set_visible_child_name("list");
                 toast::show(&self.toast, &format!("任务「{name}」开始"));
             }
             TaskMsg::Event { id, event } => {
@@ -144,71 +153,164 @@ impl SimpleComponent for TaskCenter {
                     // 确认框的标题用任务名（没有的话退回「确认」）。
                     let title = self
                         .cards
-                        .get(&id)
+                        .iter()
+                        .find(|card| card.id == id)
                         .map(|card| card.name().to_string())
                         .unwrap_or_else(|| "确认".to_string());
                     confirm::ask(parent, &title, message, decision.clone());
                 }
-                if let Some(card) = self.cards.get_mut(&id) {
-                    card.apply(&event);
+                let index = self.cards.iter().position(|card| card.id == id);
+                if let Some(index) = index {
+                    let mut guard = self.cards.guard();
+                    if let Some(card) = guard.get_mut(index) {
+                        card.apply(&event);
+                    }
                 }
             }
-            TaskMsg::Finished { id, ok, error } => {
-                let name = self
-                    .cards
-                    .get(&id)
+            TaskMsg::Finished {
+                id,
+                ok,
+                cancelled,
+                error,
+            } => {
+                let index = self.cards.iter().position(|card| card.id == id);
+                let name = index
+                    .and_then(|index| self.cards.get(index))
                     .map(|card| card.name().to_string())
                     .unwrap_or_default();
-                if let Some(card) = self.cards.get_mut(&id) {
-                    card.finish(ok, error);
+
+                if let Some(index) = index {
+                    let mut guard = self.cards.guard();
+                    if let Some(card) = guard.get_mut(index) {
+                        card.finish(ok, cancelled, error);
+                    }
                 }
                 self.cancels.remove(&id);
                 toast::show(
                     &self.toast,
-                    &if ok {
+                    &if cancelled {
+                        format!("任务「{name}」已取消")
+                    } else if ok {
                         format!("任务「{name}」完成")
                     } else {
                         format!("任务「{name}」失败")
                     },
                 );
             }
-            TaskMsg::Close(id) => {
-                let finished = self.cards.get(&id).is_some_and(|card| card.is_finished());
-                if finished {
-                    // 已结束：清除这条记录。
-                    if let Some(card) = self.cards.remove(&id) {
-                        self.container.remove(&card.root);
-                    }
-                    self.cancels.remove(&id);
-                    self.stack.set_visible_child_name(if self.cards.is_empty() {
-                        "empty"
+            TaskMsg::CloseCard(index) => {
+                let index = index.current_index();
+                if let Some(card) = self.cards.get(index) {
+                    let id = card.id;
+
+                    if card.is_finished() {
+                        // 已结束：清除这条记录。
+                        self.cards.guard().remove(index);
+                        self.cancels.remove(&id);
                     } else {
-                        "list"
-                    });
-                } else if let Some(cancel) = self.cancels.get(&id) {
-                    // 运行中：取消。
-                    cancel.cancel();
-                }
-            }
-            TaskMsg::ClearFinished => {
-                let finished: Vec<u64> = self
-                    .cards
-                    .iter()
-                    .filter(|(_, card)| card.is_finished())
-                    .map(|(id, _)| *id)
-                    .collect();
-                for id in finished {
-                    if let Some(card) = self.cards.remove(&id) {
-                        self.container.remove(&card.root);
+                        // 运行中：取消，并立刻进入「取消中」。
+                        if let Some(cancel) = self.cancels.get(&id) {
+                            cancel.cancel();
+                        }
+                        let mut guard = self.cards.guard();
+                        if let Some(card) = guard.get_mut(index) {
+                            card.request_cancel();
+                        }
                     }
-                    self.cancels.remove(&id);
                 }
-                self.stack.set_visible_child_name(if self.cards.is_empty() {
-                    "empty"
-                } else {
-                    "list"
-                });
             }
+            TaskMsg::CloseRequested => self.hide(),
+            TaskMsg::CloseMain => {
+                if self.cards.iter().any(|card| !card.is_finished()) {
+                    self.confirm_quit(&sender);
+                } else {
+                    let _ = sender.output(TaskCenterOut::Quit);
+                }
+            }
+            TaskMsg::CancelAllAndQuit => {
+                self.cancel_unfinished();
+                let _ = sender.output(TaskCenterOut::Quit);
+            }
+        }
+
+        let running = self.cards.iter().filter(|card| !card.is_finished()).count();
+        if running != self.reported_running {
+            self.reported_running = running;
+            let _ = sender.output(TaskCenterOut::RunningCount(running));
+        }
+    }
+}
+
+impl TaskCenter {
+    /// 隐藏窗口，并清掉已经结束的任务卡片。
+    fn hide(&mut self) {
+        self.dialog.set_visible(false);
+        self.clear_finished();
+    }
+
+    /// 关闭主窗口时还有任务在跑：确认后取消任务并退出。
+    fn confirm_quit(&self, sender: &ComponentSender<Self>) {
+        let dialog = adw::AlertDialog::new(
+            Some("任务仍在运行"),
+            Some("关闭主窗口会取消正在运行的任务。确定退出吗？"),
+        );
+        dialog.add_response("cancel", "取消");
+        dialog.add_response("quit", "取消任务并退出");
+        dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let sender = sender.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response == "quit" {
+                sender.input(TaskMsg::CancelAllAndQuit);
+            }
+        });
+
+        // 任务窗口开着时挂它，否则会被模态的任务窗口挡住。
+        let parent: &gtk::Window = if self.dialog.is_visible() {
+            self.dialog.upcast_ref()
+        } else {
+            self.window.upcast_ref()
+        };
+        dialog.present(Some(parent));
+    }
+
+    /// 给所有还没结束的卡片发取消请求；已经结束的不动。
+    fn cancel_unfinished(&mut self) {
+        let unfinished: Vec<(usize, u64)> = self
+            .cards
+            .iter()
+            .enumerate()
+            .filter(|(_, card)| !card.is_finished())
+            .map(|(index, card)| (index, card.id))
+            .collect();
+
+        for (index, id) in unfinished {
+            if let Some(cancel) = self.cancels.get(&id) {
+                cancel.cancel();
+            }
+            let mut guard = self.cards.guard();
+            if let Some(card) = guard.get_mut(index) {
+                card.request_cancel();
+            }
+        }
+    }
+
+    /// 去掉所有已经结束的卡片（关闭窗口时用），运行中的保留。
+    fn clear_finished(&mut self) {
+        let mut removed = Vec::new();
+        {
+            let mut guard = self.cards.guard();
+            for index in (0..guard.len()).rev() {
+                if guard.get(index).is_some_and(TaskCard::is_finished) {
+                    if let Some(card) = guard.remove(index) {
+                        removed.push(card.id);
+                    }
+                }
+            }
+        }
+        for id in removed {
+            self.cancels.remove(&id);
         }
     }
 }

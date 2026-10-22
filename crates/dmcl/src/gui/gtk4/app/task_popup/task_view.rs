@@ -4,13 +4,20 @@
 //! 直接计数——要用**栈**还原层级，只统计**顶层**步骤的完成：
 //! 栈由空变非空 = 一个顶层步骤开始；由非空变空 = 一个顶层步骤完成。
 
-use dmcl_task::{Progress, TaskEvent};
+use dmcl_task::{human_bytes, Progress, TaskEvent};
 
 /// 任务的运行状态。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskStatus {
+    /// 正在运行。
     Running,
+    /// 已经请求取消，正在等任务收尾。
+    Canceling,
+    /// 正常完成。
     Done,
+    /// 被用户取消。
+    Cancelled,
+    /// 失败。
     Failed,
 }
 
@@ -67,21 +74,44 @@ impl TaskState {
             TaskEvent::Log { message, .. } => self.logs.push(message.clone()),
             TaskEvent::Warning { message, .. } => self.logs.push(format!("⚠ 警告：{message}")),
             TaskEvent::Progress { progress, .. } => self.current = Some(progress.clone()),
-            TaskEvent::Failed { .. } => self.status = TaskStatus::Failed,
+            TaskEvent::Failed { .. } => {
+                // 已经请求取消时保持「取消中」：接下来只会收到取消造成的失败，
+                // 不要让界面先闪一下「失败」。
+                if self.status != TaskStatus::Canceling {
+                    self.status = TaskStatus::Failed;
+                }
+            }
             TaskEvent::Finished { .. } => {}
         }
     }
 
+    /// 请求取消：正在运行时进入「取消中」。
+    pub fn request_cancel(&mut self) {
+        if self.status == TaskStatus::Running {
+            self.status = TaskStatus::Canceling;
+        }
+    }
+
     /// 任务结束（`run` / `run_with` 的返回值）。
-    pub fn finish(&mut self, ok: bool, error: Option<String>) {
-        self.status = if ok {
+    pub fn finish(&mut self, ok: bool, cancelled: bool, error: Option<String>) {
+        self.status = if cancelled {
+            TaskStatus::Cancelled
+        } else if ok {
             TaskStatus::Done
         } else {
             TaskStatus::Failed
         };
-        self.error = if ok { None } else { error };
+        self.error = if ok || cancelled { None } else { error };
         self.stack.clear();
         self.current = None;
+    }
+
+    /// 是否已经结束（成功、失败或被取消）。
+    pub fn is_finished(&self) -> bool {
+        matches!(
+            self.status,
+            TaskStatus::Done | TaskStatus::Cancelled | TaskStatus::Failed
+        )
     }
 
     /// 总进度：已完成步骤数 / 总步骤数。
@@ -97,6 +127,39 @@ impl TaskState {
     /// 分项进度里可用的百分比（没有就是 `None`）。
     pub fn current_percent(&self) -> Option<f64> {
         self.current.as_ref().and_then(|progress| progress.percent)
+    }
+
+    /// 进度条上方的一行说明：百分比 / 字节数 / 任务自己的计数文字。
+    ///
+    /// 例如下载步骤是 `41.2% · 34.9 MiB / 84.7 MiB · 35/120 个文件`。
+    pub fn progress_text(&self) -> String {
+        let Some(progress) = &self.current else {
+            return String::new();
+        };
+        let mut parts = Vec::new();
+        if let Some(percent) = progress.percent {
+            parts.push(format!("{percent:.1}%"));
+        }
+        match progress.total {
+            Some(total) if total > 0 || progress.current > 0 => parts.push(format!(
+                "{} / {}",
+                human_bytes(progress.current),
+                human_bytes(total)
+            )),
+            None if progress.current > 0 => parts.push(human_bytes(progress.current)),
+            _ => {}
+        }
+        if !progress.message.is_empty() {
+            parts.push(progress.message.clone());
+        }
+        parts.join(" · ")
+    }
+
+    /// 是否该用 pulse 当「不确定进度条」：运行中、有当前步骤、但没有百分比。
+    pub fn wants_pulse(&self) -> bool {
+        self.status == TaskStatus::Running
+            && self.current_step().is_some()
+            && self.current_percent().is_none()
     }
 
     /// 日志全文。
@@ -203,14 +266,54 @@ mod tests {
         state.apply(&started(1));
         state.apply(&step_started("A"));
 
-        state.finish(false, Some("步骤「A」失败：boom".into()));
+        state.finish(false, false, Some("步骤「A」失败：boom".into()));
         assert_eq!(state.status, TaskStatus::Failed);
         assert_eq!(state.error.as_deref(), Some("步骤「A」失败：boom"));
         assert_eq!(state.current_step(), None);
 
-        state.finish(true, None);
+        state.finish(true, false, None);
         assert_eq!(state.status, TaskStatus::Done);
         assert_eq!(state.error, None);
+    }
+
+    /// 请求取消后进入「取消中」；取消造成的失败不覆盖这个状态，最后落到「已取消」。
+    #[test]
+    fn cancelling_is_kept_until_the_task_finishes() {
+        let mut state = TaskState::new("t");
+        state.apply(&started(1));
+        state.apply(&step_started("下载"));
+
+        state.request_cancel();
+        assert_eq!(state.status, TaskStatus::Canceling);
+        assert!(!state.is_finished());
+
+        // 任务在被取消后可能会先发一条 Failed 事件。
+        state.apply(&TaskEvent::Failed {
+            step: 0,
+            steps: 1,
+            name: "下载".into(),
+        });
+        assert_eq!(state.status, TaskStatus::Canceling);
+
+        state.finish(false, true, Some("任务已取消".into()));
+        assert_eq!(state.status, TaskStatus::Cancelled);
+        assert_eq!(state.error, None);
+        assert!(state.is_finished());
+    }
+
+    /// 进度说明包含百分比、字节和任务自己的计数（下载的文件数）。
+    #[test]
+    fn progress_text_combines_percent_bytes_and_counts() {
+        let mut state = TaskState::new("t");
+        state.apply(&started(1));
+        state.apply(&step_started("下载"));
+        state.apply(&TaskEvent::Progress {
+            step: 0,
+            steps: 1,
+            name: "下载".into(),
+            progress: Progress::new(2, Some(4), "2/3 个文件", Some(50.0)),
+        });
+        assert_eq!(state.progress_text(), "50.0% · 2 B / 4 B · 2/3 个文件");
     }
 
     /// 链自己的名字（如「启动」）不能覆盖前端给的展示名（「启动 1.20.1」）。

@@ -18,87 +18,118 @@ use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
+use relm4::Sender;
 
 use crate::config::Config;
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{self, HomePage};
+use header::{Header, HeaderMsg, HeaderOut};
 use page_host::PageHost;
-use task_popup::{TaskCenter, TaskMsg};
+use task_popup::{TaskCenter, TaskCenterOut, TaskMsg};
+
+/// 根组件收到的消息：来自标题栏、任务窗口或主窗口的关闭请求。
+#[derive(Debug)]
+enum AppMsg {
+    Header(HeaderOut),
+    Tasks(TaskCenterOut),
+    /// 主窗口收到关闭请求。
+    CloseRequested,
+}
 
 struct AppModel {
     // 子组件靠持有 Controller 存活。
     _tasks: Controller<TaskCenter>,
     _home: Controller<HomePage>,
+    header: Controller<Header>,
+    /// 任务入口：标题栏的「任务」按钮转发给任务组件。
+    tasks: Sender<TaskMsg>,
     // 宿主本身要活到窗口关闭（打开的页面由它保活）。
-    _page_host: Rc<PageHost>,
+    page_host: Rc<PageHost>,
+    /// 打开「新实例」页时要用。
+    shell: Rc<Shell>,
+    config: Config,
+    /// 主窗口：任务组件确认可以退出后销毁它。
+    window: adw::ApplicationWindow,
 }
 
+#[relm4::component(pub(crate))]
 impl SimpleComponent for AppModel {
     type Init = Config;
-    type Input = ();
+    type Input = AppMsg;
     type Output = ();
-    type Widgets = ();
-    type Root = adw::ApplicationWindow;
 
-    fn init_root() -> Self::Root {
-        adw::ApplicationWindow::builder()
-            .application(&relm4::main_adw_application())
-            .title("DMCL")
-            .default_width(960)
-            .default_height(640)
-            .build()
+    view! {
+        adw::ApplicationWindow {
+            set_application: Some(&relm4::main_adw_application()),
+            set_title: Some("DMCL"),
+            set_default_width: 960,
+            set_default_height: 640,
+
+            // 交给任务组件判断：没任务直接放行，有任务先确认。
+            connect_close_request[sender] => move |_| {
+                sender.input(AppMsg::CloseRequested);
+                gtk::glib::Propagation::Stop
+            },
+
+            #[wrap(Some)]
+            set_content = &adw::ToolbarView {
+                // 标题栏（一行：加号 / 标签页栏 / 账号任务设置主菜单 / 窗口按钮）
+                add_top_bar: &header_widget,
+
+                #[wrap(Some)]
+                set_content = &gtk::Overlay {
+                    #[local_ref]
+                    tab_view_widget -> adw::TabView {},
+
+                    // 主界面提示层：自制的堆叠 toast（AdwToastOverlay 一次只能显示一条）。
+                    #[name(toast_layer)]
+                    add_overlay = &gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 6,
+                        set_halign: gtk::Align::Start,
+                        set_valign: gtk::Align::End,
+                        set_margin_start: 18,
+                        set_margin_bottom: 18,
+                    },
+                },
+            },
+        }
     }
 
     fn init(
         config: Self::Init,
         root: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let tab_view = adw::TabView::new();
 
         // 页面宿主：把实现了 Page 的组件挂成标签页，并管它们的生命周期。
         let page_host = Rc::new(PageHost::new(tab_view.clone()));
 
-        // 主界面提示层：自制的堆叠 toast（AdwToastOverlay 一次只能显示一条）。
-        let content = gtk::Overlay::new();
-        content.set_child(Some(&tab_view));
-        let toast_layer = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        toast_layer.set_halign(gtk::Align::Start);
-        toast_layer.set_valign(gtk::Align::End);
-        toast_layer.set_margin_start(18);
-        toast_layer.set_margin_bottom(18);
-        content.add_overlay(&toast_layer);
+        // 标题栏是独立组件；需要页面宿主 / 任务组件的动作通过 HeaderOut 回来。
+        let header = Header::builder()
+            .launch((tab_view.clone(), root.clone()))
+            .forward(sender.input_sender(), AppMsg::Header);
+        let header_widget = header.widget().clone();
+
+        let tab_view_widget = &tab_view;
+        let widgets = view_output!();
+        let toast_layer = widgets.toast_layer.clone();
 
         // 任务对话框：组件本身就是那个模态窗口，自己管卡片/确认/提示/关闭清理。
         let tasks = TaskCenter::builder()
             .launch((root.clone(), toast_layer.clone()))
-            .detach();
-
-        // 标题栏（一行：加号 / 标签页栏 / 账号任务设置 / 窗口按钮）
-        let header = header::build(&tab_view);
+            .forward(sender.input_sender(), AppMsg::Tasks);
 
         // 共享服务：任务入口 + 提示层
         let shell = Rc::new(Shell::new(tasks.sender().clone(), toast_layer.clone()));
-        {
-            let tasks_sender = tasks.sender().clone();
-            header.tasks_button.connect_clicked(move |_| {
-                let _ = tasks_sender.send(TaskMsg::Open);
-            });
-        }
-
-        // 「添加实例」下拉里的「自定义」→ 开一个「新实例」页。
-        {
-            let page_host = page_host.clone();
-            let shell = shell.clone();
-            let config = config.clone();
-            header.add_custom.connect_clicked(move |_| {
-                page_host.open_page::<CustomPage>((shell.clone(), config.clone()));
-            });
-        }
+        let tasks_sender = tasks.sender().clone();
 
         // 主页组件（自己管实例与运行状态）
-        let home = HomePage::builder().launch((shell, config)).detach();
+        let home = HomePage::builder()
+            .launch((shell.clone(), config.clone()))
+            .detach();
 
         // 标签页：主页只用文字标题，且不能关闭（拒绝 close-page）。
         let home_tab = tab_view.append(home.widget());
@@ -123,22 +154,41 @@ impl SimpleComponent for AppModel {
 
         // 主页的关闭按钮由 CSS 隐藏：等标签栏把标签建好再打 class。
         {
-            let tab_bar = header.tab_bar.clone();
-            gtk::glib::idle_add_local_once(move || header::mark_home_tab(&tab_bar));
+            let header_sender = header.sender().clone();
+            gtk::glib::idle_add_local_once(move || {
+                let _ = header_sender.send(HeaderMsg::MarkHomeTab);
+            });
         }
 
-        let toolbar_view = adw::ToolbarView::new();
-        toolbar_view.add_top_bar(&header.bar);
-        toolbar_view.set_content(Some(&content));
-        root.set_content(Some(&toolbar_view));
+        let model = AppModel {
+            _tasks: tasks,
+            _home: home,
+            header,
+            tasks: tasks_sender,
+            page_host,
+            shell,
+            config,
+            window: root.clone(),
+        };
+        ComponentParts { model, widgets }
+    }
 
-        ComponentParts {
-            model: AppModel {
-                _tasks: tasks,
-                _home: home,
-                _page_host: page_host,
-            },
-            widgets: (),
+    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+        match message {
+            AppMsg::Header(HeaderOut::AddCustom) => {
+                self.page_host
+                    .open_page::<CustomPage>((self.shell.clone(), self.config.clone()));
+            }
+            AppMsg::Header(HeaderOut::OpenTasks) => {
+                let _ = self.tasks.send(TaskMsg::Open);
+            }
+            AppMsg::Tasks(TaskCenterOut::RunningCount(count)) => {
+                let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
+            }
+            AppMsg::Tasks(TaskCenterOut::Quit) => self.window.destroy(),
+            AppMsg::CloseRequested => {
+                let _ = self.tasks.send(TaskMsg::CloseMain);
+            }
         }
     }
 }

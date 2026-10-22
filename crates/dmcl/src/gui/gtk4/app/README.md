@@ -5,16 +5,19 @@
 
 ## 根组件
 
-`app/mod.rs` 只做组装：
+`app/mod.rs` 只做组装，视图用 `view!` 声明：
 
-- 建 `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层；
-- 启动 `TaskCenter` 与 `HomePage` 两个子组件，给 home 注入 `Rc<Shell>`；
-- 建 `PageHost`，把「添加实例 → 自定义」接到 `open_page::<CustomPage>` 上；
+- `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层都由 `view!` 搭出来；
+- 启动 `Header`、`TaskCenter` 与 `HomePage` 三个子组件，给 home 注入 `Rc<Shell>`；
+- 根组件输入 `AppMsg`：`HeaderOut` 负责「添加实例 → 自定义」和「任务」，
+  `TaskCenterOut::RunningCount` 负责把运行中任务数转给标题栏角标，
+  `TaskCenterOut::Quit` 表示可以销毁主窗口；
 - 主页标签拦 `close-page` 拒绝关闭（其余标签放行）；标签 `page-detached` 时让宿主丢掉
   页面保活。
 
-根组件**没有任何消息**（`Input = ()`）：任务按钮直接把 `TaskMsg::Open` 发给任务组件，
-其余都在子组件里。
+标题栏也是独立组件（`header.rs`），整行由 `view!` 声明，再由根组件的 `view!` 用
+`add_top_bar` 挂上去。外观切换和「关于」由标题栏自己处理；需要页面宿主 / 任务窗口
+配合的动作通过 `HeaderOut` 上报给根组件。
 
 ## `Shell`
 
@@ -24,7 +27,8 @@
   `TaskMsg` 转发给任务组件，返回结果句柄。
 - `open_tasks()`：主动给任务组件发 `TaskMsg::Open`，弹出任务列表窗口。
 - `toast(text)`：往主界面**左下角**的提示层加一条；新的排在**下面**，`4` 秒后自动消失，
-  最多同时 4 条。
+  最多同时 4 条。每条只占一行，超长文字用省略号；颜色取主题的 `@card_bg_color` /
+  `@card_fg_color`，跟随深色 / 浅色模式。
 
 `Shell::run` 返回一个**可 `await` 的句柄**，而不是回调，避免回调地狱：
 
@@ -35,7 +39,8 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 
 内部：在 tokio 上 `run_with`，事件经 `TaskMsg::Event` 发给任务组件，结束时把结果经
 `oneshot` 交给发起者（`TaskHandle`）。任务产出（如 `GameMonitor`）**不经 Shell**，Shell
-保持通用。
+保持通用。结束消息还会带一个 `cancelled` 标记：Shell 从返回的错误里认出 `Cancelled`，
+让任务卡片显示「已取消」而不是「失败」。
 
 ## 页面宿主
 
@@ -66,8 +71,19 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   **不能用 `pinned`**（pinned 只显示图标、不显示标题），改为在 `AdwTabView::close-page` 里
   对主页调 `close_page_finish(page, false)` 并返回 `Stop`；标签移除时 `page-detached` 通知
   宿主丢掉页面保活。
-- `+` 的 popover 里列出下载类型（目前只有「自定义」，由 root 接到 `open_page`）；账号、
-  设置是占位 popup；任务按钮发 `TaskMsg::Open` 打开任务对话框。
+- `+` 的 popover 里列出下载类型（目前只有「自定义」，由 `HeaderOut::AddCustom` 交给 root
+  接到 `open_page`）；账号、设置是占位 popup；任务按钮通过 `HeaderOut::OpenTasks` 让 root
+  发 `TaskMsg::Open` 打开任务对话框。
+- 最右侧的三点主菜单提供外观切换和「关于」。外观是 GNOME 应用里常见的「跟随系统 /
+  浅色 / 深色」圆形色板：一组互斥的 `GtkCheckButton`，把 `radio` 指示器画成圆形，
+  再叠一个选中对勾；分别对应 `AdwStyleManager` 的 `Default` / `ForceLight` / `ForceDark`。
+  「关于」是 `AdwAboutDialog`。
+- 任务按钮右上角有运行中数量角标；任务窗口在任务开始 / 结束 / 清除时把未结束任务数上报给
+  根组件，再转给标题栏，角标为 0 时隐藏。
+- 标题栏布局用 `view!` 声明；`AdwTabBar` 因为要保留给 `.dmcl-home-tab` 打 class，
+  作为本地引用挂进布局。
+- 标签栏仍占满中间宽度；在它和右侧按钮之间留一段 28px 的固定 `GtkWindowHandle`，
+  拖这段空白可以移动窗口，避免拖拽被标签栏内部的滚动区吃掉。
 
 ## 标题栏 CSS
 
@@ -83,6 +99,17 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 其余模块的 CSS 在各自目录的文档里：下载域见
 [download](../pages/download/README.md#css)，任务窗口见
 [task_popup](task_popup/README.md#css)。
+
+## 关闭主窗口
+
+根组件收到主窗口的 `close-request` 后只转发 `TaskMsg::CloseMain`，由任务组件自己判断：
+
+- 没有未结束的任务：回 `TaskCenterOut::Quit`，根组件销毁主窗口；
+- 还有运行中 / 取消中的任务：弹 `AdwAlertDialog` 确认；确认后取消所有未结束任务，
+  再回 `TaskCenterOut::Quit`。
+
+未结束任务数由任务组件自己维护，根组件不再缓存一份。关闭任务窗口本身只隐藏窗口，
+不取消任务、不弹确认；用户可以在任务继续跑的时候关掉任务列表。
 
 ## 任务窗口
 

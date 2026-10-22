@@ -11,7 +11,7 @@ use std::cell::Cell;
 
 use relm4::gtk;
 
-use dmcl_task::TaskChain;
+use dmcl_task::{Cancelled, TaskChain};
 
 use super::task_popup::TaskMsg;
 use super::toast;
@@ -61,15 +61,21 @@ impl Shell {
         let events = self.tasks.clone();
         let done = self.tasks.clone();
         relm4::spawn(async move {
-            let result = chain
+            let raw = chain
                 .run_with(input, move |event| {
                     let _ = events.send(TaskMsg::Event { id, event });
                 })
-                .await
-                .map_err(|err| format!("{err:#}"));
+                .await;
+            // 先认出「用户取消」，再转成字符串：取消不是失败，界面要显示「已取消」。
+            let cancelled = raw.as_ref().err().is_some_and(|err| {
+                err.chain()
+                    .any(|cause| cause.downcast_ref::<Cancelled>().is_some())
+            });
+            let result = raw.map_err(|err| format!("{err:#}"));
             let _ = done.send(TaskMsg::Finished {
                 id,
                 ok: result.is_ok(),
+                cancelled,
                 error: result.as_ref().err().cloned(),
             });
             let _ = tx.send(result);

@@ -44,10 +44,11 @@
   | 头像 | `AdwAvatar` |
   | 标签页 | `AdwTabView` / `AdwTabBar` |
 
-- **仍用 Gtk 的地方**：`GtkBox` / `GtkLabel` / `GtkButton` / `GtkScrolledWindow` /
-  `GtkMenuButton` / `GtkPopover` / `GtkGestureClick` / `GtkProgressBar` / `GtkImage` /
-  `GtkExpander` —— Adw 没有对应控件，或语义更合适。例如任务日志用 `GtkExpander` 而不是
-  `AdwExpanderRow`：后者是「偏好设置行」形态（行内边距、hover、分隔线），放进卡片里不合适。
+- **仍用 Gtk 的地方**：`GtkBox` / `GtkLabel` / `GtkTextView` / `GtkButton` /
+  `GtkScrolledWindow` / `GtkMenuButton` / `GtkPopover` / `GtkGestureClick` /
+  `GtkProgressBar` / `GtkImage` / `GtkExpander` —— Adw 没有对应控件，或语义更合适。
+  例如任务日志用 `GtkTextView` 增量追加、用 `GtkExpander` 而不是 `AdwExpanderRow`：
+  后者是「偏好设置行」形态（行内边距、hover、分隔线），放进卡片里不合适。
 - **图标**：UI 图标用 Adwaita 主题的 `*-symbolic`，只挑稳定常见的名字，不打包位图；实例图标
   用 `AdwAvatar` 首字母彩色头像，不内置 Mojang 贴图。
 - **运行状态**用彩色文字 / 圆点（CSS class）而不是图标。
@@ -62,8 +63,10 @@
 - 页面优先用 **`#[relm4::component]` + `view!`** 声明视图，状态变化交给 `#[watch]` /
   `#[track]`；**不要手写 `render` 重建子控件**。动态列表用 `FactoryVecDeque` /
   `FactoryComponent` 同步增删，不要长期维护「名字 → widget」的旁路表。
-- **状态只有一份**：互斥状态用 enum（如 `InstanceState`），不要用几个布尔量 / 集合分别表示，
-  否则容易出现「状态改了但界面没刷新」或两个标志互相矛盾。
+- **状态只有一份**：互斥状态用 enum（如 `InstanceState`、任务的 `TaskStatus`），不要用几个
+  布尔量 / 集合分别表示，否则容易出现「状态改了但界面没刷新」或两个标志互相矛盾。
+- 动态的任务卡片也是 `FactoryComponent`（`app/task_popup/task_card.rs`），任务列表由
+  `FactoryVecDeque<TaskCard>` 同步增删。
 - `update` 只改模型；只有一次性的构造、Pango 测量 / 运行时尺寸计算等 `view!` 表达不了的
   东西，才放 `init` / `init_widgets`，且只跑一次。
 - 命令式 GTK 仍可用于静态组装或 `view!` 覆盖不到的控件，但不要让它和模型形成两套状态。
@@ -122,9 +125,9 @@ gtk4/
 
 ## 消息与边界
 
-消息按组件拆分，不集中在一个文件里；根组件没有消息（`Input = ()`），页面 / 任务的动作互相
-独立。页面直接调注入的 `Shell`；任务窗口自己处理确认与提示，不再往根组件上报。各组件完整的
-消息表见对应目录的文档。
+消息按组件拆分，不集中在一个文件里。根组件只接收标题栏的 `HeaderOut`（打开自定义页 /
+任务窗口）和任务窗口的 `TaskCenterOut`（运行中数量角标），页面与任务的动作彼此独立。
+页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件完整的消息表见对应目录的文档。
 
 跨组件的边界只有三条：
 
@@ -163,7 +166,7 @@ GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway�
 纯逻辑都放在同文件的 `#[cfg(test)]` 模块里：
 
 - 任务进度 reducer（`app/task_popup/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
-  结束状态；
+  结束状态、取消中 / 已取消的转换、进度说明拼法；
 - 版本目录快照（`pages/home/mod.rs`）：只列直接子目录、排序、目录不存在；
 - 版本适配（`pages/download/custom/versions.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、
   Fabric 最新 / 推荐规则、NeoForge 置顶；标签标题在 `custom/mod.rs`；
