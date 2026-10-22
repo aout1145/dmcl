@@ -2,6 +2,7 @@
 
 给在本仓库里工作的编码代理（以及人）的约定。动手前先读
 [README.md](README.md)（功能 / 构建 / 用法）和 [ARCHITECTURE.md](ARCHITECTURE.md)（结构 / 依赖 / 设计）。
+改 GTK4 前端时还要读 [gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)（relm4 / `view!` 约定）。
 
 ## 汇报与确认（最重要）
 
