@@ -65,7 +65,7 @@
   `FactoryComponent` 同步增删，不要长期维护「名字 → widget」的旁路表。
 - **状态只有一份**：互斥状态用 enum（如 `InstanceState`、任务的 `TaskStatus`），不要用几个
   布尔量 / 集合分别表示，否则容易出现「状态改了但界面没刷新」或两个标志互相矛盾。
-- 动态的任务卡片也是 `FactoryComponent`（`app/task_popup/task_card.rs`），任务列表由
+- 动态的任务卡片也是 `FactoryComponent`（`app/tasks/task_card.rs`），任务列表由
   `FactoryVecDeque<TaskCard>` 同步增删。
 - `update` 只改模型；只有一次性的构造、Pango 测量 / 运行时尺寸计算等 `view!` 表达不了的
   东西，才放 `init` / `init_widgets`，且只跑一次。
@@ -86,7 +86,7 @@ gtk4/
 │   ├── shell.rs
 │   ├── toast.rs
 │   ├── header.rs
-│   └── task_popup/              # 任务窗口
+│   └── tasks/                   # 任务窗口
 │       ├── README.md            # 任务窗口 / 卡片 / 警告确认 / 进度还原
 │       ├── mod.rs
 │       ├── message.rs
@@ -118,7 +118,7 @@ gtk4/
 | 范围 | 主要组件 / 服务 | 文档 |
 | --- | --- | --- |
 | app 外壳 | 根组件、`Shell`、`PageHost`、标题栏、toast | [app/README.md](app/README.md) |
-| 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/task_popup/README.md](app/task_popup/README.md) |
+| 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
@@ -165,7 +165,7 @@ cargo test -p dmcl --features gtk4 --lib
 GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway。relm4 组件里能抽出来的
 纯逻辑都放在同文件的 `#[cfg(test)]` 模块里：
 
-- 任务进度 reducer（`app/task_popup/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
+- 任务进度 reducer（`app/tasks/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
   结束状态、取消中 / 已取消的转换、进度说明拼法；
 - 版本目录快照（`pages/home/mod.rs`）：只列直接子目录、排序、目录不存在；
 - 版本适配（`pages/download/custom/versions.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、

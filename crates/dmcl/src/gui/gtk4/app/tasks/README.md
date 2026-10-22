@@ -1,6 +1,6 @@
 # 任务窗口与任务卡片
 
-`crates/dmcl/src/gui/gtk4/app/task_popup` —— 任务列表窗口、任务卡片、警告确认。
+`crates/dmcl/src/gui/gtk4/app/tasks` —— 任务列表窗口、任务卡片、警告确认。
 app 层见 [app/README.md](../README.md)，整体架构见
 [gtk4/README.md](../../README.md)。
 
@@ -90,4 +90,4 @@ app 层见 [app/README.md](../README.md)，整体架构见
 
 ## CSS
 
-`task_popup::CSS` 给任务日志区 `.dmcl-task-log` 一个明确的边框。
+`tasks::CSS` 给任务日志区 `.dmcl-task-log` 一个明确的边框。

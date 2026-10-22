@@ -98,7 +98,7 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 
 其余模块的 CSS 在各自目录的文档里：下载域见
 [download](../pages/download/README.md#css)，任务窗口见
-[task_popup](task_popup/README.md#css)。
+[tasks](tasks/README.md#css)。
 
 ## 关闭主窗口
 
@@ -114,5 +114,5 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 ## 任务窗口
 
 `TaskCenter` 是独立的模态 `AdwWindow`，细节见
-[task_popup/README.md](task_popup/README.md)。app 层只负责在根组件里启动它，
+[tasks/README.md](tasks/README.md)。app 层只负责在根组件里启动它，
 并把 `Shell` 产生的事件转给它。

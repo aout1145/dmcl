@@ -13,7 +13,7 @@ use relm4::gtk;
 
 use dmcl_task::{Cancelled, TaskChain};
 
-use super::task_popup::TaskMsg;
+use super::tasks::TaskMsg;
 use super::toast;
 
 /// 任务结果句柄：`finished().await` 拿到任务产出。

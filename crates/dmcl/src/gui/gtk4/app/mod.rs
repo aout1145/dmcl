@@ -1,6 +1,6 @@
 //! 顶层组件：窗口 + 标题栏 + 标签页；只做组装。
 //!
-//! 页面（`pages/` 下实现 [`Page`](page_host::Page) 的组件）与任务对话框（`task_popup`）都是
+//! 页面（`pages/` 下实现 [`Page`](page_host::Page) 的组件）与任务对话框（`tasks`）都是
 //! 独立组件、各带自己的消息；页面的打开/关闭/保活交给 [`PageHost`](page_host::PageHost)，
 //! 共享能力（跑任务、弹提示、打开任务对话框）在 [`Shell`] 里。这里没有业务逻辑。
 
@@ -8,7 +8,7 @@ mod config_warning;
 mod header;
 pub(crate) mod page_host;
 pub(crate) mod shell;
-mod task_popup;
+mod tasks;
 mod toast;
 
 pub(crate) use shell::Shell;
@@ -27,7 +27,7 @@ use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{self, HomePage};
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::PageHost;
-use task_popup::{TaskCenter, TaskCenterOut, TaskMsg};
+use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
 
 /// 根组件收到的消息：来自标题栏、任务窗口或主窗口的关闭请求。
 #[derive(Debug)]
@@ -216,7 +216,7 @@ pub(crate) fn run(loaded: LoadedConfig) -> anyhow::Result<()> {
         header::CSS,
         home::CSS,
         common::CSS,
-        task_popup::CSS,
+        tasks::CSS,
         toast::CSS,
         config_warning::CSS,
     ] {

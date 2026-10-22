@@ -319,7 +319,7 @@ GTK4 + libadwaita 前端在 `crates/dmcl/src/gui/gtk4`，用 relm4，由 cargo f
 
 - [app/README.md](crates/dmcl/src/gui/gtk4/app/README.md)：根组件、`Shell`、`PageHost`、
   标题栏、toast；
-- [app/task_popup/README.md](crates/dmcl/src/gui/gtk4/app/task_popup/README.md)：任务窗口、
+- [app/tasks/README.md](crates/dmcl/src/gui/gtk4/app/tasks/README.md)：任务窗口、
   任务卡片、警告确认；
 - [pages/home/README.md](crates/dmcl/src/gui/gtk4/pages/home/README.md)：主页、实例磁贴、
   启动 / 停止；
