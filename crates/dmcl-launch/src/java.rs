@@ -237,7 +237,9 @@ pub async fn select_java(
     };
     let configs = scanned.as_ref().unwrap_or(configs);
     if configs.is_empty() {
-        return Err(anyhow!("没有任何可用的 java 配置，请先用 dmcl java 搜索"));
+        return Err(anyhow!(
+            "没有找到可用的 Java，请先安装 Java 或提供 Java 路径"
+        ));
     }
 
     let name = match choice {
@@ -317,7 +319,7 @@ mod tests {
             .await
             .unwrap_err();
         // 有配置表时不会去扫描，直接报"没有这一项"
-        assert!(format!("{err:#}").contains("没有任何可用的 java 配置"));
+        assert!(format!("{err:#}").contains("没有找到可用的 Java"));
     }
 
     #[tokio::test]

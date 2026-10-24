@@ -346,11 +346,27 @@ pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -
     }
     #[cfg(not(windows))]
     {
-        let cd = shell_words::join(&[
-            "cd".to_string(),
-            version_path.to_string_lossy().into_owned(),
-        ]);
-        format!("{cd} && {}", shell_words::join(args))
+        let cd = format!("cd {}", quote_posix(&version_path.to_string_lossy()));
+        let args = args
+            .iter()
+            .map(|arg| quote_posix(arg))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{cd} && {args}")
+    }
+}
+
+/// POSIX shell 单参数引号：只在需要时包单引号，单引号自身写成 `'\''`。
+#[cfg(not(windows))]
+fn quote_posix(arg: &str) -> String {
+    let safe = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || "-_./:=,@+".contains(ch));
+    if safe {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
     }
 }
 

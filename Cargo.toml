@@ -52,7 +52,6 @@ dirs = "6"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.11"
-shell-words = "1"
 version-compare = "0.2"
 regex = "1"
 os_info = "3"

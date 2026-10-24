@@ -6,8 +6,8 @@ use crate::config::Config;
 
 /// `list` —— 列出**已安装**的版本。
 pub(crate) async fn installed(config: &Config) -> Result<()> {
-    let versions =
-        dmcl_mcmeta::layout::installed_versions(&config.launch.minecraft_root_path).await?;
+    let root = config.minecraft_root_path()?;
+    let versions = dmcl_mcmeta::layout::installed_versions(root).await?;
     if versions.is_empty() {
         println!("还没有安装任何版本。");
         return Ok(());

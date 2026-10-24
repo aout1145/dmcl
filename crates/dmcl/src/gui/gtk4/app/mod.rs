@@ -137,7 +137,7 @@ impl SimpleComponent for AppModel {
 
         // 主页组件（自己管实例与运行状态）
         let home = HomePage::builder()
-            .launch((shell.clone(), config.clone()))
+            .launch((shell.clone(), config.clone(), root.clone()))
             .detach();
 
         // 标签页：主页只用文字标题，且不能关闭（拒绝 close-page）。

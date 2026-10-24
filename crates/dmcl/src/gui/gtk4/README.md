@@ -20,7 +20,7 @@
 - 需要系统 **GTK ≥ 4.18 / libadwaita ≥ 1.7**（relm4 开 `gnome_48`；用到了 `AdwWrapBox`、
   `AdwSpinner`、`AdwDialog` 等较新的 Adw 控件）。
 - 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；显式的 `gui` 命令在前端不可用时直接报错。
-- 无子命令是单独路径：`gui::run_default` 有 `gtk4` 就启动 GUI，否则进交互式菜单。
+- 无子命令是单独路径：`gui::run_default` 有 `gtk4` 就启动 GUI，否则打印帮助并退出。
 - **GUI 必须占主线程**，所以 `main.rs` 不用 `#[tokio::main]`：直接匹配 `cli.command`
   （`None` 走默认逻辑，`Some(gui)` 走显式 GUI），`Config::load_sync` 同步读一次配置，
   再决定走 GUI 还是建 tokio runtime 执行命令行。

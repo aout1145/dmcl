@@ -1,38 +1,40 @@
 //! 配置。
 //!
 //! 解析与合并全交给 `serde`：嵌套结构体直接对应嵌套 JSON，`#[serde(default)]`
-//! 表示"缺键保留默认值"。加载时逐项容错：不合法的配置项回退成默认值并汇总成
+//! 表示「缺键保留默认值」。加载时逐项容错：不合法的配置项回退成默认值并汇总成
 //! [`ConfigError`]，缺键仍然静默用默认值。
 //!
 //! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由前端（CLI / GUI）持有并传下去；
 //! 各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
 //!
-//! 各段拆在子模块（`launch` / `account` / `download`）；交互编辑用的展开 /
-//! 写回在 `edit`，java 管理的纯逻辑在 `java`。
+//! 全局配置分为 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
+//! `download` 六部分；每个实例还可以在
+//! `<minecraft_root>/versions/<version_name>/dmcl.json` 里写一个只含 `launch` 的覆盖层。
 //!
 //! ```json
 //! {
-//!   "launch":   { "java": "autoselect", "minecraft_root_path": "/…/.minecraft", … },
-//!   "account":  { "online_mode": false, "username": "player" },
-//!   "download": { "max_tasks": 64, "mirror": "official-first", … }
+//!   "launch": { "java": "autoselect", "account": "player", … },
+//!   "accounts": { "player": { "type": "offline", "username": "player" } },
+//!   "javas": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
+//!   "minecraft_roots": { "default": ".minecraft" },
+//!   "minecraft_root": "default",
+//!   "download": { "max_tasks": 64, "skip_music": false, … }
 //! }
 //! ```
 
 mod account;
 mod download;
-mod edit;
-pub(crate) mod java;
 mod launch;
 
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
-pub use edit::{display_value, is_json_value, parse_edited_value};
-pub use launch::LaunchConfig;
+pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use dmcl_download::{DownloadOptions, DEFAULT_USER_AGENT};
 use dmcl_install::{InstallOptions, JavaProvider};
 use dmcl_launch::{
@@ -40,18 +42,43 @@ use dmcl_launch::{
 };
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::source::DownloadSource;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// 1 MiB。
 const MIB: u64 = 1024 * 1024;
 
-/// 整份配置文档。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// 整份全局配置文档。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub launch: LaunchConfig,
-    pub account: AccountConfig,
+    pub accounts: BTreeMap<String, AccountConfig>,
+    pub javas: JavaConfigs,
+    pub minecraft_roots: BTreeMap<String, PathBuf>,
+    pub minecraft_root: String,
     pub download: DownloadConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            launch: LaunchConfig::default(),
+            accounts: default_accounts(),
+            javas: JavaConfigs::new(),
+            minecraft_roots: default_roots(),
+            minecraft_root: "default".to_string(),
+            download: DownloadConfig::default(),
+        }
+    }
+}
+
+fn default_accounts() -> BTreeMap<String, AccountConfig> {
+    BTreeMap::from([("player".to_string(), AccountConfig::default())])
+}
+
+fn default_roots() -> BTreeMap<String, PathBuf> {
+    BTreeMap::from([("default".to_string(), PathBuf::from(".minecraft"))])
 }
 
 /// 一次配置加载的结果。
@@ -124,7 +151,7 @@ impl Config {
         }
     }
 
-    /// 读配置（文件不存在就用默认值），并把 `.minecraft` 路径补成绝对路径。
+    /// 读配置（文件不存在就用默认值），并把所有根目录补成绝对路径。
     ///
     /// 配置项本身的问题不会让加载失败：逐项回退默认值，汇总到
     /// [`LoadedConfig::error`] 里交给前端处理。
@@ -164,7 +191,7 @@ impl Config {
 
     /// 补绝对路径并把警告包成 [`LoadedConfig`]（`load` / `load_sync` 共用）。
     fn into_loaded(mut config: Self, path: PathBuf, warnings: Vec<ConfigWarning>) -> LoadedConfig {
-        config.absolutize_root();
+        config.absolutize_roots();
         let error = (!warnings.is_empty()).then_some(ConfigError { path, warnings });
         LoadedConfig { config, error }
     }
@@ -202,61 +229,114 @@ impl Config {
         };
 
         for (section, body) in sections {
-            if !root.get(&section).is_some_and(serde_json::Value::is_object) {
-                warnings.push(ConfigWarning {
-                    message: format!("配置段「{section}」已忽略"),
-                    detail: "未知配置段".to_string(),
-                });
-                continue;
-            }
-            let serde_json::Value::Object(entries) = body else {
-                warnings.push(ConfigWarning {
-                    message: format!("配置段「{section}」使用默认值"),
-                    detail: "该段不是 JSON 对象".to_string(),
-                });
-                continue;
-            };
-            let known: Vec<String> = root[section.as_str()]
-                .as_object()
-                .map(|object| object.keys().cloned().collect())
-                .unwrap_or_default();
-
-            for (field, raw) in entries {
-                if !known.contains(&field) {
-                    warnings.push(ConfigWarning {
-                        message: format!("配置项「{section}.{field}」已忽略"),
-                        detail: "未知配置项".to_string(),
-                    });
-                    continue;
+            match section.as_str() {
+                "launch" => {
+                    root["launch"] = parse_section::<LaunchConfig>(
+                        "launch",
+                        body,
+                        &root["launch"],
+                        &mut warnings,
+                    );
                 }
-                // 用「默认配置 + 这一项原值」试反序列化；失败就保留默认值
-                let mut candidate = root.clone();
-                candidate[section.as_str()][field.as_str()] = raw.clone();
-                match serde_json::from_value::<Self>(serde_json::Value::Object(candidate)) {
-                    Ok(_) => root[section.as_str()][field.as_str()] = raw,
-                    Err(err) => {
-                        let fallback = &root[section.as_str()][field.as_str()];
+                "download" => {
+                    root["download"] = parse_section::<DownloadConfig>(
+                        "download",
+                        body,
+                        &root["download"],
+                        &mut warnings,
+                    );
+                }
+                "accounts" => {
+                    let fallback = default_accounts();
+                    let table = parse_table("accounts", body, fallback, &mut warnings);
+                    root["accounts"] = serde_json::to_value(table).unwrap_or_default();
+                }
+                "javas" => {
+                    let table = parse_table("javas", body, JavaConfigs::new(), &mut warnings);
+                    root["javas"] = serde_json::to_value(table).unwrap_or_default();
+                }
+                "minecraft_roots" => {
+                    let table =
+                        parse_table("minecraft_roots", body, default_roots(), &mut warnings);
+                    root["minecraft_roots"] = serde_json::to_value(table).unwrap_or_default();
+                }
+                "minecraft_root" => {
+                    if body.is_string() {
+                        root["minecraft_root"] = body;
+                    } else {
                         warnings.push(ConfigWarning {
-                            message: format!("配置项「{section}.{field}」使用默认值 {fallback}"),
-                            detail: format!("值不合法：{err}"),
+                            message: format!(
+                                "配置项「minecraft_root」使用默认值 {}",
+                                root["minecraft_root"]
+                            ),
+                            detail: "值不合法：需要字符串".to_string(),
                         });
                     }
                 }
+                _ => {
+                    warnings.push(ConfigWarning {
+                        message: format!("配置段「{section}」已忽略"),
+                        detail: "未知配置段".to_string(),
+                    });
+                }
             }
         }
 
-        match serde_json::from_value::<Self>(serde_json::Value::Object(root)) {
-            Ok(config) => (config, warnings),
+        let mut config = match serde_json::from_value::<Self>(serde_json::Value::Object(root)) {
+            Ok(config) => config,
             Err(err) => {
                 warnings.push(whole_default_warning(format!("配置整体校验失败：{err}")));
-                (Self::default(), warnings)
+                return (Self::default(), warnings);
             }
+        };
+        warnings.extend(config.validate_selections());
+        (config, warnings)
+    }
+
+    /// 把所有根目录补成绝对路径（`load` / `load_sync` 共用）。
+    fn absolutize_roots(&mut self) {
+        for root in self.minecraft_roots.values_mut() {
+            *root = absolute(&*root);
         }
     }
 
-    /// 把 `.minecraft` 路径补成绝对路径（`load` / `load_sync` 共用）。
-    fn absolutize_root(&mut self) {
-        self.launch.minecraft_root_path = absolute(&self.launch.minecraft_root_path);
+    /// 校验全局选择项：根目录、账户、Java。失效项回退并产生警告。
+    fn validate_selections(&mut self) -> Vec<ConfigWarning> {
+        let mut warnings = Vec::new();
+
+        if self.minecraft_roots.is_empty() {
+            self.minecraft_roots = default_roots();
+            warnings.push(ConfigWarning {
+                message: "配置项「minecraft_roots」为空，已加入默认根目录".to_string(),
+                detail: "默认根目录为 default -> .minecraft".to_string(),
+            });
+        }
+        if !self.minecraft_roots.contains_key(&self.minecraft_root) {
+            let fallback = if self.minecraft_roots.contains_key("default") {
+                "default".to_string()
+            } else {
+                self.minecraft_roots
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            warnings.push(ConfigWarning {
+                message: format!(
+                    "配置项「minecraft_root」指向的根目录不存在：{}，改用「{fallback}」",
+                    self.minecraft_root
+                ),
+                detail: "请编辑配置选择已有根目录".to_string(),
+            });
+            self.minecraft_root = fallback;
+        }
+
+        warnings.extend(validate_launch_choices(
+            &mut self.launch,
+            &self.accounts,
+            &self.javas,
+        ));
+        warnings
     }
 
     /// 持久化整份配置。
@@ -307,47 +387,198 @@ impl Config {
         options
     }
 
-    /// 配置文件 → [`InstallOptions`]（含"用哪个 java 跑安装器 processor"）。
-    pub fn install_options(&self, source: DownloadSource) -> InstallOptions {
-        InstallOptions::new(self.launch.minecraft_root_path.clone(), source)
-            .with_download(self.download_options())
-            .with_skip_music(self.download.i_dont_need_music)
-            .with_java(Arc::new(ConfigJava {
-                choice: self.launch.java.clone(),
-                configs: self.launch.java_configs.clone(),
-            }))
+    /// 当前选择的 Minecraft 根目录。
+    pub fn minecraft_root_path(&self) -> Result<&Path> {
+        self.minecraft_roots
+            .get(&self.minecraft_root)
+            .map(PathBuf::as_path)
+            .ok_or_else(|| {
+                anyhow!(
+                    "配置项「minecraft_root」指向的根目录不存在：{}",
+                    self.minecraft_root
+                )
+            })
     }
 
-    /// 配置文件 → [`LaunchOption`]。
-    pub fn launch_option(
+    /// 为本次运行切换根目录；名字必须已经在 `minecraft_roots` 里。
+    pub fn select_minecraft_root(&mut self, name: &str) -> Result<()> {
+        if !self.minecraft_roots.contains_key(name) {
+            return Err(anyhow!("根目录不存在：{name}"));
+        }
+        self.minecraft_root = name.to_string();
+        Ok(())
+    }
+
+    /// 按 `launch.account` 造一个账户。
+    ///
+    /// 没有选择账户（`null`）或指向不存在的账户时返回错误，不静默使用默认账户。
+    pub fn selected_account(&self, launch: &LaunchConfig) -> Result<Arc<dyn dmcl_launch::Account>> {
+        let name = launch
+            .account
+            .as_deref()
+            .ok_or_else(|| anyhow!("实例没有选择账户（launch.account 为 null），请编辑配置"))?;
+        let account = self
+            .accounts
+            .get(name)
+            .ok_or_else(|| anyhow!("配置项「launch.account」指向的账号不存在：{name}"))?;
+        match account {
+            AccountConfig::Offline { username } => {
+                Ok(Arc::new(dmcl_launch::OfflineAccount::new(username.clone())))
+            }
+        }
+    }
+
+    /// 配置 + 传入的启动配置 → [`InstallOptions`]（含「用哪个 java 跑安装器 processor」）。
+    pub fn install_options(
         &self,
-        account: Arc<dyn dmcl_launch::Account>,
-        version_name: &str,
-    ) -> LaunchOption {
-        let mut option = LaunchOption::new(
-            account,
-            self.launch.minecraft_root_path.clone(),
-            version_name,
-        )
-        .with_java(self.launch.java.clone(), self.launch.java_configs.clone())
-        .with_local_layout(self.download.i_dont_need_music);
-        option.window_width = self.launch.window_width;
-        option.window_height = self.launch.window_height;
-        option.min_memory = self.launch.min_memory;
-        option.max_memory = self.launch.max_memory;
-        option.custom_info = self.launch.custom_info.clone();
-        option.additional_jvm = self.launch.additional_jvm.clone();
-        option.additional_game = self.launch.additional_game.clone();
-        option
+        source: DownloadSource,
+        launch: &LaunchConfig,
+    ) -> Result<InstallOptions> {
+        let root = self.minecraft_root_path()?.to_path_buf();
+        Ok(InstallOptions::new(root, source)
+            .with_download(self.download_options())
+            .with_skip_music(self.download.skip_music)
+            .with_java(Arc::new(ConfigJava {
+                choice: launch.java.clone(),
+                configs: self.javas.clone(),
+            })))
     }
 
-    /// 按配置里的账户信息造一个（离线）账号。
-    pub fn account(&self) -> Arc<dyn dmcl_launch::Account> {
-        // `account.online_mode` 目前仍未被使用：只有离线账号实现。
-        Arc::new(dmcl_launch::OfflineAccount::new(
-            self.account.username.clone(),
-        ))
+    /// 配置 + 传入的启动配置 → [`LaunchOption`]。
+    pub fn launch_option(&self, launch: &LaunchConfig, version_name: &str) -> Result<LaunchOption> {
+        let account = self.selected_account(launch)?;
+        let root = self.minecraft_root_path()?.to_path_buf();
+        let mut option = LaunchOption::new(account, root, version_name)
+            .with_java(launch.java.clone(), self.javas.clone())
+            .with_local_layout(self.download.skip_music);
+        option.window_width = launch.window_width;
+        option.window_height = launch.window_height;
+        option.min_memory = launch.min_memory;
+        option.max_memory = launch.max_memory;
+        option.custom_info = launch.custom_info.clone();
+        option.additional_jvm = launch.additional_jvm.clone();
+        option.additional_game = launch.additional_game.clone();
+        Ok(option)
     }
+}
+
+/// 账户 / Java 选择项回退；全局配置和实例配置共用。
+pub(super) fn validate_launch_choices(
+    launch: &mut LaunchConfig,
+    accounts: &BTreeMap<String, AccountConfig>,
+    javas: &JavaConfigs,
+) -> Vec<ConfigWarning> {
+    let mut warnings = Vec::new();
+
+    if let Some(name) = launch.account.clone() {
+        if !accounts.contains_key(&name) {
+            launch.account = None;
+            warnings.push(ConfigWarning {
+                message: format!("配置项「launch.account」指向的账号不存在：{name}，已改为 null"),
+                detail: "请编辑配置选择已有账号".to_string(),
+            });
+        }
+    }
+
+    if let JavaChoice::Named(name) = &launch.java {
+        if !javas.contains_key(name) {
+            let name = name.clone();
+            launch.java = JavaChoice::Auto;
+            warnings.push(ConfigWarning {
+                message: format!(
+                    "配置项「launch.java」指向的 Java 不存在：{name}，已改为 autoselect"
+                ),
+                detail: "请编辑配置选择已有 Java".to_string(),
+            });
+        }
+    }
+
+    warnings
+}
+
+/// 按字段逐项覆盖一个配置段；坏字段回退到传入的默认段。
+fn parse_section<T>(
+    section: &str,
+    body: serde_json::Value,
+    fallback: &serde_json::Value,
+    warnings: &mut Vec<ConfigWarning>,
+) -> serde_json::Value
+where
+    T: DeserializeOwned + Serialize,
+{
+    let serde_json::Value::Object(entries) = body else {
+        warnings.push(ConfigWarning {
+            message: format!("配置段「{section}」使用默认值"),
+            detail: "该段不是 JSON 对象".to_string(),
+        });
+        return fallback.clone();
+    };
+    let Some(defaults) = fallback.as_object() else {
+        return fallback.clone();
+    };
+    let mut current = defaults.clone();
+
+    for (field, raw) in entries {
+        if !defaults.contains_key(&field) {
+            warnings.push(ConfigWarning {
+                message: format!("配置项「{section}.{field}」已忽略"),
+                detail: "未知配置项".to_string(),
+            });
+            continue;
+        }
+        let fallback_value = current[field.as_str()].clone();
+        let mut candidate = current.clone();
+        candidate.insert(field.clone(), raw);
+        match serde_json::from_value::<T>(serde_json::Value::Object(candidate)) {
+            Ok(value) => match serde_json::to_value(value) {
+                Ok(serde_json::Value::Object(object)) => current = object,
+                _ => {
+                    warnings.push(ConfigWarning {
+                        message: format!("配置项「{section}.{field}」使用默认值 {fallback_value}"),
+                        detail: "值不合法：无法写回配置".to_string(),
+                    });
+                }
+            },
+            Err(err) => warnings.push(ConfigWarning {
+                message: format!("配置项「{section}.{field}」使用默认值 {fallback_value}"),
+                detail: format!("值不合法：{err}"),
+            }),
+        }
+    }
+
+    serde_json::Value::Object(current)
+}
+
+/// 解析一张动态表：条目逐个校验，坏条目丢弃；表整体替换默认表。
+fn parse_table<T>(
+    section: &str,
+    body: serde_json::Value,
+    fallback: BTreeMap<String, T>,
+    warnings: &mut Vec<ConfigWarning>,
+) -> BTreeMap<String, T>
+where
+    T: DeserializeOwned,
+{
+    let serde_json::Value::Object(entries) = body else {
+        warnings.push(ConfigWarning {
+            message: format!("配置段「{section}」使用默认值"),
+            detail: "该段不是 JSON 对象".to_string(),
+        });
+        return fallback;
+    };
+    let mut table = BTreeMap::new();
+    for (name, raw) in entries {
+        match serde_json::from_value::<T>(raw) {
+            Ok(value) => {
+                table.insert(name, value);
+            }
+            Err(err) => warnings.push(ConfigWarning {
+                message: format!("配置项「{section}.{name}」已忽略"),
+                detail: format!("值不合法：{err}"),
+            }),
+        }
+    }
+    table
 }
 
 /// 让 `dmcl-install` 用配置里的 java 选择去跑安装器 processor。
@@ -370,52 +601,77 @@ mod tests {
     use super::*;
     use dmcl_mcmeta::source::MirrorPolicy;
 
+    fn temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("dmcl-config-{label}-{}", std::process::id()))
+    }
+
     #[test]
-    fn reads_the_same_dotted_json_as_the_d_version() {
-        // D 里的 `launch_java` ⇒ `launch.java`，`download_mirror` ⇒ `download.mirror`……
+    fn reads_the_global_layout() {
         let text = r#"{
-            "launch": { "java": "myjdk", "window_width": 1280,
-                        "java_configs": { "jdk": "/usr/bin/java" } },
-            "download": { "mirror": "mirror-first" }
+            "launch": {
+                "java": "jdk",
+                "account": "steve",
+                "window_width": 1280
+            },
+            "accounts": {
+                "steve": { "type": "offline", "username": "Steve" }
+            },
+            "javas": { "jdk": "/usr/lib/jvm/java-17/bin/java" },
+            "minecraft_roots": { "test": "/mc" },
+            "minecraft_root": "test",
+            "download": { "mirror": "mirror-first", "skip_music": true }
         }"#;
-        let config: Config = serde_json::from_str(text).unwrap();
-        assert_eq!(config.launch.java, JavaChoice::Named("myjdk".to_string()));
+        let (config, warnings) = Config::parse(text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.launch.java, JavaChoice::Named("jdk".to_string()));
+        assert_eq!(config.launch.account.as_deref(), Some("steve"));
         assert_eq!(config.launch.window_width, 1280);
         assert_eq!(
-            config.launch.java_configs.get("jdk").unwrap(),
-            &PathBuf::from("/usr/bin/java")
+            config.accounts.get("steve"),
+            Some(&AccountConfig::Offline {
+                username: "Steve".to_string()
+            })
         );
+        assert_eq!(
+            config.javas.get("jdk"),
+            Some(&PathBuf::from("/usr/lib/jvm/java-17/bin/java"))
+        );
+        assert_eq!(
+            config.minecraft_roots.get("test"),
+            Some(&PathBuf::from("/mc"))
+        );
+        assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
+        assert!(config.download.skip_music);
         // 缺键保留默认值
         assert_eq!(config.launch.window_height, 480);
         assert_eq!(config.launch.min_memory, 512);
         assert_eq!(config.download.max_tasks, 64);
-        assert_eq!(config.download.chunk_size_mib, 4);
-        assert_eq!(config.account.username, "player");
     }
 
     #[test]
-    fn serialises_to_the_same_key_layout() {
-        let value = serde_json::to_value(Config::default()).unwrap();
-        assert!(value["launch"]["java"].is_string());
-        assert!(value["launch"]["minecraft_root_path"].is_string());
-        assert!(value["account"]["online_mode"].is_boolean());
-        assert!(value["download"]["max_tasks"].is_number());
-        assert!(value["download"]["mirror"].is_string());
-        assert!(value.get("cli").is_none());
-    }
-
-    #[test]
-    fn empty_document_yields_all_defaults() {
-        let config: Config = serde_json::from_str("{}").unwrap();
+    fn defaults_include_a_player_account_a_default_root_and_launch() {
+        let config = Config::default();
+        assert_eq!(
+            config.accounts.get("player"),
+            Some(&AccountConfig::Offline {
+                username: "player".to_string()
+            })
+        );
+        assert_eq!(
+            config.minecraft_roots.get("default"),
+            Some(&PathBuf::from(".minecraft"))
+        );
+        assert_eq!(config.minecraft_root, "default");
+        assert_eq!(config.launch.account.as_deref(), Some("player"));
         assert!(config.launch.java.is_auto());
         assert_eq!(config.launch.custom_info, LAUNCHER_NAME);
         assert_eq!(config.download.mirror, MirrorPolicy::OfficialFirst);
+        assert!(!config.download.skip_music);
     }
 
     #[test]
-    fn invalid_values_fall_back_to_defaults_with_warnings() {
-        // D 的 `int` 会接受这些值并一路传给 JVM
+    fn invalid_fields_fall_back_to_their_defaults_with_warnings() {
         let (config, warnings) = Config::parse(
             r#"{
                 "launch": { "window_width": -1, "window_height": 720, "max_memory": -2048 },
@@ -424,7 +680,6 @@ mod tests {
         );
         assert_eq!(config.launch.window_width, 854);
         assert_eq!(config.launch.max_memory, 2048);
-        // 合法的项照常生效
         assert_eq!(config.launch.window_height, 720);
         assert_eq!(config.download.max_tasks, 8);
         assert_eq!(warnings.len(), 2);
@@ -440,160 +695,206 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_and_sections_are_ignored_with_warnings() {
+    fn old_sections_and_fields_are_ignored_with_warnings() {
         let (config, warnings) = Config::parse(
             r#"{
-                "cli": { "anything": true },
-                "launch": { "nope": 1, "window_width": 1024 },
-                "account": { "username": "steve" }
+                "account": { "username": "steve" },
+                "launch": {
+                    "java_configs": { "jdk": "/usr/bin/java" },
+                    "minecraft_root_path": "/mc",
+                    "window_width": 1024
+                },
+                "download": { "i_dont_need_music": true }
             }"#,
         );
         assert_eq!(config.launch.window_width, 1024);
-        assert_eq!(config.account.username, "steve");
-        assert_eq!(warnings.len(), 2);
-        assert!(warnings.iter().any(
-            |warning| warning.message.contains("cli") && warning.detail.contains("未知配置段")
-        ));
+        assert_eq!(config.launch.account.as_deref(), Some("player"));
+        assert!(config.javas.is_empty());
+        assert_eq!(config.minecraft_root, "default");
+        assert!(!config.download.skip_music);
+        assert_eq!(warnings.len(), 4);
+        assert!(warnings.iter().any(|warning| {
+            warning.message.contains("account") && warning.detail.contains("未知配置段")
+        }));
         assert!(warnings
             .iter()
-            .any(|warning| warning.message.contains("launch.nope")
-                && warning.detail.contains("未知配置项")));
+            .any(|warning| warning.message.contains("launch.java_configs")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.minecraft_root_path")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("download.i_dont_need_music")));
     }
 
     #[test]
-    fn a_broken_section_falls_back_as_a_whole() {
-        let (config, warnings) =
-            Config::parse(r#"{"launch": 1, "account": {"username": "steve"}}"#);
-        assert_eq!(config.launch.window_width, 854);
-        assert_eq!(config.account.username, "steve");
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("launch"));
-        assert!(warnings[0].detail.contains("不是 JSON 对象"));
-    }
-
-    #[test]
-    fn a_broken_nested_field_falls_back_as_a_whole() {
+    fn dynamic_tables_replace_defaults_and_drop_bad_entries() {
         let (config, warnings) = Config::parse(
             r#"{
-                "launch": {
-                    "java": "jdk",
-                    "java_configs": { "jdk": 1, "jre": "/usr/bin/java" }
-                }
+                "launch": { "account": "steve" },
+                "accounts": {
+                    "steve": { "type": "offline", "username": "Steve" },
+                    "missing_name": { "type": "offline" },
+                    "bad_type": { "type": "online", "username": "x" }
+                },
+                "javas": { "good": "/usr/bin/java", "bad": 1 },
+                "minecraft_roots": { "good": "/mc", "bad": 1 },
+                "minecraft_root": "good"
             }"#,
         );
-        // 对象里有一个坏条目，整个字段回退默认（空表），其它字段保留
-        assert!(config.launch.java_configs.is_empty());
-        assert_eq!(config.launch.java, JavaChoice::Named("jdk".to_string()));
+        assert!(config.accounts.contains_key("steve"));
+        assert!(!config.accounts.contains_key("player"));
+        assert!(!config.accounts.contains_key("missing_name"));
+        assert!(!config.accounts.contains_key("bad_type"));
+        assert!(config.javas.contains_key("good"));
+        assert!(!config.javas.contains_key("bad"));
+        assert!(config.minecraft_roots.contains_key("good"));
+        assert!(!config.minecraft_roots.contains_key("bad"));
+        for key in [
+            "accounts.missing_name",
+            "accounts.bad_type",
+            "javas.bad",
+            "minecraft_roots.bad",
+        ] {
+            assert!(
+                warnings.iter().any(|warning| warning.message.contains(key)),
+                "缺少 {key} 的警告: {warnings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_minecraft_root_falls_back_to_default_or_first_entry() {
+        let (config, warnings) = Config::parse(
+            r#"{"minecraft_roots": {"a": "/a", "b": "/b"}, "minecraft_root": "nope"}"#,
+        );
+        assert_eq!(config.minecraft_root, "a");
+        assert_eq!(config.minecraft_roots.get("a"), Some(&PathBuf::from("/a")));
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("launch.java_configs"));
-        assert!(warnings[0].detail.contains("值不合法"));
+        assert!(warnings[0].message.contains("minecraft_root"));
     }
 
     #[test]
-    fn malformed_json_falls_back_to_all_defaults() {
-        let (config, warnings) = Config::parse("{ this is not json");
-        assert_eq!(config.launch.custom_info, LAUNCHER_NAME);
-        assert_eq!(config.download.mirror, MirrorPolicy::OfficialFirst);
+    fn select_minecraft_root_requires_an_existing_name() {
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("/mc"));
+        config.select_minecraft_root("test").unwrap();
+        assert_eq!(config.minecraft_root, "test");
+        assert_eq!(config.minecraft_root_path().unwrap(), Path::new("/mc"));
+
+        let err = config.select_minecraft_root("nope").unwrap_err();
+        assert!(err.to_string().contains("根目录不存在：nope"));
+        assert_eq!(config.minecraft_root, "test");
+    }
+
+    #[test]
+    fn empty_root_table_gets_the_default_root() {
+        let (config, warnings) = Config::parse(r#"{"minecraft_roots": {}}"#);
+        assert_eq!(
+            config.minecraft_roots.get("default"),
+            Some(&PathBuf::from(".minecraft"))
+        );
+        assert_eq!(config.minecraft_root, "default");
         assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].message, "整份配置使用默认值");
-        assert!(warnings[0].detail.contains("无法解析 JSON"));
+        assert!(warnings[0].message.contains("minecraft_roots"));
     }
 
     #[test]
-    fn the_config_maps_onto_the_crate_options() {
-        let mut config = Config::default();
-        config.launch.minecraft_root_path = PathBuf::from("/mc");
-        config.download.max_tasks = 8;
-        config.download.chunk_threshold_mib = 2;
-        config.download.chunk_size_mib = 1;
-        config.download.max_chunks_per_file = 3;
-        config.download.max_attempts = 5;
-        config.download.i_dont_need_music = true;
-        config.launch.window_width = 1920;
-        config.account.username = "steve".to_string();
-
-        let download = config.download_options();
-        assert_eq!(download.max_connections, 8);
-        assert_eq!(download.chunk_threshold, 2 * MIB);
-        assert_eq!(download.chunk_size, MIB);
-        assert_eq!(download.max_chunks_per_file, 3);
-        assert_eq!(download.max_attempts, 5);
-
-        let install = config.install_options(config.download_source());
-        assert_eq!(install.root_path, PathBuf::from("/mc"));
-        assert!(install.skip_music);
-        assert_eq!(install.download.max_connections, 8);
-
-        let option = config.launch_option(config.account(), "1.20.1");
-        assert_eq!(option.root_path, PathBuf::from("/mc"));
-        assert_eq!(option.window_width, 1920);
-        assert!(option.skip_music);
-        assert_eq!(option.account.get_name(), "steve");
+    fn empty_account_table_stays_empty_and_clears_the_selection() {
+        let (config, warnings) = Config::parse(r#"{"accounts": {}}"#);
+        assert!(config.accounts.is_empty());
+        assert_eq!(config.launch.account, None);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("launch.account"));
     }
 
-    #[tokio::test]
-    async fn configuration_round_trips_through_a_file() {
-        let dir = std::env::temp_dir().join(format!("dmcl-config-{}", std::process::id()));
-        let _ = tokio::fs::remove_dir_all(&dir).await;
-        let path = dir.join("dmcl.json");
-
-        let mut config = Config::default();
-        config.account.username = "tester".to_string();
-        config.download.mirror = MirrorPolicy::MirrorFirst;
-        // 故意用相对路径：`load` 会把它补成绝对路径（平台无关）
-        config.launch.minecraft_root_path = PathBuf::from("mc-root");
-
-        // 手动写到指定路径（`save` 用的是平台配置目录，测试里不碰它）
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        tokio::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
-            .await
-            .unwrap();
-
-        let loaded = Config::load(Some(&path)).await;
-        assert!(loaded.error.is_none());
-        let loaded = loaded.config;
-        assert_eq!(loaded.account.username, "tester");
-        assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
-        // 相对路径会被补成绝对路径（相对于进程当前目录）
-        assert_eq!(loaded.launch.minecraft_root_path, absolute("mc-root"));
-        assert!(loaded.launch.minecraft_root_path.is_absolute());
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    /// `load_sync` 与 `load` 走同一份解析 / 补路径逻辑（只是读文件同步）。
     #[test]
-    fn load_sync_matches_load() {
-        let dir = std::env::temp_dir().join(format!("dmcl-config-sync-{}", std::process::id()));
+    fn a_missing_named_java_falls_back_to_autoselect() {
+        let (config, warnings) = Config::parse(r#"{"launch": {"java": "nope"}}"#);
+        assert!(config.launch.java.is_auto());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("launch.java"));
+    }
+
+    #[test]
+    fn configuration_round_trips_through_a_file() {
+        let dir = temp_dir("roundtrip");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("dmcl.json");
 
         let mut config = Config::default();
-        config.account.username = "tester".to_string();
-        config.launch.minecraft_root_path = PathBuf::from("mc-root");
+        config.accounts.insert(
+            "steve".to_string(),
+            AccountConfig::Offline {
+                username: "Steve".to_string(),
+            },
+        );
+        config.launch.account = Some("steve".to_string());
+        config.download.mirror = MirrorPolicy::MirrorFirst;
+        config.download.skip_music = true;
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("mc-root"));
+        config.minecraft_root = "test".to_string();
+
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
-        let loaded = Config::load_sync(Some(&path));
-        assert!(loaded.error.is_none());
-        assert_eq!(loaded.config.account.username, "tester");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let loaded = runtime.block_on(Config::load(Some(&path)));
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        let loaded = loaded.config;
         assert_eq!(
-            loaded.config.launch.minecraft_root_path,
-            absolute("mc-root")
+            loaded.accounts.get("steve"),
+            Some(&AccountConfig::Offline {
+                username: "Steve".to_string()
+            })
         );
-
-        // 文件不存在 ⇒ 默认值（而不是报错 / 警告）
-        let missing = Config::load_sync(Some(&dir.join("missing.json")));
-        assert!(missing.error.is_none());
-        assert_eq!(missing.config.account.username, "player");
+        assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
+        assert!(loaded.download.skip_music);
+        assert_eq!(
+            loaded.minecraft_roots.get("test"),
+            Some(&absolute("mc-root"))
+        );
+        assert!(loaded.minecraft_roots["test"].is_absolute());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 坏配置项走 `load_sync` 时会被包进 `LoadedConfig::error`，配置本身仍可用。
+    #[test]
+    fn load_sync_matches_load() {
+        let dir = temp_dir("sync");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dmcl.json");
+
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("mc-root"));
+        config.minecraft_root = "test".to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+
+        let loaded = Config::load_sync(Some(&path));
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert_eq!(
+            loaded.config.minecraft_roots.get("test"),
+            Some(&absolute("mc-root"))
+        );
+
+        let missing = Config::load_sync(Some(&dir.join("missing.json")));
+        assert!(missing.error.is_none());
+        assert_eq!(missing.config.launch.account.as_deref(), Some("player"));
+        assert!(missing.config.minecraft_roots["default"].is_absolute());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn load_reports_problems_through_the_error_field() {
-        let dir = std::env::temp_dir().join(format!("dmcl-config-bad-{}", std::process::id()));
+        let dir = temp_dir("bad");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("dmcl.json");
         std::fs::create_dir_all(&dir).unwrap();
@@ -608,5 +909,211 @@ mod tests {
         assert!(error.warnings[0].detail.contains("值不合法"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_instance_file_uses_the_global_launch() {
+        let dir = temp_dir("instance-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), dir.join("mc"));
+        config.minecraft_root = "test".to_string();
+        config.launch.max_memory = 3000;
+
+        let loaded = config.load_instance("1.20.1").await;
+        assert!(loaded.error.is_none());
+        assert_eq!(loaded.launch.max_memory, 3000);
+        assert!(!instance_config_path(&dir.join("mc"), "1.20.1").exists());
+    }
+
+    #[tokio::test]
+    async fn instance_fields_override_only_what_they_mention() {
+        let dir = temp_dir("instance-partial");
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("mc");
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
+        config.minecraft_root = "test".to_string();
+        config.launch.max_memory = 3000;
+
+        let path = instance_config_path(&root, "1.20.1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = r#"{"launch": {"max_memory": 4096, "account": null}}"#;
+        std::fs::write(&path, text).unwrap();
+
+        let loaded = config.load_instance("1.20.1").await;
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert_eq!(loaded.launch.max_memory, 4096);
+        assert_eq!(loaded.launch.window_width, 854);
+        assert_eq!(loaded.launch.account, None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        let sync = config.load_instance_sync("1.20.1");
+        assert_eq!(sync.launch.max_memory, 4096);
+        assert_eq!(sync.launch.account, None);
+        assert!(sync.error.is_none());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_instance_fields_fall_back_to_the_global_values() {
+        let dir = temp_dir("instance-invalid");
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("mc");
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
+        config.minecraft_root = "test".to_string();
+        config.launch.max_memory = 3000;
+        config.launch.window_width = 1000;
+
+        let path = instance_config_path(&root, "1.20.1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{
+                "launch": {
+                    "max_memory": -1,
+                    "window_width": 1200,
+                    "unknown": true
+                },
+                "download": {}
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = config.load_instance("1.20.1").await;
+        assert_eq!(loaded.launch.max_memory, 3000);
+        assert_eq!(loaded.launch.window_width, 1200);
+        let error = loaded.error.as_ref().expect("应当有警告");
+        assert!(error
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.max_memory")));
+        assert!(error
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("launch.unknown")));
+        assert!(error
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("download")));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn instance_account_and_java_selections_are_validated_after_merging() {
+        let dir = temp_dir("instance-selection");
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("mc");
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
+        config.minecraft_root = "test".to_string();
+
+        let path = instance_config_path(&root, "1.20.1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"launch": {"account": "missing", "java": "missing"}}"#,
+        )
+        .unwrap();
+
+        let loaded = config.load_instance("1.20.1").await;
+        assert_eq!(loaded.launch.account, None);
+        assert!(loaded.launch.java.is_auto());
+        let error = loaded.error.as_ref().expect("应当有警告");
+        assert_eq!(error.warnings.len(), 2);
+        assert!(config
+            .selected_account(&loaded.launch)
+            .err()
+            .expect("应当报错")
+            .to_string()
+            .contains("没有选择账户"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn selected_account_requires_an_explicit_valid_selection() {
+        let config = Config::default();
+        let mut launch = config.launch.clone();
+        launch.account = None;
+        assert!(config.selected_account(&launch).is_err());
+
+        launch.account = Some("nope".to_string());
+        let err = config.selected_account(&launch).err().expect("应当报错");
+        assert!(err.to_string().contains("账号不存在：nope"));
+
+        launch.account = Some("player".to_string());
+        assert_eq!(
+            config.selected_account(&launch).unwrap().get_name(),
+            "player"
+        );
+    }
+
+    #[test]
+    fn the_config_maps_onto_the_crate_options() {
+        let dir = temp_dir("options");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), dir.join("mc"));
+        config.minecraft_root = "test".to_string();
+        config.download.max_tasks = 8;
+        config.download.chunk_threshold_mib = 2;
+        config.download.chunk_size_mib = 1;
+        config.download.max_chunks_per_file = 3;
+        config.download.max_attempts = 5;
+        config.download.skip_music = true;
+        config.accounts.insert(
+            "steve".to_string(),
+            AccountConfig::Offline {
+                username: "Steve".to_string(),
+            },
+        );
+        config.launch.account = Some("steve".to_string());
+        config.launch.window_width = 1920;
+        config.launch.min_memory = 1024;
+        config.launch.max_memory = 4096;
+        config.launch.custom_info = "test".to_string();
+        config
+            .javas
+            .insert("jdk".to_string(), PathBuf::from("/nonexistent/bin/java"));
+        config.launch.java = JavaChoice::Named("jdk".to_string());
+
+        let download = config.download_options();
+        assert_eq!(download.max_connections, 8);
+        assert_eq!(download.chunk_threshold, 2 * MIB);
+        assert_eq!(download.chunk_size, MIB);
+        assert_eq!(download.max_chunks_per_file, 3);
+        assert_eq!(download.max_attempts, 5);
+
+        let install = config
+            .install_options(config.download_source(), &config.launch)
+            .unwrap();
+        assert_eq!(install.root_path, dir.join("mc"));
+        assert!(install.skip_music);
+        assert_eq!(install.download.max_connections, 8);
+
+        let option = config.launch_option(&config.launch, "1.20.1").unwrap();
+        assert_eq!(option.root_path, dir.join("mc"));
+        assert_eq!(option.window_width, 1920);
+        assert_eq!(option.min_memory, 1024);
+        assert_eq!(option.max_memory, 4096);
+        assert_eq!(option.custom_info, "test");
+        assert!(option.skip_music);
+        assert_eq!(option.account.get_name(), "Steve");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

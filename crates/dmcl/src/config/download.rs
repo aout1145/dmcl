@@ -10,7 +10,7 @@ pub struct DownloadConfig {
     /// 同时进行的下载连接数上限。
     pub max_tasks: usize,
     /// 跳过 `*.ogg` 资源（音乐与音效）。
-    pub i_dont_need_music: bool,
+    pub skip_music: bool,
     /// 镜像使用策略（仅官方 / 官方优先 / 镜像优先）。
     pub mirror: MirrorPolicy,
     /// 超过这个大小（MiB）就分块下载。
@@ -27,7 +27,7 @@ impl Default for DownloadConfig {
     fn default() -> Self {
         Self {
             max_tasks: 64,
-            i_dont_need_music: false,
+            skip_music: false,
             mirror: MirrorPolicy::default(),
             chunk_threshold_mib: 8,
             chunk_size_mib: 4,

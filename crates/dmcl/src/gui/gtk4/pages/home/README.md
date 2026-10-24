@@ -31,9 +31,10 @@
 （`Idle` / `Starting` / `Running` / `Stopping`）记录状态，底部栏的文案、图标、按钮动作都由它
 派生。
 
-- **启动**：home 用实例名拼出 `dmcl_launch::launch_chain`，交给 `Shell::run`；一个扁平的
-  `relm4::spawn` 等 `handle.finished()`，成功就发 `HomeMsg::GameStarted`，失败发
-  `LaunchFailed`。
+- **启动**：home 先同步读取实例配置；没有警告时用「全局 `launch` + 实例覆盖」拼出
+  `dmcl_launch::launch_chain`，交给 `Shell::run`；有警告时先弹确认框，点「继续启动」才
+  走同一条路径。一个扁平的 `relm4::spawn` 等 `handle.finished()`，成功就发
+  `HomeMsg::GameStarted`，失败发 `LaunchFailed`。
 - **运行状态不轮询**：把 `GameMonitor` 交给一个 supervisor 任务：
 
   ```text
@@ -61,8 +62,14 @@
 ## 消息
 
 `HomeMsg`（`message.rs`）覆盖主页内部动作：`Reload` / `Loaded` / `Select(DynamicIndex)` /
-`Deselect` / `Launch(DynamicIndex)` / `Toggle` / `GameStarted` / `GameExited { name, abnormal }` /
-`LaunchFailed` / `Manage`。
+`Deselect` / `Launch(DynamicIndex)` / `Toggle` / `LaunchConfirmed { name, launch }` /
+`GameStarted` / `GameExited { name, abnormal }` / `LaunchFailed` / `Manage`。
+
+## 实例配置警告
+
+实例目录里的 `dmcl.json` 只覆盖全局 `launch`，且只读。读取后若有坏字段、未知键或失效的
+账户 / Java 选择，先弹 `AdwAlertDialog` 逐条列出警告；「取消」是默认响应，实例保持
+`Idle`；「继续启动」才用内存里修复过的 `LaunchConfig` 开始启动链。不写回实例文件。
 
 ## 测试
 

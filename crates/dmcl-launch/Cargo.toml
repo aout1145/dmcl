@@ -20,6 +20,5 @@ sha1.workspace = true
 hex.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
-shell-words.workspace = true
 version-compare.workspace = true
 anyhow.workspace = true

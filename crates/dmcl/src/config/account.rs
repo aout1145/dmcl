@@ -1,20 +1,19 @@
-//! `account.*` 段。
+//! `accounts.*` 段。
 
 use serde::{Deserialize, Serialize};
 
-/// `account.*` 段。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AccountConfig {
-    /// 仍未使用的配置项：账号目前只有离线实现。
-    pub online_mode: bool,
-    pub username: String,
+/// 一个账户条目。
+///
+/// 目前只有离线账户；以后加微软 / Yggdrasil 登录时在这里增加变体即可。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AccountConfig {
+    Offline { username: String },
 }
 
 impl Default for AccountConfig {
     fn default() -> Self {
-        Self {
-            online_mode: false,
+        Self::Offline {
             username: "player".to_string(),
         }
     }

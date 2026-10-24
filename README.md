@@ -12,6 +12,9 @@
 - **启动游戏** —— 自动挑选 Java、生成 JVM 与游戏参数、启动子进程并监控（可停止）。
 - **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
   需要自己决定时也可以直接调用库里的 `dmcl_install::check_integrity`。
+- **多账户 / 多根目录 / 多 Java** —— 在全局配置里维护账户、Minecraft 根目录与 Java 表。
+- **全局默认 + 实例覆盖** —— 全局 `launch` 是所有实例的默认启动配置；每个实例可以
+  在 `versions/<version_name>/dmcl.json` 里只写要覆盖的字段。
 - **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
   `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
 - **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，校验通过才改名，
@@ -56,8 +59,8 @@ cargo build --release
 ./target/release/dmcl --help
 ```
 
-不带子命令时默认尝试打开图形界面；没有编译 `gtk4` 时会回退到交互式菜单。显式的
-`dmcl gui` 在前端不可用时直接报错，不会回退；也可以显式运行 `dmcl prompt`。
+不带子命令时默认尝试打开图形界面；没有编译 `gtk4` 时会打印帮助并以非零状态退出。
+显式的 `dmcl gui` 在前端不可用时直接报错，不会回退。
 
 ### 自包含包
 
@@ -70,18 +73,11 @@ CI 的 GTK4 任务会产出已经带上 GTK 运行时的包：
 
 ## 快速开始
 
-不带子命令时默认打开图形界面（没有 `gtk4` 时回退到交互菜单），所以：
+带 GTK4 的构建不带子命令时会打开图形界面；只构建命令行时用子命令操作：
 
 ```bash
-dmcl                 # 打开图形界面
-dmcl prompt          # 交互式命令行菜单
-```
-
-命令行常用流程：
-
-```bash
-# 找本机 Java 并写进配置（也可以 dmcl java add <path> [name]）
-dmcl java search
+# 找本机 Java 并写进全局配置
+dmcl search-java
 
 # 装原版 1.20.1，本地版本名也叫 1.20.1
 dmcl install 1.20.1
@@ -98,9 +94,9 @@ dmcl list
 dmcl list-mc --type=release,snapshot
 ```
 
-首次启动前需要一份可用的 Java；`dmcl java search` 会扫描本机并写入配置。账号目前只有
-离线模式（`account.username`），联机登录还没实现。图形界面的账号、设置、实例管理页面
-仍在开发中。
+首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描本机并写入全局配置。账户、
+根目录和 Java 表也可以通过直接编辑全局 `dmcl.json` 维护。账号目前只有离线模式，
+联机登录还没实现。图形界面的账号、设置、实例管理页面仍在开发中。
 
 ## 命令
 
@@ -115,29 +111,23 @@ dmcl list-mc --type=release,snapshot
 | `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                                    |
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                            |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                         |
-| `java [list\|search\|add\|remove\|use]`                                     | 管理本机 Java；不带子命令进交互菜单                        |
+| `search-java`                                                               | 搜索本机 Java，合并进全局配置并保存                        |
 | `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错）      |
-| `prompt`                                                                    | 交互式菜单                                                 |
-| `config`                                                                    | 查看或编辑配置；非终端下只打印                             |
 | `version`                                                                   | 显示版本与构建时间                                         |
 
-不带子命令时默认走 GUI；没有编译 `gtk4` 时回退到交互菜单。
+不带子命令时：有 GTK4 前端就打开 GUI；没有就打印帮助并以非零状态退出。
 
-### `java` 子命令
+全局选项 `--minecraft-root=<name>` 用来在本次运行中切换 `minecraft_roots` 里的根目录，
+可以放在子命令前或后，不会写回全局配置：
 
-| 子命令                        | 说明                           |
-| ----------------------------- | ------------------------------ |
-| `java list`                   | 列出已配置的 Java 与当前选择   |
-| `java search`                 | 搜索本机 Java 并**合并**进配置 |
-| `java add <path> [name]`      | 手动添加 Java                  |
-| `java remove <name>`          | 删除 Java 配置                 |
-| `java use <name\|autoselect>` | 选择使用的 Java                |
-
-`dmcl java`（无子命令）进交互菜单。
+```bash
+dmcl --minecraft-root=test launch 1.20.1
+dmcl list --minecraft-root=test
+```
 
 ## 配置文件
 
-位置：`<系统配置目录>/dmcl.json`
+全局配置位置：`<系统配置目录>/dmcl.json`
 （Linux `$XDG_CONFIG_HOME` 或 `~/.config`；Windows `%APPDATA%`；
 macOS `~/Library/Application Support`）。
 
@@ -146,9 +136,8 @@ macOS `~/Library/Application Support`）。
 ```json
 {
   "launch": {
-    "java_configs": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
     "java": "autoselect",
-    "minecraft_root_path": "/home/me/.minecraft",
+    "account": "player",
     "window_width": 854,
     "window_height": 480,
     "min_memory": 512,
@@ -157,10 +146,19 @@ macOS `~/Library/Application Support`）。
     "additional_jvm": "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True",
     "additional_game": ""
   },
-  "account": { "online_mode": false, "username": "player" },
+  "accounts": {
+    "player": { "type": "offline", "username": "player" }
+  },
+  "javas": {
+    "jdk-17": "/usr/lib/jvm/java-17/bin/java"
+  },
+  "minecraft_roots": {
+    "default": "/home/me/.minecraft"
+  },
+  "minecraft_root": "default",
   "download": {
     "max_tasks": 64,
-    "i_dont_need_music": false,
+    "skip_music": false,
     "mirror": "official-first",
     "chunk_threshold_mib": 8,
     "chunk_size_mib": 4,
@@ -170,12 +168,43 @@ macOS `~/Library/Application Support`）。
 }
 ```
 
-- `launch.java` 可以是 `"autoselect"`，也可以是 `java_configs` 里的某个名字。
-- `launch.minecraft_root_path` 是游戏根目录，相对路径会按当前工作目录补成绝对路径。
+- `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
+- `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
+- `minecraft_root` 指向 `minecraft_roots` 里的某个根目录；相对路径在加载时按当前工作
+  目录补成绝对路径。
+- `download.skip_music` 为 `true` 时跳过 `*.ogg` 资源（音乐与音效）。
 - `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
   失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
-- `account.online_mode` 目前未使用；只有离线账号（`account.username`）。
+- 账户条目目前只支持离线账户，格式为
+  `{ "type": "offline", "username": "..." }`。
+
+### 实例覆盖
+
+每个实例可以在自己的版本目录里写一份只包含 `launch` 的配置：
+
+```text
+<minecraft_root>/versions/<version_name>/dmcl.json
+```
+
+```json
+{
+  "launch": {
+    "account": "steve",
+    "max_memory": 4096
+  }
+}
+```
+
+- 文件不存在：完全使用全局 `launch`，不会自动创建文件。
+- 文件存在：以全局 `launch` 为底，实例里出现的字段逐项覆盖，没写的字段继续继承全局。
+- 实例配置只读：不会自动创建，也不会自动写回；坏字段的修复只在内存里生效。
+- 实例配置里有警告时，GUI 会在启动链开始前弹出确认框；点「取消」不启动，点
+  「继续启动」才使用修复后的配置继续。
+- 安装阶段还没有实例目录，使用全局 `launch`，不读取、不创建实例 `dmcl.json`。
+
+账户、根目录和 Java 表完全靠编辑全局 `dmcl.json` 维护；只有 `search-java` 会自动
+写入 Java 表。
 
 ## 开发与测试
 

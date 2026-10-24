@@ -11,9 +11,16 @@ use crate::cli::progress::ProgressPrinter;
 
 /// `dmcl launch <version-name>`。
 pub(crate) async fn run(vername: &str, config: &Config) -> Result<()> {
-    let source = config.download_source();
-    let option = config.launch_option(config.account(), vername);
-    let install = Arc::new(config.install_options(source));
+    let loaded = config.load_instance(vername).await;
+    if let Some(error) = &loaded.error {
+        for warning in &error.warnings {
+            eprintln!("错误：{warning}");
+        }
+        return Err(error.clone().into());
+    }
+    let launch = loaded.launch;
+    let option = config.launch_option(&launch, vername)?;
+    let install = Arc::new(config.install_options(config.download_source(), &launch)?);
 
     let mut printer = ProgressPrinter::new();
     let mut monitor = dmcl_launch::launch_chain(option, install)

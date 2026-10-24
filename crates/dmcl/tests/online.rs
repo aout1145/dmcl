@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use dmcl::config::Config;
+use dmcl::config::{AccountConfig, Config};
 use dmcl_launch::GameLauncher;
 
 const VERSION: &str = "1.7.10";
@@ -22,10 +22,17 @@ fn work_dir() -> PathBuf {
 
 fn config_for(root: PathBuf) -> Config {
     let mut config = Config::default();
-    config.launch.minecraft_root_path = root;
+    config.minecraft_roots.insert("test".to_string(), root);
+    config.minecraft_root = "test".to_string();
     config.download.max_tasks = 8;
     config.download.chunk_threshold_mib = 1;
-    config.account.username = "player".to_string();
+    config.accounts.insert(
+        "player".to_string(),
+        AccountConfig::Offline {
+            username: "player".to_string(),
+        },
+    );
+    config.launch.account = Some("player".to_string());
     config
 }
 
@@ -37,7 +44,9 @@ async fn the_whole_chain_runs_from_a_config_document() {
 
     // 配置 → 下载源 / 安装选项
     let source = config.download_source();
-    let install = config.install_options(source);
+    let install = config
+        .install_options(source, &config.launch)
+        .expect("install_options");
     assert_eq!(install.root_path, root);
     assert_eq!(install.download.max_connections, 8);
 
@@ -50,7 +59,9 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .is_file());
 
     // 配置 → 启动选项 → 启动器
-    let option = config.launch_option(config.account(), VERSION);
+    let option = config
+        .launch_option(&config.launch, VERSION)
+        .expect("launch_option");
     assert_eq!(option.account.get_name(), "player");
     let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
 

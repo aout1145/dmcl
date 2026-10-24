@@ -71,8 +71,10 @@ impl CustomPage {
     /// 路径用原始名称（和安装器一致），只把全空白当作空；不要 `trim` 后再查，
     /// 否则 `"26.3 "` 会被误判成已有的 `26.3`。
     fn version_exists(&self, name: &str) -> bool {
-        !name.trim().is_empty()
-            && version_dir(&self.config.launch.minecraft_root_path, name).exists()
+        let Ok(root) = self.config.minecraft_root_path() else {
+            return false;
+        };
+        !name.trim().is_empty() && version_dir(root, name).exists()
     }
 
     /// 按同组选择刷新加载器冲突：已选中的行让其它同组行禁用并显示「与 xx 冲突」。
@@ -165,7 +167,16 @@ impl CustomPage {
                 spec = spec.with_loader(slot.kind, item.id.clone());
             }
         }
-        let options = Arc::new(self.config.install_options(self.config.download_source()));
+        let options = match self
+            .config
+            .install_options(self.config.download_source(), &self.config.launch)
+        {
+            Ok(options) => Arc::new(options),
+            Err(err) => {
+                self.shell.toast(&format!("无法安装：{err:#}"));
+                return;
+            }
+        };
         // 结果句柄故意丢掉：任务已经在 Shell / 任务窗口那边独立跑，本页马上关闭。
         let _ = self.shell.run(
             format!("安装 {name}"),

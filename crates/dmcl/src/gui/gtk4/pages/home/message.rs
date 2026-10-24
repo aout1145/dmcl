@@ -3,6 +3,8 @@
 use dmcl_mcmeta::layout::InstalledVersion;
 use relm4::factory::DynamicIndex;
 
+use crate::config::LaunchConfig;
+
 /// 主页组件收到的消息。
 #[derive(Debug)]
 pub(crate) enum HomeMsg {
@@ -18,6 +20,8 @@ pub(crate) enum HomeMsg {
     Launch(DynamicIndex),
     /// 按下操作栏的启动 / 取消 / 停止按钮。
     Toggle,
+    /// 用户在实例配置警告框里点了「继续启动」。
+    LaunchConfirmed { name: String, launch: LaunchConfig },
     /// 游戏进程已开始。
     GameStarted(String),
     /// 游戏进程已退出。`abnormal` 表示非正常退出（非 0 退出码 / 等不到状态）。

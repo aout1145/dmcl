@@ -3,11 +3,10 @@
 //! `mod.rs`（父模块）只放命令定义、本地化与分发；这里按命令分文件，
 //! 每个命令只关心自己那一件事。
 
-pub(crate) mod config;
 pub(crate) mod install;
-pub(crate) mod java;
 pub(crate) mod launch;
 pub(crate) mod list;
+pub(crate) mod search_java;
 pub(crate) mod version;
 
 use dialoguer::console::Term;

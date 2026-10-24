@@ -2,7 +2,7 @@
 //!
 //! 目前只有 GTK4（libadwaita）一个前端，实现放在 `gtk4` 子模块里，由 cargo feature
 //! `gtk4` 门控（默认关，用 `--features gtk4` 开启）。显式的 `gui` 命令在前端不可用时
-//! 直接报错；无子命令走 [`run_default`]（有前端就启动 GUI，否则进交互菜单）。
+//! 直接报错；无子命令走 [`run_default`]（有前端就启动 GUI，否则打印帮助并退出）。
 
 use anyhow::{anyhow, Result};
 
@@ -23,20 +23,21 @@ pub fn is_available(frontend: Option<&str>) -> bool {
     }
 }
 
-/// 无子命令时的默认路径：有 GUI 前端就启动 GUI，否则进交互菜单。
+/// 无子命令时的默认路径：有 GUI 前端就启动 GUI，否则打印帮助并以非零状态退出。
 pub fn run_default(loaded: LoadedConfig) -> Result<()> {
     if is_available(None) {
         run(None, loaded)
     } else {
-        let LoadedConfig { mut config, error } = loaded;
-        crate::cli::run_prompt(&mut config, error)
+        #[cfg(not(feature = "gtk4"))]
+        let _ = loaded;
+        crate::cli::print_help()?;
+        std::process::exit(1)
     }
 }
 
 /// 启动图形前端，直到窗口关闭才返回。
 ///
-/// 前端不可用时**直接报错**，不回退到交互式菜单；回退只发生在无子命令的默认路径
-/// [`run_default`] 上。
+/// 前端不可用时**直接报错**；回退只发生在无子命令的默认路径 [`run_default`] 上。
 pub fn run(frontend: Option<String>, loaded: LoadedConfig) -> Result<()> {
     // 没编译 gtk4 时 loaded 不会进入 gtk4::run，显式消费掉避免 unused 警告。
     #[cfg(not(feature = "gtk4"))]

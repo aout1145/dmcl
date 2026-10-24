@@ -9,6 +9,7 @@
 //! 手动刷新。
 
 mod instance_card;
+mod instance_warning;
 pub(crate) mod message;
 
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::installed_versions;
 use dmcl_task::CancelHandle;
 
-use crate::config::Config;
+use crate::config::{Config, LaunchConfig};
 use crate::gui::gtk4::app::Shell;
 
 use instance_card::{CardOut, InstanceCard};
@@ -52,6 +53,8 @@ pub(crate) enum InstanceState {
 pub(crate) struct HomePage {
     shell: Rc<Shell>,
     config: Config,
+    /// 主窗口：实例配置警告框以它为父窗口。
+    window: adw::ApplicationWindow,
     /// 实例磁贴：模型即状态源，工厂负责同步控件。
     instances: FactoryVecDeque<InstanceCard>,
     /// 当前选中的磁贴。
@@ -66,7 +69,7 @@ pub(crate) struct HomePage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for HomePage {
-    type Init = (Rc<Shell>, Config);
+    type Init = (Rc<Shell>, Config, adw::ApplicationWindow);
     type Input = HomeMsg;
     type Output = ();
 
@@ -158,7 +161,7 @@ impl SimpleComponent for HomePage {
     }
 
     fn init(
-        (shell, config): Self::Init,
+        (shell, config, window): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -171,6 +174,7 @@ impl SimpleComponent for HomePage {
         let model = HomePage {
             shell,
             config,
+            window,
             instances,
             selected: None,
             cancels: HashMap::new(),
@@ -182,17 +186,38 @@ impl SimpleComponent for HomePage {
 
         // 安装 / 删除版本后自动刷新：主页是常驻页面，不能只靠切标签触发。
         // 先同步拍一份快照再触发首次 Reload，避免「Reload 读完到监听开始」之间漏掉变化。
-        let versions_dir = model.config.launch.minecraft_root_path.join("versions");
-        let snapshot = versions_snapshot(&versions_dir);
-        relm4::spawn(watch_versions(versions_dir, snapshot, sender.clone()));
-        sender.input(HomeMsg::Reload);
+        match model.config.minecraft_root_path() {
+            Ok(root) => {
+                let versions_dir = root.join("versions");
+                let snapshot = versions_snapshot(&versions_dir);
+                relm4::spawn(watch_versions(versions_dir, snapshot, sender.clone()));
+                sender.input(HomeMsg::Reload);
+            }
+            Err(err) => {
+                model
+                    .shell
+                    .toast(&format!("无法读取 Minecraft 根目录：{err:#}"));
+            }
+        }
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             HomeMsg::Reload => {
-                let root_path = self.config.launch.minecraft_root_path.clone();
+                let root_path = match self.config.minecraft_root_path() {
+                    Ok(root) => root.to_path_buf(),
+                    Err(err) => {
+                        {
+                            let mut guard = self.instances.guard();
+                            guard.clear();
+                        }
+                        self.selected = None;
+                        self.shell
+                            .toast(&format!("无法读取 Minecraft 根目录：{err:#}"));
+                        return;
+                    }
+                };
                 let sender = sender.clone();
                 relm4::spawn(async move {
                     let result = installed_versions(&root_path)
@@ -222,7 +247,7 @@ impl SimpleComponent for HomePage {
                     return;
                 };
                 match self.state_at(&index) {
-                    Some(InstanceState::Idle) => self.start(name, &sender),
+                    Some(InstanceState::Idle) => self.request_start(name, &sender),
                     Some(InstanceState::Starting) => {
                         self.shell.toast(&format!("{name} 正在启动"));
                     }
@@ -243,10 +268,13 @@ impl SimpleComponent for HomePage {
                     return;
                 };
                 match self.state_at(&index) {
-                    Some(InstanceState::Idle) => self.start(name, &sender),
+                    Some(InstanceState::Idle) => self.request_start(name, &sender),
                     Some(InstanceState::Starting | InstanceState::Running) => self.stop(&name),
                     _ => {}
                 }
+            }
+            HomeMsg::LaunchConfirmed { name, launch } => {
+                self.begin_start(name, launch, &sender);
             }
 
             HomeMsg::GameStarted(name) => {
@@ -286,11 +314,17 @@ impl SimpleComponent for HomePage {
 
 impl HomePage {
     /// 拼出 `dmcl-launch` 的一站式启动链。
-    fn launch_chain(&self, name: &str) -> dmcl_task::TaskChain<(), GameMonitor> {
-        let option = self.config.launch_option(self.config.account(), name);
-        let install =
-            std::sync::Arc::new(self.config.install_options(self.config.download_source()));
-        dmcl_launch::launch_chain(option, install)
+    fn launch_chain(
+        &self,
+        name: &str,
+        launch: &LaunchConfig,
+    ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
+        let option = self.config.launch_option(launch, name)?;
+        let install = std::sync::Arc::new(
+            self.config
+                .install_options(self.config.download_source(), launch)?,
+        );
+        Ok(dmcl_launch::launch_chain(option, install))
     }
 
     fn selected_card(&self) -> Option<&InstanceCard> {
@@ -383,9 +417,33 @@ impl HomePage {
         }
     }
 
-    fn start(&mut self, name: String, sender: &ComponentSender<Self>) {
+    /// 读取实例配置；有警告先弹确认框，否则直接开始。
+    fn request_start(&mut self, name: String, sender: &ComponentSender<Self>) {
+        let loaded = self.config.load_instance_sync(&name);
+        if let Some(error) = loaded.error {
+            let launch = loaded.launch;
+            let sender = sender.clone();
+            let msg_name = name.clone();
+            instance_warning::show(&self.window, &error, move || {
+                sender.input(HomeMsg::LaunchConfirmed {
+                    name: msg_name.clone(),
+                    launch: launch.clone(),
+                });
+            });
+        } else {
+            self.begin_start(name, loaded.launch, sender);
+        }
+    }
+
+    fn begin_start(&mut self, name: String, launch: LaunchConfig, sender: &ComponentSender<Self>) {
+        let chain = match self.launch_chain(&name, &launch) {
+            Ok(chain) => chain,
+            Err(err) => {
+                self.shell.toast(&format!("启动 {name} 失败：{err:#}"));
+                return;
+            }
+        };
         self.set_state(&name, InstanceState::Starting);
-        let chain = self.launch_chain(&name);
         self.cancels.insert(name.clone(), chain.cancel_handle());
         let handle = self.shell.run(format!("启动 {name}"), chain, ());
 

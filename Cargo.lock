@@ -411,7 +411,6 @@ dependencies = [
  "relm4",
  "serde",
  "serde_json",
- "shell-words",
  "tokio",
 ]
 
@@ -457,7 +456,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "shell-words",
  "tokio",
  "uuid",
  "version-compare",

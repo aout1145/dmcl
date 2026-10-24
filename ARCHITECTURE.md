@@ -18,7 +18,7 @@ dmcl-rs/
     ├── dmcl-download/         # 并发 / 分块下载（实现 dmcl-task 的 Task）
     ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge 安装、完整性检查
     ├── dmcl-launch/           # 账号、java、命令行生成、启动
-    └── dmcl/                  # 应用：config + cli（未来在这里加 gui）
+    └── dmcl/                  # 应用：config + cli + gui（GTK4）
 ```
 
 ## 依赖关系
@@ -144,13 +144,23 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 
 ### `dmcl` —— 应用
 
-唯一知道配置文件的一层：把 `dmcl.json` 读成 `Config`，翻译成各业务 crate 的
-`*Options`，再分发命令。它同时是库（`dmcl`）与可执行文件（`bin/dmcl`），
-方便将来复用到 GUI / 守护进程。
+唯一知道配置文件的一层：把全局 `dmcl.json` 和实例覆盖读成 `Config` / `LaunchConfig`，
+翻译成各业务 crate 的 `*Options`，再分发命令。它同时是库（`dmcl`）与可执行文件
+（`bin/dmcl`），方便将来复用到 GUI / 守护进程。
 
-配置加载按项容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它当
-错误、逐条打印后退出，GUI 在启动后弹窗提示（确认写回修复后的配置，忽略则不写）并继续用
-默认配置。
+全局配置包含 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
+`download`。配置加载按项容错：坏掉或不认识的配置项回退默认值，问题汇总成
+`ConfigError`；CLI 把它当错误、逐条打印后退出，GUI 在启动后弹窗提示（确认写回修复后的
+全局配置，忽略则不写）并继续使用修复后的配置。
+
+实例配置位于 `<minecraft_root>/versions/<version_name>/dmcl.json`，只写 `launch`，
+以全局 `launch` 为底逐字段覆盖；文件不存在时完全使用全局 `launch`。实例配置只读：
+不自动创建、不自动写回。加载时账户 / Java 选择项失效会回退并警告，其中
+`launch.account` 失效时回退为 `null`，启动时报错。GUI 在启动实例前若读到实例配置
+警告，会先弹确认框；确认后使用内存里修复过的配置继续，取消则不启动。
+
+CLI 的全局选项 `--minecraft-root=<name>` 在本次运行中切换 `minecraft_root` 选择项
+（名字必须已在 `minecraft_roots` 里），不写回配置。
 
 ## 设计要点
 
@@ -291,17 +301,15 @@ monitor.wait().await?;
 ## 应用层与前端
 
 `dmcl` 的职责只有三件：把配置翻译成各 crate 的 `*Options`、打印事件流、显示结果。
-CLI 用 `clap` derive 定义命令，交互式菜单用 `dialoguer`。命令定义、本地化与分发在
-`cli/mod.rs`，各命令实现按文件拆在 `cli/commands/` 下；跟终端打交道的部件
-（`Prompter` trait + 中文主题）放在 `cli/interact.rs`，供 `prompt` / `config` / `java`
-三处复用（测试里换成脚本化回答）。
+CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/mod.rs`，各命令实现按文件
+拆在 `cli/commands/` 下。任务事件里的「是否继续？」警告确认仍用 `dialoguer`；没有
+交互式菜单或配置编辑器。
 
-配置相关的两处都走 serde 派生、不手写字段清单：
+安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取、也不创建实例
+`dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、合并进全局 `javas`
+并保存。
 
-- `config` 命令的编辑器：把 `Config` 序列化成 `serde_json::Value`、按「点分键」逐项展示，
-  标量单行编辑、对象 / 数组（`launch.java_configs`）走外部编辑器按 JSON 编辑；写回后
-  整体反序列化校验；
-- `show()` 也用同一份展开结果打印。
+不带子命令时：编译了 `gtk4` 就打开 GUI；没有 GUI 时打印帮助并以非零状态退出。
 
 界面语言全部为中文，包括 clap 自动生成的小节标题（`用法：` / `位置参数：` / `选项：` /
 `命令：`）与常见报错（`错误：缺少必填参数：…`）。命令名、参数名、配置键名保持英文
@@ -333,8 +341,7 @@ GTK4 + libadwaita 前端在 `crates/dmcl/src/gui/gtk4`，用 relm4，由 cargo f
 ## 测试策略
 
 - **离线单测**（`cargo test --workspace`）：规划纯函数、URL 模板化 / 解析、规则判定、
-  哈希与校验、任务链 / 事件转发、CLI 参数与交互流程（把「跟终端打交道」抽成接口后用
-  脚本化回答测试）；
+  哈希与校验、任务链 / 事件转发、CLI 参数与配置加载 / 实例覆盖；
 - **GTK4 前端**（`cargo test -p dmcl --features gtk4 --lib`）：不创建控件的纯逻辑单测
   （任务进度、版本过滤 / 适配等），不需要显示；界面验证用 Broadway + Chromium CDP，
   具体见 GTK4 前端入口文档。CI 在 Linux / Windows / macOS 跑 clippy / test / build；

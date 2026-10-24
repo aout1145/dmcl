@@ -1,19 +1,16 @@
 //! 命令行前端。
 //!
-//! 参数解析 / `--help` 交给 [`clap`] derive；交互式菜单交给 [`dialoguer`]。
+//! 参数解析 / `--help` 交给 [`clap`] derive；任务警告的「是否继续？」确认用
+//! [`dialoguer`]。
 //!
 //! 前端的职责只有三件：把配置翻译成各 crate 的 `*Options`、打印事件流、显示结果
 //! —— 业务逻辑都在 `dmcl-*` 里。命令定义、本地化与分发留在本模块；
 //! 各命令的实现按文件拆在 `commands` 子模块下。
 
 mod commands;
-mod interact;
 mod progress;
-mod prompt;
 
-use std::path::PathBuf;
-
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
@@ -23,6 +20,10 @@ use crate::config::{Config, ConfigError};
 #[derive(Parser, Debug)]
 #[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
 pub struct Cli {
+    /// 本次运行使用的 Minecraft 根目录（`minecraft_roots` 里的名字）
+    #[arg(long, global = true, value_name = "name")]
+    pub minecraft_root: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -39,11 +40,11 @@ pub struct Cli {
 const HELP_TEMPLATE_WITH_POSITIONALS: &str =
     "{about-with-newline}\n用法：{usage}\n\n位置参数：\n{positionals}\n\n选项：\n{options}{after-help}";
 
-/// 没有位置参数的命令（`list-mc`、`config` …）—— 不打出空的小节。
+/// 没有位置参数的命令（`list-mc`、`list` …）—— 不打出空的小节。
 const HELP_TEMPLATE_WITHOUT_POSITIONALS: &str =
     "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}{after-help}";
 
-/// 带子命令的命令（根命令与 `java`）—— 额外列出子命令。
+/// 带子命令的命令（根命令）—— 额外列出子命令。
 const HELP_TEMPLATE_WITH_SUBCOMMANDS: &str =
     "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}\n\n命令：\n{subcommands}{after-help}";
 
@@ -129,7 +130,7 @@ fn localized_command() -> clap::Command {
             command = command.mut_arg("version", |arg| arg.help("打印版本信息"));
         }
 
-        // 递归处理子命令（`java` 的 list/search/… 也要中文化）
+        // 递归处理子命令（`help` 也要中文化）
         let names: Vec<String> = command
             .get_subcommands()
             .map(|sub| sub.get_name().to_string())
@@ -147,6 +148,15 @@ fn localized_command() -> clap::Command {
     }
 
     localize(Cli::command())
+}
+
+/// 打印中文帮助；无 GUI 且无子命令时用。
+pub fn print_help() -> Result<()> {
+    localized_command()
+        .print_help()
+        .context("无法打印帮助信息")?;
+    println!();
+    Ok(())
 }
 
 /// 全部子命令。
@@ -183,7 +193,6 @@ pub enum Commands {
         #[arg(long, value_name = "version")]
         fabric_version: Option<String>,
         /// 本地版本名
-        // 放在加载器参数之后：这样 prompt 问到它时已经知道加载器版本，能预填默认名
         #[arg(value_name = "version-name")]
         version_name: Option<String>,
     },
@@ -226,11 +235,9 @@ pub enum Commands {
         verid: String,
     },
 
-    /// 管理本机 java
-    Java {
-        #[command(subcommand)]
-        action: Option<JavaCommand>,
-    },
+    /// 搜索本机 java 并写入配置
+    #[command(name = "search-java")]
+    SearchJava,
 
     /// 启动图形界面
     Gui {
@@ -239,51 +246,8 @@ pub enum Commands {
         frontend: Option<String>,
     },
 
-    /// 交互式菜单
-    Prompt,
-
-    /// 查看或编辑配置
-    #[command(name = "config")]
-    Config,
-
     /// 显示版本
     Version,
-}
-
-/// `java` 的子命令。不给子命令时进交互菜单。
-#[derive(Subcommand, Debug)]
-pub enum JavaCommand {
-    /// 列出已配置的 java
-    List,
-    /// 搜索本机 java 并写入配置
-    Search,
-    /// 手动添加 java
-    Add {
-        /// java 可执行文件路径
-        #[arg(value_name = "path")]
-        path: PathBuf,
-        /// 配置项名字
-        #[arg(value_name = "name")]
-        name: Option<String>,
-    },
-    /// 删除 java 配置
-    Remove {
-        /// 配置项名字
-        #[arg(value_name = "name")]
-        name: String,
-    },
-    /// 选择使用的 java
-    Use {
-        /// 配置项名字或 autoselect
-        #[arg(value_name = "name")]
-        name: String,
-    },
-}
-
-/// 跑交互式菜单。无子命令且这份构建没有 GUI 前端时，从 [`crate::gui::run_default`] 回退到这里。
-pub(crate) fn run_prompt(config: &mut Config, error: Option<ConfigError>) -> Result<()> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(dispatch(Commands::Prompt, config, error))
 }
 
 /// 执行一个命令。
@@ -338,18 +302,9 @@ pub async fn dispatch(
 
         Commands::List => commands::list::installed(config).await,
 
-        Commands::Java { action } => commands::java::run(action, config).await,
-
-        Commands::Prompt => {
-            let defaults = commands::install::InstallDefaults {
-                loaders: config.download_source(),
-            };
-            prompt::prompt_interactive(&defaults).await
-        }
+        Commands::SearchJava => commands::search_java::run(config).await,
 
         Commands::Version => commands::version::run().await,
-
-        Commands::Config => commands::config::run(config).await,
     }
 }
 
@@ -370,11 +325,9 @@ mod tests {
             "list-neoforge",
             "list-fabric",
             "list",
-            "java",
+            "search-java",
             "gui",
-            "prompt",
             "version",
-            "config",
         ] {
             assert!(names.contains(&expected), "缺少命令 {expected}: {names:?}");
         }
@@ -382,8 +335,10 @@ mod tests {
         for removed in [
             "install-forge",
             "install-neoforge",
-            "search-java",
             "edit-config",
+            "prompt",
+            "config",
+            "java",
         ] {
             assert!(
                 !names.contains(&removed),
@@ -446,20 +401,31 @@ mod tests {
     }
 
     #[test]
-    fn java_subcommands_parse() {
-        let cli = Cli::try_parse_from(["dmcl", "java"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Java { action: None })));
+    fn search_java_takes_no_arguments() {
+        let cli = Cli::try_parse_from(["dmcl", "search-java"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::SearchJava)));
 
-        let cli = Cli::try_parse_from(["dmcl", "java", "add", "/usr/bin/java"]).unwrap();
-        match cli.command {
-            Some(Commands::Java {
-                action: Some(JavaCommand::Add { path, name }),
-            }) => {
-                assert_eq!(path, PathBuf::from("/usr/bin/java"));
-                assert!(name.is_none());
-            }
-            other => panic!("解析结果不对: {other:?}"),
-        }
+        let err = Cli::try_parse_from(["dmcl", "search-java", "extra"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn minecraft_root_is_a_global_option() {
+        let before =
+            Cli::try_parse_from(["dmcl", "--minecraft-root", "test", "launch", "1.20.1"]).unwrap();
+        assert_eq!(before.minecraft_root.as_deref(), Some("test"));
+        assert!(matches!(
+            before.command,
+            Some(Commands::Launch { vername }) if vername == "1.20.1"
+        ));
+
+        let after =
+            Cli::try_parse_from(["dmcl", "launch", "1.20.1", "--minecraft-root=test"]).unwrap();
+        assert_eq!(after.minecraft_root.as_deref(), Some("test"));
+        assert!(matches!(
+            after.command,
+            Some(Commands::Launch { vername }) if vername == "1.20.1"
+        ));
     }
 
     /// 帮助文本里不该再出现 clap 的英文小节标题。
@@ -492,30 +458,16 @@ mod tests {
         assert!(install_help.contains("位置参数："));
         assert!(install_help.contains("Minecraft 版本号"));
 
-        // 带子命令的命令（`java`）要列出子命令，且子命令的帮助也中文化
-        let root_help_java = root
-            .find_subcommand("java")
-            .unwrap()
-            .clone()
-            .render_long_help()
-            .to_string();
-        assert!(root_help_java.contains("命令："));
-        assert!(root_help_java.contains("search"));
-
-        let java_list_help = root
-            .find_subcommand("java")
-            .unwrap()
-            .find_subcommand("list")
-            .unwrap()
-            .clone()
-            .render_long_help()
-            .to_string();
-        for english in ["Usage:", "Options:", "Print help"] {
+        // 根命令要列出子命令
+        assert!(root_help.contains("命令："));
+        assert!(root_help.contains("search-java"));
+        for removed in ["prompt", "config"] {
             assert!(
-                !java_list_help.contains(english),
-                "java list 帮助里残留 {english}:\n{java_list_help}"
+                !root_help.contains(removed),
+                "帮助里残留 {removed}:\n{root_help}"
             );
         }
+        assert!(root.find_subcommand("java").is_none());
     }
 
     /// clap 的报错也要是中文。
