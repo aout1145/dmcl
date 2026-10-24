@@ -1,5 +1,7 @@
 //! 游戏进程监控。
 
+use std::fmt;
+
 use anyhow::Result;
 
 /// 被启动的游戏进程。
@@ -8,6 +10,14 @@ use anyhow::Result;
 /// 也可以主动把它停掉（GUI 的"停止游戏"）。
 pub struct GameMonitor {
     child: tokio::process::Child,
+}
+
+impl fmt::Debug for GameMonitor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GameMonitor")
+            .field("pid", &self.id())
+            .finish()
+    }
 }
 
 impl GameMonitor {

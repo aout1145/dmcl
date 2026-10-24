@@ -37,6 +37,7 @@ dirs.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dialoguer.workspace = true
+notify.workspace = true
 
 # 图形前端：可选依赖，只有开启 `gtk4` feature 才编译。
 relm4 = { workspace = true, optional = true }

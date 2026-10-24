@@ -18,23 +18,24 @@ fn main() {
 fn real_main() -> anyhow::Result<()> {
     let parsed = Cli::parse_localized();
     // 启动时同步读一次配置：GUI 必须在建窗口 / GLib 主循环之前拿到它。
-    let mut loaded = Config::load_sync(None);
-    if let Some(name) = parsed.minecraft_root.as_deref() {
-        loaded
+    let loaded = Config::load_sync(None);
+    let root = match parsed.minecraft_root.as_deref() {
+        Some(name) => loaded
             .config
-            .select_minecraft_root(name)
-            .map_err(|err| anyhow::anyhow!("参数 --minecraft-root={name} 无效：{err:#}"))?;
-    }
+            .root(name)
+            .map_err(|err| anyhow::anyhow!("参数 --minecraft-root={name} 无效：{err:#}"))?,
+        None => loaded.config.default_root()?,
+    };
 
     match parsed.command {
         // 无子命令：有 GUI 前端就启动 GUI，没有就打印帮助并退出。
-        None => dmcl::gui::run_default(loaded),
+        None => dmcl::gui::run_default(loaded, root),
         // 显式 `gui`：前端不可用时直接报错，不回退。
-        Some(Commands::Gui { frontend }) => dmcl::gui::run(frontend, loaded),
+        Some(Commands::Gui { frontend }) => dmcl::gui::run(frontend, loaded, root),
         Some(command) => {
             let LoadedConfig { mut config, error } = loaded;
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(cli::dispatch(command, &mut config, error))
+            runtime.block_on(cli::dispatch(command, &mut config, error, &root))
         }
     }
 }

@@ -6,7 +6,7 @@
 
 use anyhow::{anyhow, Result};
 
-use crate::config::LoadedConfig;
+use crate::config::{LoadedConfig, MinecraftRoot};
 
 /// 不指定前端（`dmcl gui`）时用哪个。
 pub fn default_frontend() -> &'static str {
@@ -24,12 +24,12 @@ pub fn is_available(frontend: Option<&str>) -> bool {
 }
 
 /// 无子命令时的默认路径：有 GUI 前端就启动 GUI，否则打印帮助并以非零状态退出。
-pub fn run_default(loaded: LoadedConfig) -> Result<()> {
+pub fn run_default(loaded: LoadedConfig, root: MinecraftRoot) -> Result<()> {
     if is_available(None) {
-        run(None, loaded)
+        run(None, loaded, root)
     } else {
         #[cfg(not(feature = "gtk4"))]
-        let _ = loaded;
+        let _ = (loaded, root);
         crate::cli::print_help()?;
         std::process::exit(1)
     }
@@ -38,14 +38,14 @@ pub fn run_default(loaded: LoadedConfig) -> Result<()> {
 /// 启动图形前端，直到窗口关闭才返回。
 ///
 /// 前端不可用时**直接报错**；回退只发生在无子命令的默认路径 [`run_default`] 上。
-pub fn run(frontend: Option<String>, loaded: LoadedConfig) -> Result<()> {
-    // 没编译 gtk4 时 loaded 不会进入 gtk4::run，显式消费掉避免 unused 警告。
+pub fn run(frontend: Option<String>, loaded: LoadedConfig, root: MinecraftRoot) -> Result<()> {
+    // 没编译 gtk4 时 loaded / root 不会进入 gtk4::run，显式消费掉避免 unused 警告。
     #[cfg(not(feature = "gtk4"))]
-    let _ = loaded;
+    let _ = (loaded, root);
     let frontend = frontend.unwrap_or_else(|| default_frontend().to_string());
     match frontend.as_str() {
         #[cfg(feature = "gtk4")]
-        "gtk4" => gtk4::run(loaded),
+        "gtk4" => gtk4::run(loaded, root),
         other => {
             let hint = if cfg!(feature = "gtk4") {
                 ""
@@ -74,11 +74,13 @@ mod tests {
 
     #[test]
     fn unknown_frontend_is_an_error() {
+        let config = Config::default();
         let loaded = LoadedConfig {
-            config: Config::default(),
+            config: config.clone(),
             error: None,
         };
-        let err = run(Some("other".to_string()), loaded).unwrap_err();
+        let root = config.default_root().unwrap();
+        let err = run(Some("other".to_string()), loaded, root).unwrap_err();
         assert!(err.to_string().contains("没有可用的 gui 前端"));
     }
 }

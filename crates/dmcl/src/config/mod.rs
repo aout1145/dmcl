@@ -25,10 +25,12 @@
 mod account;
 mod download;
 mod launch;
+mod root;
 
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
+pub use root::MinecraftRoot;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -387,28 +389,6 @@ impl Config {
         options
     }
 
-    /// 当前选择的 Minecraft 根目录。
-    pub fn minecraft_root_path(&self) -> Result<&Path> {
-        self.minecraft_roots
-            .get(&self.minecraft_root)
-            .map(PathBuf::as_path)
-            .ok_or_else(|| {
-                anyhow!(
-                    "配置项「minecraft_root」指向的根目录不存在：{}",
-                    self.minecraft_root
-                )
-            })
-    }
-
-    /// 为本次运行切换根目录；名字必须已经在 `minecraft_roots` 里。
-    pub fn select_minecraft_root(&mut self, name: &str) -> Result<()> {
-        if !self.minecraft_roots.contains_key(name) {
-            return Err(anyhow!("根目录不存在：{name}"));
-        }
-        self.minecraft_root = name.to_string();
-        Ok(())
-    }
-
     /// 按 `launch.account` 造一个账户。
     ///
     /// 没有选择账户（`null`）或指向不存在的账户时返回错误，不静默使用默认账户。
@@ -433,9 +413,9 @@ impl Config {
         &self,
         source: DownloadSource,
         launch: &LaunchConfig,
+        root: &Path,
     ) -> Result<InstallOptions> {
-        let root = self.minecraft_root_path()?.to_path_buf();
-        Ok(InstallOptions::new(root, source)
+        Ok(InstallOptions::new(root.to_path_buf(), source)
             .with_download(self.download_options())
             .with_skip_music(self.download.skip_music)
             .with_java(Arc::new(ConfigJava {
@@ -445,10 +425,14 @@ impl Config {
     }
 
     /// 配置 + 传入的启动配置 → [`LaunchOption`]。
-    pub fn launch_option(&self, launch: &LaunchConfig, version_name: &str) -> Result<LaunchOption> {
+    pub fn launch_option(
+        &self,
+        launch: &LaunchConfig,
+        version_name: &str,
+        root: &Path,
+    ) -> Result<LaunchOption> {
         let account = self.selected_account(launch)?;
-        let root = self.minecraft_root_path()?.to_path_buf();
-        let mut option = LaunchOption::new(account, root, version_name)
+        let mut option = LaunchOption::new(account, root.to_path_buf(), version_name)
             .with_java(launch.java.clone(), self.javas.clone())
             .with_local_layout(self.download.skip_music);
         option.window_width = launch.window_width;
@@ -456,8 +440,16 @@ impl Config {
         option.min_memory = launch.min_memory;
         option.max_memory = launch.max_memory;
         option.custom_info = launch.custom_info.clone();
-        option.additional_jvm = launch.additional_jvm.clone();
-        option.additional_game = launch.additional_game.clone();
+        option.additional_jvm = launch
+            .additional_jvm
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        option.additional_game = launch
+            .additional_game
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
         Ok(option)
     }
 }
@@ -782,11 +774,32 @@ mod tests {
             .insert("test".to_string(), PathBuf::from("/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.minecraft_root, "test");
-        assert_eq!(config.minecraft_root_path().unwrap(), Path::new("/mc"));
+        assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
 
         let err = config.select_minecraft_root("nope").unwrap_err();
         assert!(err.to_string().contains("根目录不存在：nope"));
         assert_eq!(config.minecraft_root, "test");
+    }
+
+    #[test]
+    fn named_roots_resolve_and_default_can_be_selected() {
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("/mc"));
+        config.select_minecraft_root("test").unwrap();
+        assert_eq!(config.default_root().unwrap().name, "test");
+        assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
+        assert_eq!(config.root("default").unwrap().name, "default");
+        assert_eq!(
+            config.root("default").unwrap().path,
+            PathBuf::from(".minecraft")
+        );
+        assert_eq!(
+            config.roots().map(|root| root.name).collect::<Vec<_>>(),
+            vec!["default".to_string(), "test".to_string()]
+        );
+        assert!(config.root("nope").is_err());
     }
 
     #[test]
@@ -922,10 +935,11 @@ mod tests {
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
 
-        let loaded = config.load_instance("1.20.1").await;
+        let root = dir.join("mc");
+        let loaded = config.load_instance(&root, "1.20.1").await;
         assert!(loaded.error.is_none());
         assert_eq!(loaded.launch.max_memory, 3000);
-        assert!(!instance_config_path(&dir.join("mc"), "1.20.1").exists());
+        assert!(!instance_config_path(&root, "1.20.1").exists());
     }
 
     #[tokio::test]
@@ -945,14 +959,14 @@ mod tests {
         let text = r#"{"launch": {"max_memory": 4096, "account": null}}"#;
         std::fs::write(&path, text).unwrap();
 
-        let loaded = config.load_instance("1.20.1").await;
+        let loaded = config.load_instance(&root, "1.20.1").await;
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
         assert_eq!(loaded.launch.max_memory, 4096);
         assert_eq!(loaded.launch.window_width, 854);
         assert_eq!(loaded.launch.account, None);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
-        let sync = config.load_instance_sync("1.20.1");
+        let sync = config.load_instance_sync(&root, "1.20.1");
         assert_eq!(sync.launch.max_memory, 4096);
         assert_eq!(sync.launch.account, None);
         assert!(sync.error.is_none());
@@ -988,7 +1002,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = config.load_instance("1.20.1").await;
+        let loaded = config.load_instance(&root, "1.20.1").await;
         assert_eq!(loaded.launch.max_memory, 3000);
         assert_eq!(loaded.launch.window_width, 1200);
         let error = loaded.error.as_ref().expect("应当有警告");
@@ -1027,7 +1041,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = config.load_instance("1.20.1").await;
+        let loaded = config.load_instance(&root, "1.20.1").await;
         assert_eq!(loaded.launch.account, None);
         assert!(loaded.launch.java.is_auto());
         let error = loaded.error.as_ref().expect("应当有警告");
@@ -1086,6 +1100,8 @@ mod tests {
         config.launch.min_memory = 1024;
         config.launch.max_memory = 4096;
         config.launch.custom_info = "test".to_string();
+        config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
+        config.launch.additional_game = "--foo bar".to_string();
         config
             .javas
             .insert("jdk".to_string(), PathBuf::from("/nonexistent/bin/java"));
@@ -1098,20 +1114,26 @@ mod tests {
         assert_eq!(download.max_chunks_per_file, 3);
         assert_eq!(download.max_attempts, 5);
 
+        let root = dir.join("mc");
         let install = config
-            .install_options(config.download_source(), &config.launch)
+            .install_options(config.download_source(), &config.launch, &root)
             .unwrap();
         assert_eq!(install.root_path, dir.join("mc"));
         assert!(install.skip_music);
         assert_eq!(install.download.max_connections, 8);
 
-        let option = config.launch_option(&config.launch, "1.20.1").unwrap();
+        let option = config
+            .launch_option(&config.launch, "1.20.1", &root)
+            .unwrap();
         assert_eq!(option.root_path, dir.join("mc"));
         assert_eq!(option.window_width, 1920);
         assert_eq!(option.min_memory, 1024);
         assert_eq!(option.max_memory, 4096);
         assert_eq!(option.custom_info, "test");
         assert!(option.skip_music);
+        assert!(option.additional_jvm.contains(&"-Da=1".to_string()));
+        assert!(option.additional_jvm.contains(&"-Db=2".to_string()));
+        assert_eq!(option.additional_game, vec!["--foo", "bar"]);
         assert_eq!(option.account.get_name(), "Steve");
 
         let _ = std::fs::remove_dir_all(&dir);

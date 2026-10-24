@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::error::{ContextKind, ErrorKind};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::config::{Config, ConfigError};
+use crate::config::{Config, ConfigError, MinecraftRoot};
 
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
@@ -258,6 +258,7 @@ pub async fn dispatch(
     command: Commands,
     config: &mut Config,
     error: Option<ConfigError>,
+    root: &MinecraftRoot,
 ) -> Result<()> {
     if let Some(error) = error {
         for warning in &error.warnings {
@@ -270,7 +271,7 @@ pub async fn dispatch(
         // GUI 必须在主线程启动（见 `main.rs`），不该走这条 tokio 路径。
         Commands::Gui { .. } => Err(anyhow!("gui 前端必须在主线程启动")),
 
-        Commands::Launch { vername } => commands::launch::run(&vername, config).await,
+        Commands::Launch { vername } => commands::launch::run(&vername, config, root).await,
 
         Commands::Install {
             version_id,
@@ -292,7 +293,7 @@ pub async fn dispatch(
                 neoforge_version,
                 fabric_version,
             };
-            commands::install::run(args, config).await
+            commands::install::run(args, config, root).await
         }
 
         Commands::ListMc { r#type } => commands::list::mc(config, &r#type).await,
@@ -300,7 +301,7 @@ pub async fn dispatch(
         Commands::ListNeoforge { verid } => commands::list::neoforge(config, &verid).await,
         Commands::ListFabric { verid } => commands::list::fabric(config, &verid).await,
 
-        Commands::List => commands::list::installed(config).await,
+        Commands::List => commands::list::installed(root).await,
 
         Commands::SearchJava => commands::search_java::run(config).await,
 

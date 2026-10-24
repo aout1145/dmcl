@@ -2,7 +2,9 @@
 
 给在本仓库里工作的编码代理（以及人）的约定。动手前先读
 [README.md](README.md)（功能 / 构建 / 用法）和 [ARCHITECTURE.md](ARCHITECTURE.md)（结构 / 依赖 / 设计）。
-改 GTK4 前端时还要读 [gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)（relm4 / `view!` 约定）。
+改 GTK4 前端时**必须遵循** [gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md) 里的
+relm4 / `view!` 约定，尤其是「状态驱动：状态放模型，界面用 `view!` 刷新」一节；那里规定的
+声明式写法、`FactoryComponent` / `FactoryVecDeque` 用法和命令式 GTK 的边界都同样有效。
 
 ## 汇报与确认（最重要）
 

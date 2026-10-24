@@ -13,6 +13,8 @@
 - **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
   需要自己决定时也可以直接调用库里的 `dmcl_install::check_integrity`。
 - **多账户 / 多根目录 / 多 Java** —— 在全局配置里维护账户、Minecraft 根目录与 Java 表。
+- **多主页** —— 每个 `minecraft_roots` 条目可以单独打开一个主页；所有主页标签都可关闭，
+  关闭后游戏进程继续运行。
 - **全局默认 + 实例覆盖** —— 全局 `launch` 是所有实例的默认启动配置；每个实例可以
   在 `versions/<version_name>/dmcl.json` 里只写要覆盖的字段。
 - **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
@@ -38,10 +40,10 @@ cargo build --release --features gtk4
 
 各平台装 GTK 开发库：
 
-| 平台            | 安装方式                                                                                                                                                               |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Debian / Ubuntu | `sudo apt install libgtk-4-dev libadwaita-1-dev`（Ubuntu 24.04 的 GTK 4.14 太旧，建议 26.04+ 或更新发行版）                                                            |
-| macOS           | `brew install pkgconf gtk4 libadwaita`                                                                                                                                 |
+| 平台            | 安装方式                                                                                                                                                                                     |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Debian / Ubuntu | `sudo apt install libgtk-4-dev libadwaita-1-dev`（Ubuntu 24.04 的 GTK 4.14 太旧，建议 26.04+ 或更新发行版）                                                                                  |
+| macOS           | `brew install pkgconf gtk4 libadwaita`                                                                                                                                                       |
 | Windows         | MSYS2 MINGW64：`pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gtk4 mingw-w64-x86_64-libadwaita`，再用 rustup 的 `stable-x86_64-pc-windows-gnu` 工具链构建（见下） |
 
 Windows 示例（MSYS2 MINGW64 里用 GNU host 工具链，避免 `pkg-config` 把它当成交叉编译）：
@@ -98,22 +100,26 @@ dmcl list-mc --type=release,snapshot
 根目录和 Java 表也可以通过直接编辑全局 `dmcl.json` 维护。账号目前只有离线模式，
 联机登录还没实现。图形界面的账号、设置、实例管理页面仍在开发中。
 
+图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页，
+也可以把某个 root 设为默认主页。新建实例使用主页右下角的悬浮 `+` 按钮；创建目标始终是
+该主页绑定的 root。
+
 ## 命令
 
-| 命令                                                                        | 说明                                                       |
-| --------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `launch <version-name>`                                                     | 检查并补全文件 → 生成参数 → 启动                           |
-| `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                             |
-| `install … [--fabric] [--forge] [--neoforge]`                               | 安装模组加载器                                             |
-| `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本                                             |
-| `list`                                                                      | 列出**已安装**的版本                                       |
-| `list-mc [--type=release,snapshot,…]`                                       | 列出 Minecraft 版本（默认 `release`）                      |
-| `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                                    |
-| `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                            |
-| `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                         |
-| `search-java`                                                               | 搜索本机 Java，合并进全局配置并保存                        |
-| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错）      |
-| `version`                                                                   | 显示版本与构建时间                                         |
+| 命令                                                                        | 说明                                                  |
+| --------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `launch <version-name>`                                                     | 检查并补全文件 → 生成参数 → 启动                      |
+| `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                        |
+| `install … [--fabric] [--forge] [--neoforge]`                               | 安装模组加载器                                        |
+| `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本                                        |
+| `list`                                                                      | 列出**已安装**的版本                                  |
+| `list-mc [--type=release,snapshot,…]`                                       | 列出 Minecraft 版本（默认 `release`）                 |
+| `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                               |
+| `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                       |
+| `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                    |
+| `search-java`                                                               | 搜索本机 Java，合并进全局配置并保存                   |
+| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错） |
+| `version`                                                                   | 显示版本与构建时间                                    |
 
 不带子命令时：有 GTK4 前端就打开 GUI；没有就打印帮助并以非零状态退出。
 
@@ -203,8 +209,6 @@ macOS `~/Library/Application Support`）。
   「继续启动」才使用修复后的配置继续。
 - 安装阶段还没有实例目录，使用全局 `launch`，不读取、不创建实例 `dmcl.json`。
 
-账户、根目录和 Java 表完全靠编辑全局 `dmcl.json` 维护；只有 `search-java` 会自动
-写入 Java 表。
 
 ## 开发与测试
 

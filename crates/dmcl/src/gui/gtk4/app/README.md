@@ -8,16 +8,18 @@
 `app/mod.rs` 只做组装，视图用 `view!` 声明：
 
 - `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层都由 `view!` 搭出来；
-- 启动 `Header`、`TaskCenter` 与 `HomePage` 三个子组件，给 home 注入 `Rc<Shell>`；
-- 根组件输入 `AppMsg`：`HeaderOut` 负责「添加实例 → 自定义」和「任务」，
-  `TaskCenterOut::RunningCount` 负责把运行中任务数转给标题栏角标，
-  `TaskCenterOut::Quit` 表示可以销毁主窗口；
-- 主页标签拦 `close-page` 拒绝关闭（其余标签放行）；标签 `page-detached` 时让宿主丢掉
-  页面保活。
+- 启动 `Header`、`TaskCenter` 与启动时的默认 `HomePage`；标题栏的根目录菜单可以再打开
+  其它 root 的主页；
+- 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页、设置默认 root 和任务；主页的
+  `HomeOut::CreateCustom` 打开新建实例页；`HomeClosed` 清理关闭的主页；`TaskCenterOut`
+  负责任务角标与退出；
+- 所有主页标签都可以关闭。标签 `page-detached` 时清理 `PageHost` 和 root 映射；
+  `HomePage` 随之销毁，游戏进程继续运行，但页面里的运行状态不会恢复。
 
-标题栏也是独立组件（`header.rs`），整行由 `view!` 声明，再由根组件的 `view!` 用
-`add_top_bar` 挂上去。外观切换和「关于」由标题栏自己处理；需要页面宿主 / 任务窗口
-配合的动作通过 `HeaderOut` 上报给根组件。
+标题栏也是独立组件（`header/mod.rs`，根目录菜单行在 `header/root_row.rs`，外观切换在
+`header/theme.rs`，「关于」在 `header/about.rs`），整行由 `view!` 声明，再由根组件的
+`view!` 用 `add_top_bar` 挂上去。需要页面宿主 / 任务窗口配合的动作通过 `HeaderOut`
+上报给根组件。
 
 ## `Shell`
 
@@ -51,8 +53,7 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   切到新标签页，并把控制器存进保活表（`page-detached` 时丢弃）；
 - `TabTitle` 是页面**直接**改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动
   组件再 append，所以绑定前 `set_title` 会缓存、绑定后补写；`close()` 内置 `tab_view` +
-  `tab_page` 引用，调 `tab_view.close_page` 走根组件的 `close-page`（主页仍会被拒），页面
-  可据此「安装发起后关页」。
+  `tab_page` 引用，调 `tab_view.close_page`；所有标签（包括主页）都允许关闭。
 
 新增页面：在 `pages/` 下写一个 `impl Page` + `#[relm4::component]` 的组件，`type Args` 是
 它的实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page` 即可。
@@ -64,37 +65,33 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   总宽 − 2×max(左, 右)），若把标签栏单独当 title widget、其余按钮分头 `pack_start` /
   `pack_end`，左窄右宽时标签栏会被推到右边、左边空出一大截；所以整行都并进 title widget，
   并把 `show-start-title-buttons` / `show-end-title-buttons` 关掉、窗口按钮自己加在行尾——
-  左右两侧宽度都变成 0，标签栏正好铺满「加号 → 窗口按钮」之间。
-- 标签栏 `autohide(false)`：只有一个页面（主页）时也一直显示，避免「从 2 个标签关到 1 个」
-  时整条标签栏跟着 `GtkRevealer` 滑走、和标签自身的收缩动画叠在一起。
-- 标签页是 `AdwTabView`，由 `PageHost` 管。**主页不可关闭**，其余页面都可关闭：主页标签
-  **不能用 `pinned`**（pinned 只显示图标、不显示标题），改为在 `AdwTabView::close-page` 里
-  对主页调 `close_page_finish(page, false)` 并返回 `Stop`；标签移除时 `page-detached` 通知
-  宿主丢掉页面保活。
-- `+` 的 popover 里列出下载类型（目前只有「自定义」，由 `HeaderOut::AddCustom` 交给 root
-  接到 `open_page`）；账号、设置是占位 popup；任务按钮通过 `HeaderOut::OpenTasks` 让 root
-  发 `TaskMsg::Open` 打开任务对话框。
-- 最右侧的三点主菜单提供外观切换和「关于」。外观是 GNOME 应用里常见的「跟随系统 /
-  浅色 / 深色」圆形色板：一组互斥的 `GtkCheckButton`，把 `radio` 指示器画成圆形，
-  再叠一个选中对勾；分别对应 `AdwStyleManager` 的 `Default` / `ForceLight` / `ForceDark`。
-  「关于」是 `AdwAboutDialog`。
+  左右两侧宽度都变成 0，标签栏正好铺满「目录菜单 → 窗口按钮」之间。
+- 标签栏 `autohide(false)`：页面少时也一直显示，避免关闭标签时整条标签栏跟着
+  `GtkRevealer` 滑走、和标签自身的收缩动画叠在一起。
+- 标签页是 `AdwTabView`。所有页面都可关闭：主页关闭后直接销毁 `HomePage`，游戏进程
+  独立继续运行；`PageHost` 只管非主页页面，标签移除时清理保活。
+- 标题栏最左侧是「Minecraft 目录」菜单，列出全部 `minecraft_roots`：打开 / 聚焦主页、
+  标记已打开、设置默认主页。新建实例由主页右下角的悬浮按钮打开；`CustomPage` 使用主页
+  捕获的 root，App 不维护「当前选中的主页是哪个 root」。账号、设置是占位 popup；任务按钮
+  通过 `HeaderOut::OpenTasks` 打开任务对话框。
+- 最右侧的三点主菜单提供外观切换和「关于」。外观切换是 `header/theme.rs` 里的独立子组件
+  `ThemeSwitcher`，用 GNOME 应用里常见的「跟随系统 / 浅色 / 深色」圆形色板：一组互斥的
+  `GtkCheckButton`，把 `radio` 指示器画成圆形，再叠一个选中对勾；分别对应
+  `AdwStyleManager` 的 `Default` / `ForceLight` / `ForceDark`。「关于」由
+  `header/about.rs` 打开 `AdwAboutDialog`。
 - 任务按钮右上角有运行中数量角标；任务窗口在任务开始 / 结束 / 清除时把未结束任务数上报给
   根组件，再转给标题栏，角标为 0 时隐藏。
-- 标题栏布局用 `view!` 声明；`AdwTabBar` 因为要保留给 `.dmcl-home-tab` 打 class，
-  作为本地引用挂进布局。
-- 标签栏仍占满中间宽度；在它和右侧按钮之间留一段 28px 的固定 `GtkWindowHandle`，
-  拖这段空白可以移动窗口，避免拖拽被标签栏内部的滚动区吃掉。
+- 标题栏布局用 `view!` 声明。标签栏仍占满中间宽度；在它和右侧按钮之间留一段 28px 的固定
+  `GtkWindowHandle`，拖这段空白可以移动窗口，避免拖拽被标签栏内部的滚动区吃掉。
 
 ## 标题栏 CSS
 
-`header::CSS` 只打在 `headerbar.dmcl-header` 上：
+`header::CSS` 负责头栏行高、任务按钮角标和根目录行内边距：
 
 - 收紧竖向内边距，让标题栏保持 47px 的正常高度（否则 tabbar 47px + 标题栏内层 13px 内边距
-  会顶到 60px）；
-- 隐藏**主页**标签的关闭按钮——libadwaita 没有 per-page 的 closable，也没有公开句柄拿到
-  某个标签的关闭按钮，只能按 CSS 节点链（`tabbar` → `tab`）把 `.dmcl-home-tab` 打在主页
-  那个标签上（`header::mark_home_tab`，等标签栏建好标签后调用），选择器写成
-  `tab.dmcl-home-tab`；其余标签保持可见的 `×`。
+  会顶到 60px）。
+
+`header/theme.rs` 里的外观色板 CSS 由根组件以 `header::THEME_CSS` 一并挂上。
 
 其余模块的 CSS 在各自目录的文档里：下载域见
 [download](../pages/download/README.md#css)，任务窗口见
@@ -110,6 +107,8 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 
 未结束任务数由任务组件自己维护，根组件不再缓存一份。关闭任务窗口本身只隐藏窗口，
 不取消任务、不弹确认；用户可以在任务继续跑的时候关掉任务列表。
+
+正在运行的游戏不属于任务窗口：关闭主窗口不会结束它们，也不会为它们弹额外确认。
 
 ## 任务窗口
 

@@ -37,7 +37,7 @@ impl InstanceCard {
 
 #[relm4::factory(pub(crate))]
 impl FactoryComponent for InstanceCard {
-    type Init = String;
+    type Init = (String, InstanceState);
     type Input = ();
     type Output = CardOut;
     type CommandOutput = ();
@@ -114,10 +114,14 @@ impl FactoryComponent for InstanceCard {
         }
     }
 
-    fn init_model(name: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+    fn init_model(
+        (name, state): Self::Init,
+        _index: &DynamicIndex,
+        _sender: FactorySender<Self>,
+    ) -> Self {
         Self {
             name,
-            state: InstanceState::Idle,
+            state,
             selected: false,
         }
     }

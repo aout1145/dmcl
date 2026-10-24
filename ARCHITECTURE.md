@@ -159,8 +159,14 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 `launch.account` 失效时回退为 `null`，启动时报错。GUI 在启动实例前若读到实例配置
 警告，会先弹确认框；确认后使用内存里修复过的配置继续，取消则不启动。
 
-CLI 的全局选项 `--minecraft-root=<name>` 在本次运行中切换 `minecraft_root` 选择项
-（名字必须已在 `minecraft_roots` 里），不写回配置。
+应用层把根目录解析成显式的 `MinecraftRoot { name, path }`，再传给
+`load_instance` / `install_options` / `launch_option`。`minecraft_root` 只决定启动时
+默认打开哪个根目录的主页；CLI 的全局选项 `--minecraft-root=<name>` 只影响本次运行，
+两者都不会把「当前页面」和业务接口继续绑在一起。
+
+GUI 里每个根目录可以打开独立的主页标签，所有主页都可关闭。关闭时 `HomePage` 直接
+销毁，游戏进程继续运行；运行状态只存在于页面里，重新打开后回到 Idle。本页启动的实例
+由 `GameMonitor` 精确监视退出状态。GUI 退出后游戏进程继续运行。
 
 ## 设计要点
 
@@ -308,6 +314,12 @@ CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/m
 安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取、也不创建实例
 `dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、合并进全局 `javas`
 并保存。
+
+GUI 的主页按 `MinecraftRoot` 分标签：标题栏最左侧的根目录菜单负责打开 / 聚焦主页、设置
+默认主页；每个主页右下角的悬浮 `+` 打开「创建实例」对话框，`CustomPage` 使用该主页捕获的
+root，App 不需要跟踪当前选中的主页。`HomePage` 内的状态只活在页面生命周期里：关闭页面
+即销毁，`GameMonitor` 监视任务和版本目录 watcher 一并中止；后台启动链不挂在页面上。
+版本目录用 `notify` 监听，目录不存在时监听最近存在的祖先。
 
 不带子命令时：编译了 `gtk4` 就打开 GUI；没有 GUI 时打印帮助并以非零状态退出。
 

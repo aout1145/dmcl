@@ -43,7 +43,7 @@ impl TabTitle {
         }
     }
 
-    /// 请求关闭这个标签页（页面自己可以关闭自己；走 `close-page` 信号，根组件放行）。
+    /// 请求关闭这个标签页（走 `AdwTabView` 的默认关闭行为；所有页面都允许关闭）。
     pub fn close(&self) {
         let inner = self.inner.borrow();
         if let (Some(page), Some(view)) = (&inner.page, &inner.view) {

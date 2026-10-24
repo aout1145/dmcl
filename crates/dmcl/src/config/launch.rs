@@ -64,11 +64,8 @@ impl Config {
     /// 读取某个实例的 `dmcl.json`，并逐字段覆盖全局 `launch`。
     ///
     /// 文件不存在时直接使用全局 `launch`，**不创建文件**。
-    pub async fn load_instance(&self, version_name: &str) -> LoadedInstanceConfig {
-        let (path, path_error) = self.instance_path(version_name);
-        if let Some(error) = path_error {
-            return self.instance_path_failure(path, error);
-        }
+    pub async fn load_instance(&self, root: &Path, version_name: &str) -> LoadedInstanceConfig {
+        let path = instance_config_path(root, version_name);
         match tokio::fs::read_to_string(&path).await {
             Ok(text) => self.parse_instance(&text, path),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => LoadedInstanceConfig {
@@ -80,11 +77,8 @@ impl Config {
     }
 
     /// [`Config::load_instance`] 的同步版本，给 GTK 回调这类不能等待 future 的地方用。
-    pub fn load_instance_sync(&self, version_name: &str) -> LoadedInstanceConfig {
-        let (path, path_error) = self.instance_path(version_name);
-        if let Some(error) = path_error {
-            return self.instance_path_failure(path, error);
-        }
+    pub fn load_instance_sync(&self, root: &Path, version_name: &str) -> LoadedInstanceConfig {
+        let path = instance_config_path(root, version_name);
         match std::fs::read_to_string(&path) {
             Ok(text) => self.parse_instance(&text, path),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => LoadedInstanceConfig {
@@ -92,33 +86,6 @@ impl Config {
                 error: None,
             },
             Err(err) => self.instance_read_failure(path, format!("无法读取实例配置：{err}")),
-        }
-    }
-
-    /// 算出实例配置路径；根目录选择失效时同时返回原因。
-    fn instance_path(&self, version_name: &str) -> (PathBuf, Option<String>) {
-        match self.minecraft_root_path() {
-            Ok(root) => (instance_config_path(root, version_name), None),
-            Err(err) => (
-                PathBuf::from(&self.minecraft_root)
-                    .join("versions")
-                    .join(version_name)
-                    .join("dmcl.json"),
-                Some(format!("{err:#}")),
-            ),
-        }
-    }
-
-    fn instance_path_failure(&self, path: PathBuf, detail: String) -> LoadedInstanceConfig {
-        LoadedInstanceConfig {
-            launch: self.launch.clone(),
-            error: Some(ConfigError {
-                path,
-                warnings: vec![ConfigWarning {
-                    message: "无法确定实例配置路径".to_string(),
-                    detail,
-                }],
-            }),
         }
     }
 

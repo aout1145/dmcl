@@ -1,13 +1,11 @@
-//! 主页：已安装实例的网格（组件）。
+//! 主页：一个 Minecraft 根目录下的已安装实例。
 //!
-//! 实例列表和运行状态都在 [`HomePage::instances`] 的工厂模型里；视图由 `view!`
-//! 声明，`#[watch]` 负责在状态变化后刷新文案 / 图标 / 小绿点。启动与停止的游戏进程
-//! 也由它持有——启动链交给 [`Shell`] 跑，但它等结果并把 monitor 交给一个 supervisor
-//! 任务异步等退出（**不轮询**）。
+//! 每个主页固定绑定一个 [`MinecraftRoot`]。关闭主页时整个组件直接销毁；游戏进程
+//! 不会被结束。运行状态只由本页持有的 [`GameMonitor`] 监视，不跨页面恢复。
 //!
-//! 实例列表会自动跟随 `versions` 目录的变化（轻量目录轮询）：安装 / 删除版本后无需
-//! 手动刷新。
+//! 版本目录用 `notify` watch，出现变更事件后再重新读取列表，不做固定轮询。
 
+mod create_instance;
 mod instance_card;
 mod instance_warning;
 pub(crate) mod message;
@@ -15,8 +13,10 @@ pub(crate) mod message;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use notify::event::{EventKind, ModifyKind};
+use notify::{Event, RecursiveMode, Watcher};
 use relm4::adw;
 use relm4::gtk;
 use relm4::gtk::prelude::*;
@@ -26,16 +26,24 @@ use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::installed_versions;
 use dmcl_task::CancelHandle;
 
-use crate::config::{Config, LaunchConfig};
+use crate::config::{Config, LaunchConfig, MinecraftRoot};
 use crate::gui::gtk4::app::Shell;
 
 use instance_card::{CardOut, InstanceCard};
 pub(crate) use message::HomeMsg;
 
-/// 主页的全局样式：底部胶囊操作栏、选中磁贴的高亮。
+/// 主页的全局样式：底部胶囊操作栏、选中磁贴的高亮、右下角新建按钮。
 pub(crate) const CSS: &str = "\
 .dmcl-action-bar { border-radius: 9999px; padding: 4px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.18); }
-.dmcl-instance-selected { background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 12px; }";
+.dmcl-instance-selected { background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 12px; }
+.dmcl-add-instance { min-width: 48px; min-height: 48px; border-radius: 9999px; box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.24); }";
+
+/// 主页发给 App 的动作。App 用创建主页时捕获的 root 处理，不需要跟踪当前选中的主页。
+#[derive(Debug)]
+pub(crate) enum HomeOut {
+    /// 打开「新建实例」页。
+    CreateCustom,
+}
 
 /// 实例的运行状态。界面文案、按钮动作、磁贴绿点都从它派生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,28 +58,54 @@ pub(crate) enum InstanceState {
     Stopping,
 }
 
+/// 主页里的活动实例。Idle 不进入 map。
+struct InstanceRuntime {
+    state: InstanceState,
+    source: RuntimeSource,
+}
+
+enum RuntimeSource {
+    /// 本页启动链还在跑。
+    Starting { cancel: Option<CancelHandle> },
+    /// 本页拿到的 GameMonitor 正在监视。
+    Monitor {
+        /// 先于 stop 声明：drop 时先 abort monitor task，再丢掉 stop sender，
+        /// 避免 oneshot 变成 Err 后误触发停止分支。
+        _task: TaskGuard,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+    },
+}
+
+/// 组件里的后台任务；drop 时主动中止。
+struct TaskGuard(relm4::JoinHandle<()>);
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub(crate) struct HomePage {
     shell: Rc<Shell>,
     config: Config,
+    root: MinecraftRoot,
     /// 主窗口：实例配置警告框以它为父窗口。
     window: adw::ApplicationWindow,
-    /// 实例磁贴：模型即状态源，工厂负责同步控件。
     instances: FactoryVecDeque<InstanceCard>,
-    /// 当前选中的磁贴。
-    selected: Option<DynamicIndex>,
-    /// 启动链的取消句柄：启动中（还没有游戏进程）用它取消。
-    cancels: HashMap<String, CancelHandle>,
-    /// 每个已启动实例的「停止信号」：supervisor 任务收到就 kill。
-    ///
-    /// 启动中也先建好：取消和启动完成撞车时，信号会缓冲到 supervisor 开始等它。
-    stops: HashMap<String, tokio::sync::oneshot::Sender<()>>,
+    /// 当前选中的版本名。重建卡片时按名字恢复。
+    selected: Option<String>,
+    /// `versions/` 目录里的版本，保持 `installed_versions` 的顺序。
+    installed: Vec<String>,
+    /// 当前活动实例，key 是版本名。
+    runtimes: HashMap<String, InstanceRuntime>,
+    watch_task: Option<TaskGuard>,
 }
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for HomePage {
-    type Init = (Rc<Shell>, Config, adw::ApplicationWindow);
+    type Init = (Rc<Shell>, Config, MinecraftRoot, adw::ApplicationWindow);
     type Input = HomeMsg;
-    type Output = ();
+    type Output = HomeOut;
 
     view! {
         gtk::Overlay {
@@ -99,7 +133,7 @@ impl SimpleComponent for HomePage {
                 add_named[Some("empty")] = &adw::StatusPage {
                     set_icon_name: Some("view-grid-symbolic"),
                     set_title: "还没有安装任何版本",
-                    set_description: Some("点击左上角按钮添加新的 Minecraft 实例"),
+                    set_description: Some("点击右下角按钮添加新的 Minecraft 实例"),
                 },
 
                 // 放在 add_named 之后：初始化时两个页面已经存在。
@@ -157,12 +191,26 @@ impl SimpleComponent for HomePage {
                     connect_clicked => HomeMsg::Deselect,
                 },
             },
+
+            // 右下角悬浮的新建实例按钮。它属于这个主页，所以目标 root 是确定的。
+            add_overlay = &gtk::Button {
+                set_icon_name: "list-add-symbolic",
+                set_tooltip_text: Some("新建实例"),
+                set_halign: gtk::Align::End,
+                set_valign: gtk::Align::End,
+                set_margin_end: 24,
+                set_margin_bottom: 24,
+                add_css_class: "circular",
+                add_css_class: "suggested-action",
+                add_css_class: "dmcl-add-instance",
+                connect_clicked => HomeMsg::CreateInstance,
+            },
         }
     }
 
     fn init(
-        (shell, config, window): Self::Init,
-        root: Self::Root,
+        (shell, config, root, window): Self::Init,
+        _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let instances = FactoryVecDeque::builder()
@@ -171,70 +219,45 @@ impl SimpleComponent for HomePage {
                 CardOut::Select(index) => HomeMsg::Select(index),
                 CardOut::Launch(index) => HomeMsg::Launch(index),
             });
-        let model = HomePage {
+        let mut model = HomePage {
             shell,
             config,
+            root,
             window,
             instances,
             selected: None,
-            cancels: HashMap::new(),
-            stops: HashMap::new(),
+            installed: Vec::new(),
+            runtimes: HashMap::new(),
+            watch_task: None,
         };
 
         let grid = model.instances.widget();
         let widgets = view_output!();
 
-        // 安装 / 删除版本后自动刷新：主页是常驻页面，不能只靠切标签触发。
-        // 先同步拍一份快照再触发首次 Reload，避免「Reload 读完到监听开始」之间漏掉变化。
-        match model.config.minecraft_root_path() {
-            Ok(root) => {
-                let versions_dir = root.join("versions");
-                let snapshot = versions_snapshot(&versions_dir);
-                relm4::spawn(watch_versions(versions_dir, snapshot, sender.clone()));
-                sender.input(HomeMsg::Reload);
-            }
-            Err(err) => {
-                model
-                    .shell
-                    .toast(&format!("无法读取 Minecraft 根目录：{err:#}"));
-            }
-        }
+        // 安装 / 删除版本后自动刷新：watch 版本目录，变化后再重新扫描。
+        model.watch_task = Some(TaskGuard(relm4::spawn(watch_versions(
+            model.root.path.clone(),
+            sender.clone(),
+        ))));
+        sender.input(HomeMsg::Reload);
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             HomeMsg::Reload => {
-                let root_path = match self.config.minecraft_root_path() {
-                    Ok(root) => root.to_path_buf(),
-                    Err(err) => {
-                        {
-                            let mut guard = self.instances.guard();
-                            guard.clear();
-                        }
-                        self.selected = None;
-                        self.shell
-                            .toast(&format!("无法读取 Minecraft 根目录：{err:#}"));
-                        return;
-                    }
-                };
+                let root = self.root.path.clone();
                 let sender = sender.clone();
                 relm4::spawn(async move {
-                    let result = installed_versions(&root_path)
+                    let result = installed_versions(&root)
                         .await
                         .map_err(|err| format!("{err:#}"));
                     sender.input(HomeMsg::Loaded(result));
                 });
             }
             HomeMsg::Loaded(Ok(versions)) => {
-                {
-                    let mut guard = self.instances.guard();
-                    guard.clear();
-                    for version in versions {
-                        guard.push_back(version.name);
-                    }
-                }
-                self.selected = None;
+                self.installed = versions.into_iter().map(|version| version.name).collect();
+                self.sync_cards();
             }
             HomeMsg::Loaded(Err(err)) => {
                 self.shell.toast(&format!("读取已安装版本失败：{err}"));
@@ -246,60 +269,72 @@ impl SimpleComponent for HomePage {
                 let Some(name) = self.name_at(&index) else {
                     return;
                 };
-                match self.state_at(&index) {
-                    Some(InstanceState::Idle) => self.request_start(name, &sender),
-                    Some(InstanceState::Starting) => {
+                match self.state_of(&name) {
+                    InstanceState::Idle => self.request_start(name, &sender),
+                    InstanceState::Starting => {
                         self.shell.toast(&format!("{name} 正在启动"));
                     }
-                    Some(InstanceState::Running) => {
+                    InstanceState::Running => {
                         self.shell.toast(&format!("{name} 已在运行"));
                     }
-                    Some(InstanceState::Stopping) => {
+                    InstanceState::Stopping => {
                         self.shell.toast(&format!("{name} 正在停止"));
                     }
-                    None => {}
                 }
             }
             HomeMsg::Toggle => {
-                let Some(index) = self.selected.clone() else {
+                let Some(name) = self.selected.clone() else {
                     return;
                 };
-                let Some(name) = self.name_at(&index) else {
-                    return;
-                };
-                match self.state_at(&index) {
-                    Some(InstanceState::Idle) => self.request_start(name, &sender),
-                    Some(InstanceState::Starting | InstanceState::Running) => self.stop(&name),
-                    _ => {}
+                match self.state_of(&name) {
+                    InstanceState::Idle => self.request_start(name, &sender),
+                    InstanceState::Starting | InstanceState::Running => self.stop(&name),
+                    InstanceState::Stopping => {}
                 }
             }
             HomeMsg::LaunchConfirmed { name, launch } => {
                 self.begin_start(name, launch, &sender);
             }
-
-            HomeMsg::GameStarted(name) => {
-                self.cancels.remove(&name);
-                // 取消和启动完成撞车：停止信号已经发出，supervisor 一开始等就会
-                // 收到它。这里保持「停止中」，别闪一下「停止」。
-                if self.state_of(&name) == Some(InstanceState::Stopping) {
+            HomeMsg::Launched { name, monitor } => {
+                self.on_launched(name, monitor, &sender);
+            }
+            HomeMsg::LaunchFailed { name } => {
+                if self
+                    .runtimes
+                    .get(&name)
+                    .is_some_and(|runtime| matches!(runtime.source, RuntimeSource::Starting { .. }))
+                {
+                    self.runtimes.remove(&name);
+                    self.sync_cards();
+                }
+            }
+            HomeMsg::MonitorExited {
+                name,
+                stopped,
+                abnormal,
+            } => {
+                let accept = self.runtimes.get(&name).is_some_and(|runtime| {
+                    matches!(runtime.source, RuntimeSource::Monitor { .. })
+                        && matches!(
+                            runtime.state,
+                            InstanceState::Running | InstanceState::Stopping
+                        )
+                });
+                if !accept {
                     return;
                 }
-                self.set_state(&name, InstanceState::Running);
-            }
-            HomeMsg::GameExited { name, abnormal } => {
-                self.stops.remove(&name);
-                self.cancels.remove(&name);
-                self.set_state(&name, InstanceState::Idle);
-                self.shell.toast(&if abnormal {
+                self.runtimes.remove(&name);
+                self.sync_cards();
+                self.shell.toast(&if stopped {
+                    format!("{name} 已停止")
+                } else if abnormal {
                     format!("{name} 异常退出")
                 } else {
                     format!("{name} 已退出")
                 });
             }
-            HomeMsg::LaunchFailed(name) => {
-                self.stops.remove(&name);
-                self.cancels.remove(&name);
-                self.set_state(&name, InstanceState::Idle);
+            HomeMsg::WatchFailed(err) => {
+                self.shell.toast(&format!("监听版本目录失败：{err}"));
             }
             HomeMsg::Manage => {
                 let name = self.selected_name();
@@ -308,38 +343,179 @@ impl SimpleComponent for HomePage {
                         .toast(&format!("打开 {name} 的管理页（尚未实现）"));
                 }
             }
+            HomeMsg::CreateInstance => create_instance::show(&self.window, &sender),
         }
     }
 }
 
 impl HomePage {
-    /// 拼出 `dmcl-launch` 的一站式启动链。
+    /// 拼出本 root 的启动链。
     fn launch_chain(
         &self,
         name: &str,
         launch: &LaunchConfig,
     ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
-        let option = self.config.launch_option(launch, name)?;
-        let install = std::sync::Arc::new(
-            self.config
-                .install_options(self.config.download_source(), launch)?,
-        );
+        let option = self.config.launch_option(launch, name, &self.root.path)?;
+        let install = std::sync::Arc::new(self.config.install_options(
+            self.config.download_source(),
+            launch,
+            &self.root.path,
+        )?);
         Ok(dmcl_launch::launch_chain(option, install))
     }
 
-    fn selected_card(&self) -> Option<&InstanceCard> {
-        self.instances.get(self.selected.as_ref()?.current_index())
+    /// 读取实例配置；有警告先弹确认框，否则直接开始。
+    fn request_start(&mut self, name: String, sender: &ComponentSender<Self>) {
+        let loaded = self.config.load_instance_sync(&self.root.path, &name);
+        if let Some(error) = loaded.error {
+            let launch = loaded.launch;
+            let sender = sender.clone();
+            let msg_name = name.clone();
+            instance_warning::show(&self.window, &error, move || {
+                sender.input(HomeMsg::LaunchConfirmed {
+                    name: msg_name.clone(),
+                    launch: launch.clone(),
+                });
+            });
+        } else {
+            self.begin_start(name, loaded.launch, sender);
+        }
+    }
+
+    fn begin_start(&mut self, name: String, launch: LaunchConfig, sender: &ComponentSender<Self>) {
+        let chain = match self.launch_chain(&name, &launch) {
+            Ok(chain) => chain,
+            Err(err) => {
+                self.shell.toast(&format!("启动 {name} 失败：{err:#}"));
+                return;
+            }
+        };
+        let cancel = chain.cancel_handle();
+        self.runtimes.insert(
+            name.clone(),
+            InstanceRuntime {
+                state: InstanceState::Starting,
+                source: RuntimeSource::Starting {
+                    cancel: Some(cancel),
+                },
+            },
+        );
+        self.sync_cards();
+
+        let handle = self.shell.run(format!("启动 {name}"), chain, ());
+        let sender = sender.clone();
+        let task_name = name.clone();
+        // 这个任务不挂在 HomePage 上：关闭页面后启动链继续跑。发送失败时，
+        // GameMonitor 会随消息一起被丢弃，游戏进程继续独立运行。
+        relm4::spawn(async move {
+            match handle.finished().await {
+                Ok(monitor) => {
+                    let _ = sender.input_sender().send(HomeMsg::Launched {
+                        name: task_name,
+                        monitor,
+                    });
+                }
+                Err(_) => {
+                    let _ = sender
+                        .input_sender()
+                        .send(HomeMsg::LaunchFailed { name: task_name });
+                }
+            }
+        });
+    }
+
+    fn on_launched(&mut self, name: String, monitor: GameMonitor, sender: &ComponentSender<Self>) {
+        let Some(runtime) = self.runtimes.get_mut(&name) else {
+            return;
+        };
+        if !matches!(runtime.source, RuntimeSource::Starting { .. }) {
+            return;
+        }
+        let was_stopping = runtime.state == InstanceState::Stopping;
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let stop = if was_stopping {
+            let _ = stop_tx.send(());
+            None
+        } else {
+            runtime.state = InstanceState::Running;
+            Some(stop_tx)
+        };
+        runtime.source = RuntimeSource::Monitor {
+            _task: TaskGuard(spawn_monitor(
+                monitor,
+                stop_rx,
+                name.clone(),
+                sender.clone(),
+            )),
+            stop,
+        };
+        self.sync_cards();
+    }
+
+    fn stop(&mut self, name: &str) {
+        let Some(runtime) = self.runtimes.get_mut(name) else {
+            return;
+        };
+        match &mut runtime.source {
+            RuntimeSource::Starting { cancel } => {
+                if let Some(cancel) = cancel.take() {
+                    cancel.cancel();
+                }
+                runtime.state = InstanceState::Stopping;
+            }
+            RuntimeSource::Monitor { stop, .. } => {
+                if let Some(stop) = stop.take() {
+                    let _ = stop.send(());
+                }
+                runtime.state = InstanceState::Stopping;
+            }
+        }
+        self.sync_cards();
+    }
+
+    /// 从 installed + runtimes 重建卡片并恢复选中项。
+    fn sync_cards(&mut self) {
+        let active: Vec<String> = self.runtimes.keys().cloned().collect();
+        let names = visible_versions(&self.installed, active);
+
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|selected| !names.contains(selected))
+        {
+            self.selected = None;
+        }
+
+        {
+            let mut guard = self.instances.guard();
+            guard.clear();
+            for name in &names {
+                let state = self
+                    .runtimes
+                    .get(name)
+                    .map(|runtime| runtime.state)
+                    .unwrap_or(InstanceState::Idle);
+                guard.push_back((name.clone(), state));
+            }
+        }
+        self.apply_selection();
+    }
+
+    fn apply_selection(&mut self) {
+        let selected = self.selected.clone();
+        let mut guard = self.instances.guard();
+        for card in guard.iter_mut() {
+            card.selected = selected.as_deref() == Some(card.name.as_str());
+        }
     }
 
     /// 操作栏上的实例名；没有选中时为空串（操作栏此时隐藏）。
     fn selected_name(&self) -> &str {
-        self.selected_card()
-            .map(|card| card.name.as_str())
-            .unwrap_or_default()
+        self.selected.as_deref().unwrap_or_default()
     }
 
     fn action_state(&self) -> Option<InstanceState> {
-        self.selected_card().map(|card| card.state)
+        self.selected.as_deref().map(|name| self.state_of(name))
     }
 
     fn action_text(&self) -> &'static str {
@@ -370,174 +546,162 @@ impl HomePage {
             .map(|card| card.name.clone())
     }
 
-    fn state_at(&self, index: &DynamicIndex) -> Option<InstanceState> {
-        self.instances
-            .get(index.current_index())
-            .map(|card| card.state)
-    }
-
-    fn state_of(&self, name: &str) -> Option<InstanceState> {
-        self.instances
-            .iter()
-            .find(|card| card.name == name)
-            .map(|card| card.state)
+    fn state_of(&self, name: &str) -> InstanceState {
+        self.runtimes
+            .get(name)
+            .map(|runtime| runtime.state)
+            .unwrap_or(InstanceState::Idle)
     }
 
     fn select(&mut self, index: DynamicIndex) {
-        let current = index.current_index();
-        if self.instances.get(current).is_none() {
+        let Some(name) = self.name_at(&index) else {
             return;
-        }
-        {
-            let mut guard = self.instances.guard();
-            for (position, card) in guard.iter_mut().enumerate() {
-                card.selected = position == current;
-            }
-        }
-        self.selected = Some(index);
+        };
+        self.selected = Some(name);
+        self.apply_selection();
     }
 
     fn deselect(&mut self) {
-        {
-            let mut guard = self.instances.guard();
-            for card in guard.iter_mut() {
-                card.selected = false;
-            }
-        }
         self.selected = None;
-    }
-
-    fn set_state(&mut self, name: &str, state: InstanceState) {
-        let Some(index) = self.instances.iter().position(|card| card.name == name) else {
-            return;
-        };
-        let mut guard = self.instances.guard();
-        if let Some(card) = guard.get_mut(index) {
-            card.state = state;
-        }
-    }
-
-    /// 读取实例配置；有警告先弹确认框，否则直接开始。
-    fn request_start(&mut self, name: String, sender: &ComponentSender<Self>) {
-        let loaded = self.config.load_instance_sync(&name);
-        if let Some(error) = loaded.error {
-            let launch = loaded.launch;
-            let sender = sender.clone();
-            let msg_name = name.clone();
-            instance_warning::show(&self.window, &error, move || {
-                sender.input(HomeMsg::LaunchConfirmed {
-                    name: msg_name.clone(),
-                    launch: launch.clone(),
-                });
-            });
-        } else {
-            self.begin_start(name, loaded.launch, sender);
-        }
-    }
-
-    fn begin_start(&mut self, name: String, launch: LaunchConfig, sender: &ComponentSender<Self>) {
-        let chain = match self.launch_chain(&name, &launch) {
-            Ok(chain) => chain,
-            Err(err) => {
-                self.shell.toast(&format!("启动 {name} 失败：{err:#}"));
-                return;
-            }
-        };
-        self.set_state(&name, InstanceState::Starting);
-        self.cancels.insert(name.clone(), chain.cancel_handle());
-        let handle = self.shell.run(format!("启动 {name}"), chain, ());
-
-        // supervisor 任务：等游戏退出（或停止信号），完了汇报。
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-        self.stops.insert(name.clone(), stop_tx);
-        let sender = sender.clone();
-        relm4::spawn(async move {
-            match handle.finished().await {
-                Ok(monitor) => {
-                    sender.input(HomeMsg::GameStarted(name.clone()));
-                    supervise(monitor, stop_rx, sender.clone(), name).await;
-                }
-                Err(_) => sender.input(HomeMsg::LaunchFailed(name)),
-            }
-        });
-    }
-
-    fn stop(&mut self, name: &str) {
-        // 启动中：取消启动链；运行中：让 supervisor kill 进程。
-        // 两个都发，覆盖「链刚好跑完、进程已经起来」的竞态。
-        if let Some(cancel) = self.cancels.remove(name) {
-            cancel.cancel();
-        }
-        if let Some(stop) = self.stops.remove(name) {
-            let _ = stop.send(());
-        }
-        self.set_state(name, InstanceState::Stopping);
+        self.apply_selection();
     }
 }
 
-/// 等游戏进程退出：要么它自己退出，要么收到「停止」信号后 kill。
-///
-/// 用 `select!` + 「先 break 再 kill」的写法，避免在 `select!` 里对 monitor 双重可变借用。
-async fn supervise(
+/// 可见版本：已安装版本保持原顺序，活动但不在目录里的版本按名字追加。
+fn visible_versions(installed: &[String], mut active: Vec<String>) -> Vec<String> {
+    active.sort();
+    let mut names = installed.to_vec();
+    for name in active {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// 等 GameMonitor 退出；用户停止时先 kill 再 wait。
+fn spawn_monitor(
     mut monitor: GameMonitor,
-    mut stop_rx: tokio::sync::oneshot::Receiver<()>,
-    sender: ComponentSender<HomePage>,
+    stop_rx: tokio::sync::oneshot::Receiver<()>,
     name: String,
-) {
-    // 等「进程自己退出」或「停止信号」；两者都只取一个结果，不留悬空借用。
-    let abnormal = tokio::select! {
-        status = monitor.wait() => !matches!(status, Ok(status) if status.success()),
-        _ = &mut stop_rx => {
-            let _ = monitor.kill().await;
-            let _ = monitor.wait().await;
-            false
+    sender: ComponentSender<HomePage>,
+) -> relm4::JoinHandle<()> {
+    relm4::spawn(async move {
+        let (stopped, status) = tokio::select! {
+            status = monitor.wait() => (false, status),
+            signal = stop_rx => {
+                if signal.is_ok() {
+                    let _ = monitor.kill().await;
+                    (true, monitor.wait().await)
+                } else {
+                    // stop sender 被丢弃但页面还在收尾：等游戏自然退出，不要误杀。
+                    (false, monitor.wait().await)
+                }
+            }
+        };
+        let abnormal = !matches!(status, Ok(status) if status.success()) && !stopped;
+        let _ = sender.input_sender().send(HomeMsg::MonitorExited {
+            name,
+            stopped,
+            abnormal,
+        });
+    })
+}
+
+/// 要 watch 的路径：优先 `versions`；还不存在就 watch 最近的存在祖先，
+/// 等它被创建后再重新挂到 `versions`。
+fn watch_target(versions: &Path) -> Option<PathBuf> {
+    if versions.exists() {
+        return Some(versions.to_path_buf());
+    }
+    let mut current = versions;
+    while !current.exists() {
+        current = current.parent()?;
+    }
+    Some(current.to_path_buf())
+}
+
+/// 只关心直接改变 `versions` 子项的事件：创建 / 删除 / 重命名。
+///
+/// 版本目录内部的文件写入、目录 metadata 变化、访问事件都不算列表变化。即使某个平台
+/// 的 watcher 仍然把子目录里的事件送上来，这个过滤也能把它们挡掉。
+fn event_changes_versions(event: &Event, watched: &Path) -> bool {
+    let touches_watched = event
+        .paths
+        .iter()
+        .any(|path| path == watched || path.parent() == Some(watched));
+    if !touches_watched {
+        return false;
+    }
+    matches!(
+        event.kind,
+        EventKind::Any
+            | EventKind::Other
+            | EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(ModifyKind::Any | ModifyKind::Name(_) | ModifyKind::Other)
+    )
+}
+
+/// watch 版本目录；出现变更事件后重新扫描，不做固定轮询。
+async fn watch_versions(root: PathBuf, sender: ComponentSender<HomePage>) {
+    let versions_dir = root.join("versions");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let mut watcher = match notify::recommended_watcher(move |event: notify::Result<Event>| {
+        if let Ok(event) = event {
+            let _ = tx.send(event);
+        }
+    }) {
+        Ok(watcher) => watcher,
+        Err(err) => {
+            let _ = sender
+                .input_sender()
+                .send(HomeMsg::WatchFailed(format!("{err}")));
+            return;
         }
     };
-    sender.input(HomeMsg::GameExited { name, abnormal });
-}
 
-/// `versions` 目录快照：顶层子目录名 + 目录自身 mtime。
-///
-/// 主页列表就来自这些子目录（见 `installed_versions`）；目录里增删文件会更新目录
-/// mtime，足以发现安装 / 删除。按名字排序，便于直接比较两份快照。
-fn versions_snapshot(dir: &Path) -> Vec<(String, Option<SystemTime>)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        // 目录还不存在（全新 root）视作空快照。
-        return Vec::new();
-    };
-    let mut snapshot: Vec<(String, Option<SystemTime>)> = entries
-        .flatten()
-        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
-        .map(|entry| {
-            let modified = entry.metadata().ok().and_then(|meta| meta.modified().ok());
-            (entry.file_name().to_string_lossy().into_owned(), modified)
-        })
-        .collect();
-    snapshot.sort();
-    snapshot
-}
-
-/// 轮询 `versions` 目录；有变化就给主页发一次 `Reload`。
-///
-/// `previous` 是调用方在首次 `Reload` **之前**拍下的快照，这样「首次读取」和「监听
-/// 开始」之间不会有空档。
-///
-/// 不用事件监听是刻意的：版本目录很小，1s 一次目录快照的成本可以忽略；这样跨平台，
-/// 也不用处理「目录还不存在 / 被整体替换」等监听器边界，更不用引入新依赖。
-/// 发送失败（页面已关）就退出，避免往已销毁的组件里发消息。
-async fn watch_versions(
-    dir: PathBuf,
-    mut previous: Vec<(String, Option<SystemTime>)>,
-    sender: ComponentSender<HomePage>,
-) {
+    let mut watched: Option<PathBuf> = None;
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let current = versions_snapshot(&dir);
-        if current != previous {
-            previous = current;
-            if sender.input_sender().send(HomeMsg::Reload).is_err() {
-                break;
+        let target = watch_target(&versions_dir);
+        if target != watched {
+            if let Some(old) = watched.take() {
+                let _ = watcher.unwatch(&old);
             }
+            match target {
+                Some(path) => match watcher.watch(&path, RecursiveMode::NonRecursive) {
+                    Ok(()) => watched = Some(path),
+                    Err(err) => {
+                        let _ = sender
+                            .input_sender()
+                            .send(HomeMsg::WatchFailed(format!("{err}")));
+                        return;
+                    }
+                },
+                None => {
+                    let _ = sender
+                        .input_sender()
+                        .send(HomeMsg::WatchFailed("找不到可监听的版本目录".to_string()));
+                    return;
+                }
+            }
+        }
+
+        let Some(event) = rx.recv().await else {
+            break;
+        };
+        let Some(watched_path) = watched.as_deref() else {
+            continue;
+        };
+        if !event_changes_versions(&event, watched_path) {
+            continue;
+        }
+
+        // 安装器一次会制造一串事件，合并成一次 Reload。
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        while rx.try_recv().is_ok() {}
+        if sender.input_sender().send(HomeMsg::Reload).is_err() {
+            break;
         }
     }
 }
@@ -547,22 +711,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn versions_snapshot_lists_only_directories_sorted() {
+    fn visible_versions_keep_installed_order_and_append_ghosts() {
+        let installed = vec!["1.20.1".to_string(), "1.21".to_string()];
+        let active = vec!["1.21".to_string(), "forgotten".to_string()];
+        assert_eq!(
+            visible_versions(&installed, active),
+            vec![
+                "1.20.1".to_string(),
+                "1.21".to_string(),
+                "forgotten".to_string()
+            ]
+        );
+
+        assert_eq!(
+            visible_versions(&[], vec!["b".to_string(), "a".to_string()]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn watch_target_uses_versions_or_the_nearest_existing_parent() {
         let root = std::env::temp_dir().join(format!("dmcl-home-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("1.21.10")).unwrap();
-        std::fs::create_dir_all(root.join("1.20.1-forge")).unwrap();
-        std::fs::write(root.join("note.txt"), "x").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let versions = root.join("versions");
 
-        let names: Vec<String> = versions_snapshot(&root)
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect();
-        assert_eq!(names, vec!["1.20.1-forge", "1.21.10"]);
+        // versions 还不存在：先 watch root，等 versions 被创建。
+        assert_eq!(watch_target(&versions), Some(root.clone()));
 
-        // 目录不存在 = 空快照（全新 root 也能起监听）。
-        assert!(versions_snapshot(&root.join("missing")).is_empty());
+        std::fs::create_dir_all(&versions).unwrap();
+        assert_eq!(watch_target(&versions), Some(versions.clone()));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn watcher_only_cares_about_direct_version_entries() {
+        use notify::event::{CreateKind, DataChange, MetadataKind, RenameMode};
+
+        let versions = Path::new("/mc/versions");
+        let version = versions.join("1.20.1");
+
+        let created = Event::new(EventKind::Create(CreateKind::Folder)).add_path(version.clone());
+        assert!(event_changes_versions(&created, versions));
+
+        let renamed = Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(version.clone());
+        assert!(event_changes_versions(&renamed, versions));
+
+        // 版本目录内部的文件写入不触发列表刷新。
+        let inner = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)))
+            .add_path(version.join("mods/example.jar"));
+        assert!(!event_changes_versions(&inner, versions));
+
+        // 目录 metadata 变化也不代表版本列表变化。
+        let metadata = Event::new(EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::WriteTime,
+        )))
+        .add_path(version);
+        assert!(!event_changes_versions(&metadata, versions));
     }
 }

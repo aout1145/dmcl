@@ -1,69 +1,110 @@
 # 主页
 
-`crates/dmcl/src/gui/gtk4/pages/home` —— 实例列表、运行状态与游戏进程。整体架构见
-[gtk4/README.md](../../README.md)。
+`crates/dmcl/src/gui/gtk4/pages/home` —— 一个 Minecraft 根目录下的实例列表、运行状态与
+游戏进程。整体架构见 [gtk4/README.md](../../README.md)。
 
-## 组件与视图
+## 一个主页 = 一个 root
+
+`HomePage` 的初始化参数里带 `MinecraftRoot { name, path }`。版本目录监听、实例配置读取、
+安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。
+
+主页标签可以随时关闭。关闭后整个 `HomePage` 直接销毁：
+
+- 版本目录 watcher 中止；
+- 本页启动的 monitor task 中止并 drop `GameMonitor`；
+- 游戏进程继续独立运行。
+
+重新打开同一 root 会创建新的 `HomePage`，运行状态从 Idle 开始，不恢复已经脱离页面的
+进程状态。
+
+## 视图
 
 `HomePage` 是 relm4 组件，**视图用 `view!` 声明**（`GtkOverlay` + `GtkStack` +
 `AdwWrapBox` + 底部胶囊操作栏），`#[watch]` 负责在模型变化后刷新空状态 / 操作栏文案 / 图标 /
-可用性；磁贴列表用 `FactoryVecDeque<InstanceCard>`，不再手写 `render` / `remove` + `append`。
+可用性；磁贴列表用 `FactoryVecDeque<InstanceCard>`。
 
-实例列表**自动跟随 `versions` 目录**：后台每秒对比顶层版本目录快照（名字 + 目录 mtime），
-变化就发 `HomeMsg::Reload`——安装关页后创建实例目录、外部新增 / 删除版本都能立刻看到。
+- 磁贴单击选中、双击启动；底部胶囊操作栏显示启动 / 取消 / 停止、管理、取消选择。
+- 右下角有一个悬浮的圆形 `+` 按钮：点开模态「创建实例」对话框。对话框有标题栏和关闭
+  按钮；目前只有「自定义」一项，副标题是「创建自定义的 Minecraft 实例」。选择后主页发出
+  `HomeOut::CreateCustom`，App 使用这个主页创建时捕获的 root 打开 `CustomPage`，不依赖
+  当前选中的标签。
+- **运行中**时磁贴右上角显示小绿点；启动链阶段不显示。
+- 选中项按**版本名**保存；列表重建后按名字恢复。
 
-这里用轮询而不是事件监听库：版本目录很小、跨平台，且不必处理「目录还不存在 / 被整体替换」
-等监听器边界，也不用新增依赖。
+## 实例列表
 
-## 实例磁贴
+`versions/` 目录用 `notify` watch；`versions` 还不存在时先 watch 最近存在的祖先目录，
+它创建后再重新挂到 `versions`。事件先做 200ms 合并，再发 `HomeMsg::Reload`，不做固定轮询。
 
-- 磁贴是**等宽**的透明 `GtkButton`（类似 GNOME Files：大图标 + 最多三行名称；行高按内容
-  收缩，不预留三行）。
-- **运行中**时右上角显示小绿点（`media-record-symbolic` + `.success`）。
-- 磁贴的单击选中 / 双击启动通过 `CardOut` 上报给主页。
-- **单击选中**，底部浮出**胶囊操作栏**（`.card` + `.dmcl-action-bar`，含启动 / 停止、管理、
-  取消选择）；**点空白处**或胶囊栏的 × 取消选中；**双击启动**（双击手势放在捕获阶段，否则
-  会被按钮自己的点击吞掉）。
+显示列表是：
 
-## 启动 / 停止 / 运行状态
+```text
+installed（目录里的版本，保持顺序）
+  ∪
+runtimes（Starting / Running / Stopping 的版本）
+```
 
-**运行中 / 启动中 / 停止中的实例拒绝再次启动**：每个实例用 `InstanceState`
-（`Idle` / `Starting` / `Running` / `Stopping`）记录状态，底部栏的文案、图标、按钮动作都由它
-派生。
+活动但目录里暂时不存在的版本会追加成幽灵卡片，直到进程退出；这样不会因为目录被删就
+失去停止入口。
 
-- **启动**：home 先同步读取实例配置；没有警告时用「全局 `launch` + 实例覆盖」拼出
-  `dmcl_launch::launch_chain`，交给 `Shell::run`；有警告时先弹确认框，点「继续启动」才
-  走同一条路径。一个扁平的 `relm4::spawn` 等 `handle.finished()`，成功就发
-  `HomeMsg::GameStarted`，失败发 `LaunchFailed`。
-- **运行状态不轮询**：把 `GameMonitor` 交给一个 supervisor 任务：
+`Reload` 重建卡片时状态从 `runtimes` 取，不会把 Running 重置成 Idle。
 
-  ```text
-  let abnormal = tokio::select! {
-      status = monitor.wait() => !matches!(status, Ok(s) if s.success()),
-      _ = &mut stop_rx => {
-          let _ = monitor.kill().await;
-          let _ = monitor.wait().await;
-          false   // 用户主动停止不算异常
-      }
-  };
-  sender.input(HomeMsg::GameExited { name, abnormal });
-  ```
+## 运行状态
 
-  （`select!` 的两个分支都不在处理器里碰 monitor，避免双重可变借用；要 kill 就先退出 select。）
+每个活动实例用：
 
-- **异常退出**：非 0 退出码（或拿不到退出状态）算异常，home 弹「xxx 异常退出」；用户主动
-  停止不算异常。更详细的错误报告窗口是远期规划。
-- **启动中可以直接取消**：用 `CancelHandle` 取消启动链，同时发停止信号，覆盖「链刚好跑完、
-  进程已经起来」的竞态；按钮变成不可点的「停止中…」，等收尾完成再回到 `Idle`。
-- **停止**：操作栏只发 `HomeMsg::Toggle`，home 按选中实例的状态决定启动、取消还是停止。
-- **取消任务**：任务窗口自己持有 `CancelHandle`；卡片右上角的叉在运行中会取消
-  （`TaskMsg::CloseCard`），与主页的停止是两条独立路径。
+```text
+Idle / Starting / Running / Stopping
+```
+
+`Idle` 不进入 `runtimes`；没有条目就是 Idle。
+
+运行状态只有一个来源：本页启动成功后拿到的 `GameMonitor`。
+
+启动链成功拿到 `GameMonitor` 后，主页启动一个 monitor task：
+
+```text
+select! {
+    status = monitor.wait() => 自然退出
+    _ = stop_rx => kill + wait
+}
+  ↓
+HomeMsg::MonitorExited { name, stopped, abnormal }
+```
+
+它能精确判断正常退出、异常退出、用户主动停止。页面关闭后 monitor task 中止，
+`GameMonitor` 被 drop，进程继续运行，但主页不再知道它的状态。
+
+## 启动 / 停止
+
+- **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」
+  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`。
+- 启动链的完成任务不挂在 `HomePage` 上：关闭页面后它继续运行；如果主页已经关闭，
+  `Launched` 消息发送失败，`GameMonitor` 随消息一起被丢弃，进程继续独立运行。
+- **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，
+  立即给 monitor task 发停止信号。
+- **Running 阶段停止**：给 monitor task 发 stop。
+- **取消任务**：任务窗口自己持有 `CancelHandle`，与主页停止是两条路径。
 
 ## 消息
 
-`HomeMsg`（`message.rs`）覆盖主页内部动作：`Reload` / `Loaded` / `Select(DynamicIndex)` /
-`Deselect` / `Launch(DynamicIndex)` / `Toggle` / `LaunchConfirmed { name, launch }` /
-`GameStarted` / `GameExited { name, abnormal }` / `LaunchFailed` / `Manage`。
+`HomeMsg`（`message.rs`）包括：
+
+```text
+Reload / Loaded
+Select / Deselect / Launch / Toggle
+LaunchConfirmed { name, launch }
+Launched { name, monitor }
+LaunchFailed { name }
+MonitorExited { name, stopped, abnormal }
+WatchFailed(String)
+Manage
+CreateInstance
+```
+
+对外只输出 `HomeOut::CreateCustom`；App 用创建主页时捕获的 root 打开新建实例页。
+
+迟到消息按 runtime 是否存在、来源是否匹配来忽略；不使用 run id。
 
 ## 实例配置警告
 
@@ -73,5 +114,6 @@
 
 ## 测试
 
-`versions_snapshot` 的离线单测覆盖：只列直接子目录、按名字排序、目录不存在时返回空快照
-（全新 root 也能起监听）。
+- `watch_target`：`versions` 存在时监听它，否则回退到最近存在的祖先目录。
+- `visible_versions`：保留 installed 顺序，活动幽灵版本追加并去重。
+- `event_changes_versions`：只接受直接子项的创建 / 删除 / 重命名，忽略目录内部文件写入和 metadata 变化。

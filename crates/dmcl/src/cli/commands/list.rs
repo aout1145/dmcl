@@ -2,12 +2,11 @@
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config::{Config, MinecraftRoot};
 
 /// `list` —— 列出**已安装**的版本。
-pub(crate) async fn installed(config: &Config) -> Result<()> {
-    let root = config.minecraft_root_path()?;
-    let versions = dmcl_mcmeta::layout::installed_versions(root).await?;
+pub(crate) async fn installed(root: &MinecraftRoot) -> Result<()> {
+    let versions = dmcl_mcmeta::layout::installed_versions(&root.path).await?;
     if versions.is_empty() {
         println!("还没有安装任何版本。");
         return Ok(());

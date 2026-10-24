@@ -45,7 +45,7 @@ async fn the_whole_chain_runs_from_a_config_document() {
     // 配置 → 下载源 / 安装选项
     let source = config.download_source();
     let install = config
-        .install_options(source, &config.launch)
+        .install_options(source, &config.launch, &root)
         .expect("install_options");
     assert_eq!(install.root_path, root);
     assert_eq!(install.download.max_connections, 8);
@@ -60,7 +60,7 @@ async fn the_whole_chain_runs_from_a_config_document() {
 
     // 配置 → 启动选项 → 启动器
     let option = config
-        .launch_option(&config.launch, VERSION)
+        .launch_option(&config.launch, VERSION, &root)
         .expect("launch_option");
     assert_eq!(option.account.get_name(), "player");
     let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");

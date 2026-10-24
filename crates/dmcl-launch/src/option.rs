@@ -32,8 +32,8 @@ pub struct LaunchOption {
     pub min_memory: u32,
     pub max_memory: u32,
     pub custom_info: String,
-    pub additional_jvm: String,
-    pub additional_game: String,
+    pub additional_jvm: Vec<String>,
+    pub additional_game: Vec<String>,
     /// 用哪个 java（默认自动选择）。
     pub java: JavaChoice,
     /// 候选 java 表（自动选择时用）。
@@ -73,10 +73,11 @@ impl LaunchOption {
             min_memory: 512,
             max_memory: 2048,
             custom_info: LAUNCHER_NAME.to_string(),
-            additional_jvm:
-                "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True"
-                    .to_string(),
-            additional_game: String::new(),
+            additional_jvm: vec![
+                "-Dfml.ignoreInvalidMinecraftCertificates=True".to_string(),
+                "-Dfml.ignorePatchDiscrepancies=True".to_string(),
+            ],
+            additional_game: Vec::new(),
             java: JavaChoice::Auto,
             java_configs: JavaConfigs::new(),
             skip_music: false,
@@ -120,7 +121,8 @@ mod tests {
         assert_eq!(option.custom_info, LAUNCHER_NAME);
         assert!(option
             .additional_jvm
-            .contains("ignoreInvalidMinecraftCertificates"));
+            .iter()
+            .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         assert!(option.additional_game.is_empty());
         assert!(option.java.is_auto());
         assert_eq!(

@@ -206,13 +206,8 @@ impl GameLauncher {
             args.push("${classpath}".to_string());
         }
 
-        // 额外的 jvm 参数（按空白切分，连续空格不产生空参数）
-        args.extend(
-            self.option
-                .additional_jvm
-                .split_whitespace()
-                .map(str::to_string),
-        );
+        // 额外的 jvm 参数（调用者已经拆成独立参数）。
+        args.extend(self.option.additional_jvm.iter().cloned());
         // 内存上限
         args.push(format!("-Xmn{}m", self.option.min_memory));
         args.push(format!("-Xmx{}m", self.option.max_memory));
@@ -238,13 +233,8 @@ impl GameLauncher {
         args.push(self.option.window_width.to_string());
         args.push("--height".to_string());
         args.push(self.option.window_height.to_string());
-        // 额外的游戏参数
-        args.extend(
-            self.option
-                .additional_game
-                .split_whitespace()
-                .map(str::to_string),
-        );
+        // 额外的游戏参数（调用者已经拆成独立参数）。
+        args.extend(self.option.additional_game.iter().cloned());
 
         // 模板替换：这些都是要拼进命令行的值，因此必须是字符串
         let classpath = self.get_libraries(ctx).await?;
@@ -447,22 +437,6 @@ mod tests {
         assert!(compare_to("1.0", "1.0.1", Cmp::Lt).unwrap());
     }
 
-    /// `split_whitespace` 切分参数串：空输入得到空列表（`launch.additional_game`
-    /// 默认就是 `""`），连续空格不产生空参数。
-    #[test]
-    fn argument_strings_split_on_whitespace() {
-        let split = |text: &str| {
-            text.split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        };
-        assert!(split("").is_empty());
-        assert_eq!(split("a b"), vec!["a", "b"]);
-        assert_eq!(split("  a   b  "), vec!["a", "b"]);
-        // 连续两个空格也不产生空参数
-        assert_eq!(split("a  b"), vec!["a", "b"]);
-    }
-
     fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, "1.0");
         let version_path = version_dir(&root, "1.0");
@@ -552,6 +526,10 @@ mod tests {
         .unwrap();
 
         let mut launcher = launcher_with(json, root);
+        launcher
+            .option
+            .additional_jvm
+            .push("-Ddmcl.test.extra=1.0".to_string());
         let args = launcher.gen_args().await.unwrap();
 
         // 第一个参数是已选定的 java 可执行文件
@@ -571,6 +549,8 @@ mod tests {
         assert!(args
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
+        // 调用者追加的额外 JVM 参数原样带上
+        assert!(args.contains(&"-Ddmcl.test.extra=1.0".to_string()));
     }
 
     #[test]

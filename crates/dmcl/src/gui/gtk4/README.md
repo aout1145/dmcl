@@ -12,6 +12,8 @@
   `TaskChain` 跑起来、把 `TaskEvent` 渲染成界面。业务 crate 一行不改。
 - 页面（主页、新建实例等）是 **relm4 组件**，各自拥有状态、消息与 widget；app 层的共享能力
   收在 `Shell` 服务里；根组件只做组装。
+- 一个主页绑定一个 `MinecraftRoot`；标题栏的根目录菜单可以打开多个主页。主页标签可关闭，
+  关闭后游戏进程继续运行，但页面里的运行状态不会跨页面保留。
 
 ## 编译与运行
 
@@ -63,6 +65,8 @@
 - 页面优先用 **`#[relm4::component]` + `view!`** 声明视图，状态变化交给 `#[watch]` /
   `#[track]`；**不要手写 `render` 重建子控件**。动态列表用 `FactoryVecDeque` /
   `FactoryComponent` 同步增删，不要长期维护「名字 → widget」的旁路表。
+- **不要在 `update` / `init` 里命令式循环创建、清空或重建控件树**；列表增删改走
+  `FactoryVecDeque`，一次性静态结构写进 `view!`。
 - **状态只有一份**：互斥状态用 enum（如 `InstanceState`、任务的 `TaskStatus`），不要用几个
   布尔量 / 集合分别表示，否则容易出现「状态改了但界面没刷新」或两个标志互相矛盾。
 - 动态的任务卡片也是 `FactoryComponent`（`app/tasks/task_card.rs`），任务列表由
@@ -85,7 +89,11 @@ gtk4/
 │   ├── page_host.rs
 │   ├── shell.rs
 │   ├── toast.rs
-│   ├── header.rs
+│   ├── header/                  # 标题栏 + 根目录行 + 外观切换 / 关于
+│   │   ├── mod.rs
+│   │   ├── root_row.rs
+│   │   ├── theme.rs
+│   │   └── about.rs
 │   └── tasks/                   # 任务窗口
 │       ├── README.md            # 任务窗口 / 卡片 / 警告确认 / 进度还原
 │       ├── mod.rs
@@ -167,7 +175,8 @@ GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway�
 
 - 任务进度 reducer（`app/tasks/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
   结束状态、取消中 / 已取消的转换、进度说明拼法；
-- 版本目录快照（`pages/home/mod.rs`）：只列直接子目录、排序、目录不存在；
+- 版本目录监听（`pages/home/mod.rs`）：`notify` watch `versions`；目录不存在时 watch 最近祖先，
+  事件合并后重新扫描；
 - 版本适配（`pages/download/custom/versions.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、
   Fabric 最新 / 推荐规则、NeoForge 置顶；标签标题在 `custom/mod.rs`；
 - 过滤（`pages/download/common/version_select.rs`）：类别、搜索、保持顺序、未列出类别；

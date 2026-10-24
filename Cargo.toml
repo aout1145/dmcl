@@ -55,6 +55,7 @@ dialoguer = "0.11"
 version-compare = "0.2"
 regex = "1"
 os_info = "3"
+notify = "8.2"
 relm4 = { version = "0.11", features = ["libadwaita", "gnome_48"] }
 
 [profile.release]

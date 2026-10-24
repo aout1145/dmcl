@@ -1,5 +1,6 @@
 //! 主页的消息。
 
+use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::InstalledVersion;
 use relm4::factory::DynamicIndex;
 
@@ -22,12 +23,20 @@ pub(crate) enum HomeMsg {
     Toggle,
     /// 用户在实例配置警告框里点了「继续启动」。
     LaunchConfirmed { name: String, launch: LaunchConfig },
-    /// 游戏进程已开始。
-    GameStarted(String),
-    /// 游戏进程已退出。`abnormal` 表示非正常退出（非 0 退出码 / 等不到状态）。
-    GameExited { name: String, abnormal: bool },
-    /// 启动失败（任务层已经会提示失败，这里只清理状态）。
-    LaunchFailed(String),
+    /// 启动链成功拿到了游戏进程。
+    Launched { name: String, monitor: GameMonitor },
+    /// 启动链失败或被取消。
+    LaunchFailed { name: String },
+    /// 本页启动的进程已经退出。
+    MonitorExited {
+        name: String,
+        stopped: bool,
+        abnormal: bool,
+    },
+    /// 版本目录监听失败。
+    WatchFailed(String),
     /// 打开选中实例的「管理」页。
     Manage,
+    /// 打开「新建实例」方式选择框。
+    CreateInstance,
 }
