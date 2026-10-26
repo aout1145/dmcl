@@ -38,7 +38,7 @@ pub mod prepare;
 
 pub use account::{sha1_uuid, Account, OfflineAccount};
 pub use java::{
-    find_java, select_java, JavaChoice, JavaConfigs, JavaOption, DEFAULT_JAVA_ROOTS,
+    default_java_roots, find_java, select_java, JavaChoice, JavaConfigs, JavaOption,
     JAVA_AUTOSELECT,
 };
 pub use launcher::GameLauncher;

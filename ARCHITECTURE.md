@@ -285,7 +285,8 @@ monitor.wait().await?;
 - `check_integrity(plan, version)`（`dmcl-install`）返回 `IntegrityStatus { complete, missing, checked }`，
   每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符）；它**不检查 natives**；
 - 它**不下载任何东西**：修复由调用者跑 `dmcl-install` 的 `game_files_task`（已存在的文件会被跳过）；
-- Java 选择不读全局配置：`find_java(roots)` 只返回结果，`select_java(required_major,
+- Java 选择不读全局配置：`default_java_roots()` 按平台给出常见安装目录与 `JAVA_HOME`，
+  `find_java(roots)` 只返回扫描结果（扫不到就是空表），`select_java(required_major,
 &choice, &configs)` 接收配置表；
 - 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 准备 natives → 生成参数 →
   启动」串成一条 `TaskChain<(), GameMonitor>`：**准备 natives** 先选好 java，再按这个 java 的
@@ -315,8 +316,8 @@ CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/m
 交互式菜单或配置编辑器。
 
 安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取、也不创建实例
-`dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、合并进全局 `javas`
-并保存。
+`dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、按路径去重后合并进
+全局 `javas` 并保存。
 
 GUI 的主页按 `MinecraftRoot` 分标签：标题栏最左侧的根目录菜单负责打开 / 聚焦主页；每个
 主页右下角的悬浮 `+` 打开「创建实例」对话框，`CustomPage` 使用该主页捕获的

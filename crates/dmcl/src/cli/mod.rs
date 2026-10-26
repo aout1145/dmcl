@@ -235,7 +235,7 @@ pub enum Commands {
         verid: String,
     },
 
-    /// 搜索本机 java 并写入配置
+    /// 搜索本机 java（常见安装目录与 JAVA_HOME）并写入配置
     #[command(name = "search-java")]
     SearchJava,
 

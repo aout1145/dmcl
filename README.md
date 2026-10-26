@@ -96,10 +96,11 @@ dmcl list
 dmcl list-mc --type=release,snapshot
 ```
 
-首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描本机并写入全局配置。账户、
-根目录和 Java 表也可以通过直接编辑全局 `dmcl.json` 维护。账号目前只有离线模式，
-联机登录还没实现。图形界面的账号、实例管理页面仍在开发中；主菜单的「启动器选项」
-「全局游戏选项」目前是空白设置页。
+首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描常见安装目录
+（Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
+与 Homebrew）以及 `JAVA_HOME` 并写入全局配置。账户、根目录和 Java 表也可以通过直接编辑
+全局 `dmcl.json` 维护。账号目前只有离线模式，联机登录还没实现。图形界面的账号、实例管理
+页面仍在开发中；主菜单的「启动器选项」「全局游戏选项」目前是空白设置页。
 
 图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
 所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
@@ -123,7 +124,7 @@ dmcl list-mc --type=release,snapshot
 | `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                               |
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                       |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                    |
-| `search-java`                                                               | 搜索本机 Java，合并进全局配置并保存                   |
+| `search-java`                                                               | 搜索本机 Java（常见安装目录 / `JAVA_HOME`），合并进全局配置并保存 |
 | `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错） |
 | `version`                                                                   | 显示版本与构建时间                                    |
 
@@ -188,6 +189,8 @@ macOS `~/Library/Application Support`）。
 ```
 
 - `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
+- `search-java` 自动生成的 `javas` 名字形如
+  `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
 - `minecraft_roots` 是具名根目录的数组，条目为 `{ "name": "...", "path": "..." }`；
   `name` 直接作为界面上的显示名，必须唯一。默认有两个：「当前目录」
