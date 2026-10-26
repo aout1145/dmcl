@@ -8,13 +8,13 @@
 `app/mod.rs` 只做组装，视图用 `view!` 声明：
 
 - `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层都由 `view!` 搭出来；
-- 启动 `Header`、`TaskCenter` 与启动时的默认 `HomePage`；标题栏的根目录菜单可以再打开
-  其它 root 的主页；
+- 启动 `Header`、`TaskCenter`；按配置里的全部 `minecraft_roots` 创建常驻 `HomePage`，
+  启动时只给默认 root 建标签页；
 - 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页、设置默认 root 和任务；主页的
-  `HomeOut::CreateCustom` 打开新建实例页；`HomeClosed` 清理关闭的主页；`TaskCenterOut`
-  负责任务角标与退出；
-- 所有主页标签都可以关闭。标签 `page-detached` 时清理 `PageHost` 和 root 映射；
-  `HomePage` 随之销毁，游戏进程继续运行，但页面里的运行状态不会恢复。
+  `HomeOut::CreateCustom` 打开新建实例页；`HomeTabClosed` 只把对应标签状态设为关闭；
+  `TaskCenterOut` 负责任务角标与退出；
+- 所有主页标签都可以关闭。标签 `page-detached` 时清理 `PageHost` 和标签映射，但
+  `HomePage` 继续常驻；重新打开时把同一个根 widget 挂到新标签，运行状态不会丢。
 
 标题栏也是独立组件（`header/mod.rs`，根目录菜单行在 `header/root_row.rs`，外观切换在
 `header/theme.rs`，「关于」在 `header/about.rs`），整行由 `view!` 声明，再由根组件的
@@ -28,9 +28,13 @@
 - `run(name, chain, input) -> TaskHandle<O>`：在 tokio 上跑链，把 `TaskEvent` 经
   `TaskMsg` 转发给任务组件，返回结果句柄。
 - `open_tasks()`：主动给任务组件发 `TaskMsg::Open`，弹出任务列表窗口。
-- `toast(text)`：往主界面**左下角**的提示层加一条；新的排在**下面**，`4` 秒后自动消失，
-  最多同时 4 条。每条只占一行，超长文字用省略号；颜色取主题的 `@card_bg_color` /
-  `@card_fg_color`，跟随深色 / 浅色模式。
+- `global_toast(text)`：应用级提示，始终往主界面**左下角**的提示层加一条。
+- `page_toast(page, text)`：页面级提示，只在目标页面当前可见（`is_mapped`）时显示；
+  页面在后台标签、标签已关闭或已销毁时直接丢弃，不排队。
+
+两种提示共用同一个提示层：新的排在**下面**，`4` 秒后自动消失，最多同时 4 条。每条只占
+一行，超长文字用省略号；颜色取主题的 `@card_bg_color` / `@card_fg_color`，跟随深色 /
+浅色模式。任务开始 / 结束的提示属于 app 层，始终走 `global_toast`。
 
 `Shell::run` 返回一个**可 `await` 的句柄**，而不是回调，避免回调地狱：
 
@@ -68,8 +72,9 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   左右两侧宽度都变成 0，标签栏正好铺满「目录菜单 → 窗口按钮」之间。
 - 标签栏 `autohide(false)`：页面少时也一直显示，避免关闭标签时整条标签栏跟着
   `GtkRevealer` 滑走、和标签自身的收缩动画叠在一起。
-- 标签页是 `AdwTabView`。所有页面都可关闭：主页关闭后直接销毁 `HomePage`，游戏进程
-  独立继续运行；`PageHost` 只管非主页页面，标签移除时清理保活。
+- 标签页是 `AdwTabView`。所有页面都可关闭：关闭主页标签只移除 `AdwTabPage`，`HomePage`
+  继续存活，游戏进程和监视任务都不受影响；重新打开时把同一个根 widget 加到标签末尾。
+  `PageHost` 只管非主页页面，标签移除时清理保活。
 - 标题栏最左侧是「Minecraft 目录」菜单，列出全部 `minecraft_roots`：打开 / 聚焦主页、
   标记已打开、设置默认主页。新建实例由主页右下角的悬浮按钮打开；`CustomPage` 使用主页
   捕获的 root，App 不维护「当前选中的主页是哪个 root」。账号、设置是占位 popup；任务按钮

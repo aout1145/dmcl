@@ -1,7 +1,7 @@
 //! 主页：一个 Minecraft 根目录下的已安装实例。
 //!
-//! 每个主页固定绑定一个 [`MinecraftRoot`]。关闭主页时整个组件直接销毁；游戏进程
-//! 不会被结束。运行状态只由本页持有的 [`GameMonitor`] 监视，不跨页面恢复。
+//! 每个主页固定绑定一个 [`MinecraftRoot`]，并从程序启动起常驻。关闭标签只影响显示，
+//! 不会结束游戏进程，也不会丢失运行状态；运行状态由本页持有的 [`GameMonitor`] 监视。
 //!
 //! 版本目录用 `notify` watch，出现变更事件后再重新读取列表，不做固定轮询。
 
@@ -27,7 +27,7 @@ use dmcl_mcmeta::layout::installed_versions;
 use dmcl_task::CancelHandle;
 
 use crate::config::{Config, LaunchConfig, MinecraftRoot};
-use crate::gui::gtk4::app::Shell;
+use crate::gui::gtk4::app::{PageToast, Shell};
 
 use instance_card::{CardOut, InstanceCard};
 pub(crate) use message::HomeMsg;
@@ -91,6 +91,8 @@ pub(crate) struct HomePage {
     root: MinecraftRoot,
     /// 主窗口：实例配置警告框以它为父窗口。
     window: adw::ApplicationWindow,
+    /// 页面级提示：只有主页可见时才显示。
+    page_toast: PageToast,
     instances: FactoryVecDeque<InstanceCard>,
     /// 当前选中的版本名。重建卡片时按名字恢复。
     selected: Option<String>,
@@ -210,7 +212,7 @@ impl SimpleComponent for HomePage {
 
     fn init(
         (shell, config, root, window): Self::Init,
-        _root: Self::Root,
+        root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let instances = FactoryVecDeque::builder()
@@ -224,6 +226,7 @@ impl SimpleComponent for HomePage {
             config,
             root,
             window,
+            page_toast: PageToast::new(&root_widget),
             instances,
             selected: None,
             installed: Vec::new(),
@@ -260,7 +263,8 @@ impl SimpleComponent for HomePage {
                 self.sync_cards();
             }
             HomeMsg::Loaded(Err(err)) => {
-                self.shell.toast(&format!("读取已安装版本失败：{err}"));
+                self.shell
+                    .page_toast(&self.page_toast, &format!("读取已安装版本失败：{err}"));
             }
 
             HomeMsg::Select(index) => self.select(index),
@@ -272,13 +276,16 @@ impl SimpleComponent for HomePage {
                 match self.state_of(&name) {
                     InstanceState::Idle => self.request_start(name, &sender),
                     InstanceState::Starting => {
-                        self.shell.toast(&format!("{name} 正在启动"));
+                        self.shell
+                            .page_toast(&self.page_toast, &format!("{name} 正在启动"));
                     }
                     InstanceState::Running => {
-                        self.shell.toast(&format!("{name} 已在运行"));
+                        self.shell
+                            .page_toast(&self.page_toast, &format!("{name} 已在运行"));
                     }
                     InstanceState::Stopping => {
-                        self.shell.toast(&format!("{name} 正在停止"));
+                        self.shell
+                            .page_toast(&self.page_toast, &format!("{name} 正在停止"));
                     }
                 }
             }
@@ -325,7 +332,7 @@ impl SimpleComponent for HomePage {
                 }
                 self.runtimes.remove(&name);
                 self.sync_cards();
-                self.shell.toast(&if stopped {
+                self.shell.global_toast(&if stopped {
                     format!("{name} 已停止")
                 } else if abnormal {
                     format!("{name} 异常退出")
@@ -334,13 +341,15 @@ impl SimpleComponent for HomePage {
                 });
             }
             HomeMsg::WatchFailed(err) => {
-                self.shell.toast(&format!("监听版本目录失败：{err}"));
+                self.shell.global_toast(&format!("监听版本目录失败：{err}"));
             }
             HomeMsg::Manage => {
                 let name = self.selected_name();
                 if !name.is_empty() {
-                    self.shell
-                        .toast(&format!("打开 {name} 的管理页（尚未实现）"));
+                    self.shell.page_toast(
+                        &self.page_toast,
+                        &format!("打开 {name} 的管理页（尚未实现）"),
+                    );
                 }
             }
             HomeMsg::CreateInstance => create_instance::show(&self.window, &sender),
@@ -386,7 +395,8 @@ impl HomePage {
         let chain = match self.launch_chain(&name, &launch) {
             Ok(chain) => chain,
             Err(err) => {
-                self.shell.toast(&format!("启动 {name} 失败：{err:#}"));
+                self.shell
+                    .global_toast(&format!("启动 {name} 失败：{err:#}"));
                 return;
             }
         };
@@ -405,8 +415,9 @@ impl HomePage {
         let handle = self.shell.run(format!("启动 {name}"), chain, ());
         let sender = sender.clone();
         let task_name = name.clone();
-        // 这个任务不挂在 HomePage 上：关闭页面后启动链继续跑。发送失败时，
-        // GameMonitor 会随消息一起被丢弃，游戏进程继续独立运行。
+        // 这个任务不挂在 HomePage 的 TaskGuard 上：关闭标签后启动链继续跑，结果仍会
+        // 回到常驻的组件。只有程序退出时发送失败，GameMonitor 随消息一起丢弃，
+        // 游戏进程继续独立运行。
         relm4::spawn(async move {
             match handle.finished().await {
                 Ok(monitor) => {

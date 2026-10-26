@@ -16,7 +16,8 @@ app 层见 [app/README.md](../README.md)，整体架构见
 - 窗口本身只是隐藏（保留尺寸与位置），下次打开沿用；隐藏时只清掉**成功**的任务卡片，
   失败、已取消和取消中的任务保留。
 - **任务起止有提示**：`TaskMsg::Start` 时弹「任务「…」开始」，`TaskMsg::Finished` 时弹
-  「任务「…」完成 / 失败 / 已取消」。
+  「任务「…」完成 / 失败 / 已取消」。任务属于 app 层，这些提示走 `global_toast`，
+  不依赖发起任务的页面是否还开着。
 - 没有任务时显示 `AdwStatusPage` 空状态（`GtkStack` 切换，由 `cards.is_empty()` 驱动）。
 - 每次处理消息后把**未结束**（运行中 / 取消中）的任务数通过
   `TaskCenterOut::RunningCount` 上报，标题栏据此显示 / 隐藏任务按钮角标。

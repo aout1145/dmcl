@@ -1,7 +1,7 @@
 //! 顶层组件：窗口 + 标题栏 + 标签页；只做组装。
 //!
-//! 每个 root 的主页是可关闭、可重新打开的独立标签。关闭时直接销毁 `HomePage`；
-//! 游戏进程继续运行，但页面里的运行状态不会跨页面保留。
+//! 每个 root 的主页从启动起就常驻：关闭标签页只影响用户看到的标签，不销毁
+//! `HomePage`。运行状态、watcher、选中项都由常驻的主页保留。
 //!
 //! 页面（`pages/` 下实现 [`Page`](page_host::Page) 的组件）与任务对话框（`tasks`）都是
 //! 独立组件、各带自己的消息；页面的打开/关闭/保活交给 [`PageHost`](page_host::PageHost)，
@@ -15,6 +15,7 @@ mod tasks;
 mod toast;
 
 pub(crate) use shell::Shell;
+pub(crate) use toast::{PageToast, ToastService};
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -29,7 +30,7 @@ use relm4::Sender;
 use crate::config::{Config, LoadedConfig, MinecraftRoot};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
-use crate::gui::gtk4::pages::home::{HomeOut, HomePage};
+use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::PageHost;
 use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
@@ -44,16 +45,10 @@ enum AppMsg {
         root: String,
         out: HomeOut,
     },
-    /// 某个主页标签已经被移除。消息只带 root 名字，避免把 GObject 放进 Debug 消息。
-    HomeClosed(String),
+    /// 某个主页标签已经被移除。
+    HomeTabClosed,
     /// 主窗口收到关闭请求。
     CloseRequested,
-}
-
-/// 一个已打开的主页标签。
-struct HomeEntry {
-    _controller: Controller<HomePage>,
-    page: adw::TabPage,
 }
 
 struct AppModel {
@@ -64,10 +59,10 @@ struct AppModel {
     tasks: Sender<TaskMsg>,
     // 宿主本身要活到窗口关闭（打开的页面由它保活）。
     page_host: Rc<PageHost>,
-    /// 主页标签 → root 名字；关闭标签时用来清理对应的 HomeEntry。
+    /// 主页标签 → root 名字；关闭标签时清理，也用来判断主页是否可见。
     home_pages: Rc<RefCell<Vec<(adw::TabPage, String)>>>,
-    /// 已打开的主页。
-    home_entries: BTreeMap<String, HomeEntry>,
+    /// 所有 root 的主页控制器；关闭标签不会移除。
+    homes: BTreeMap<String, Controller<HomePage>>,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
     config: Config,
@@ -147,7 +142,6 @@ impl SimpleComponent for AppModel {
 
         let tab_view_widget = &tab_view;
         let widgets = view_output!();
-        let toast_layer = widgets.toast_layer.clone();
 
         // 配置加载有问题时，等主窗口显示后再弹汇总警告；关掉后按修复后的配置继续。
         if let Some(error) = error {
@@ -157,46 +151,32 @@ impl SimpleComponent for AppModel {
         }
 
         // 任务对话框：组件本身就是那个模态窗口，自己管卡片/确认/提示/关闭清理。
+        let toasts = ToastService::new(widgets.toast_layer.clone());
         let tasks = TaskCenter::builder()
-            .launch((root.clone(), toast_layer.clone()))
+            .launch((root.clone(), toasts.clone()))
             .forward(sender.input_sender(), AppMsg::Tasks);
 
         // 共享服务：任务入口 + 提示层
-        let shell = Rc::new(Shell::new(tasks.sender().clone(), toast_layer.clone()));
+        let shell = Rc::new(Shell::new(tasks.sender().clone(), toasts));
         let tasks_sender = tasks.sender().clone();
 
-        // 启动时只打开默认 root（或 CLI 覆盖的 root）的主页。
-        let startup_name = startup_root.name.clone();
-        let home = HomePage::builder()
-            .launch((
-                shell.clone(),
-                config.clone(),
-                startup_root.clone(),
-                root.clone(),
-            ))
-            .forward(sender.input_sender(), move |out| AppMsg::Home {
-                root: startup_name.clone(),
-                out,
-            });
-        let home_page = tab_view.append(home.widget());
-        home_page.set_title(&home_tab_title(&startup_root.name));
-        home_pages
-            .borrow_mut()
-            .push((home_page.clone(), startup_root.name.clone()));
-        let mut home_entries = BTreeMap::new();
-        home_entries.insert(
-            startup_root.name.clone(),
-            HomeEntry {
-                _controller: home,
-                page: home_page,
-            },
-        );
-        let _ = header.sender().send(HeaderMsg::SetOpenHomes(
-            home_entries.keys().cloned().collect(),
-        ));
+        // 所有 root 的主页从启动起就常驻；启动时只给默认 root 建标签页。
+        let mut homes = BTreeMap::new();
+        for home_root in config.roots() {
+            let name = home_root.name.clone();
+            let controller = HomePage::builder()
+                .launch((shell.clone(), config.clone(), home_root, root.clone()))
+                .forward(sender.input_sender(), {
+                    let name = name.clone();
+                    move |out| AppMsg::Home {
+                        root: name.clone(),
+                        out,
+                    }
+                });
+            homes.insert(name, controller);
+        }
 
-        // 标签被移除时，清理 PageHost / root 映射。主页关闭后 HomePage 一起 drop，
-        // 游戏进程不受影响；运行状态只属于本页，不跨页面保留。
+        // 标签被移除时只清掉标签映射；HomePage 继续常驻，运行状态不会丢。
         {
             let page_host = page_host.clone();
             let home_pages = home_pages.clone();
@@ -210,33 +190,34 @@ impl SimpleComponent for AppModel {
                         .position(|(home_page, _)| home_page == page)
                         .map(|index| pages.remove(index).1)
                 };
-                if let Some(home_root) = home_root {
-                    let _ = sender.input_sender().send(AppMsg::HomeClosed(home_root));
+                if home_root.is_some() {
+                    let _ = sender.input_sender().send(AppMsg::HomeTabClosed);
                 }
             });
         }
 
-        let model = AppModel {
+        let mut model = AppModel {
             _tasks: tasks,
             header,
             tasks: tasks_sender,
             page_host,
             home_pages,
-            home_entries,
+            homes,
             shell,
             config,
             tab_view,
             window: root.clone(),
         };
+        model.open_home(&startup_root.name);
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         match message {
             AppMsg::Header(HeaderOut::OpenTasks) => {
                 let _ = self.tasks.send(TaskMsg::Open);
             }
-            AppMsg::Header(HeaderOut::OpenHome(name)) => self.open_home(&name, &sender),
+            AppMsg::Header(HeaderOut::OpenHome(name)) => self.open_home(&name),
             AppMsg::Header(HeaderOut::SetDefaultRoot(name)) => self.set_default_root(&name),
             AppMsg::Home {
                 root,
@@ -246,10 +227,7 @@ impl SimpleComponent for AppModel {
                 let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
             }
             AppMsg::Tasks(TaskCenterOut::Quit) => self.window.destroy(),
-            AppMsg::HomeClosed(name) => {
-                self.home_entries.remove(&name);
-                self.sync_header_homes();
-            }
+            AppMsg::HomeTabClosed => self.sync_header_homes(),
             AppMsg::CloseRequested => {
                 let _ = self.tasks.send(TaskMsg::CloseMain);
             }
@@ -258,46 +236,34 @@ impl SimpleComponent for AppModel {
 }
 
 impl AppModel {
-    /// 打开或聚焦某个 root 的主页。
-    fn open_home(&mut self, name: &str, sender: &ComponentSender<Self>) {
-        if let Some(entry) = self.home_entries.get(name) {
-            self.tab_view.set_selected_page(&entry.page);
+    /// 打开或聚焦某个 root 的主页标签。
+    fn open_home(&mut self, name: &str) {
+        let existing_page = self
+            .home_pages
+            .borrow()
+            .iter()
+            .find(|(_, home_root)| home_root == name)
+            .map(|(page, _)| page.clone());
+        if let Some(page) = existing_page {
+            self.tab_view.set_selected_page(&page);
             return;
         }
-        let root = match self.config.root(name) {
-            Ok(root) => root,
-            Err(err) => {
-                self.shell.toast(&format!("无法打开主页：{err:#}"));
+
+        let (widget, home_sender) = {
+            let Some(controller) = self.homes.get(name) else {
+                self.shell
+                    .global_toast(&format!("配置里找不到主页：{name}"));
                 return;
-            }
+            };
+            (controller.widget().clone(), controller.sender().clone())
         };
-        let controller = HomePage::builder()
-            .launch((
-                self.shell.clone(),
-                self.config.clone(),
-                root.clone(),
-                self.window.clone(),
-            ))
-            .forward(sender.input_sender(), {
-                let name = root.name.clone();
-                move |out| AppMsg::Home {
-                    root: name.clone(),
-                    out,
-                }
-            });
-        let page = self.tab_view.append(controller.widget());
-        page.set_title(&home_tab_title(&root.name));
+
+        let page = self.tab_view.append(&widget);
+        page.set_title(&home_tab_title(name));
         self.tab_view.set_selected_page(&page);
-        self.home_pages
-            .borrow_mut()
-            .push((page.clone(), root.name.clone()));
-        self.home_entries.insert(
-            root.name.clone(),
-            HomeEntry {
-                _controller: controller,
-                page,
-            },
-        );
+        self.home_pages.borrow_mut().push((page, name.to_string()));
+        // 隐藏期间目录可能已经变化；打开时补一次刷新。
+        let _ = home_sender.send(HomeMsg::Reload);
         self.sync_header_homes();
     }
 
@@ -306,7 +272,8 @@ impl AppModel {
         let root = match self.config.root(root_name) {
             Ok(root) => root,
             Err(err) => {
-                self.shell.toast(&format!("无法确定安装目录：{err:#}"));
+                self.shell
+                    .global_toast(&format!("无法确定安装目录：{err:#}"));
                 return;
             }
         };
@@ -317,11 +284,13 @@ impl AppModel {
     fn set_default_root(&mut self, name: &str) {
         let mut next = self.config.clone();
         if let Err(err) = next.select_minecraft_root(name) {
-            self.shell.toast(&format!("无法设置默认主页：{err:#}"));
+            self.shell
+                .global_toast(&format!("无法设置默认主页：{err:#}"));
             return;
         }
         if let Err(err) = next.save_sync() {
-            self.shell.toast(&format!("无法保存默认主页设置：{err:#}"));
+            self.shell
+                .global_toast(&format!("无法保存默认主页设置：{err:#}"));
             return;
         }
         self.config = next;
@@ -330,13 +299,19 @@ impl AppModel {
             .sender()
             .send(HeaderMsg::SetDefaultRoot(name.to_string()));
         self.shell
-            .toast(&format!("默认主页已设为 {name}，下次启动生效"));
+            .global_toast(&format!("默认主页已设为 {name}，下次启动生效"));
     }
 
     fn sync_header_homes(&self) {
-        let _ = self.header.sender().send(HeaderMsg::SetOpenHomes(
-            self.home_entries.keys().cloned().collect(),
-        ));
+        let mut open: Vec<String> = self
+            .home_pages
+            .borrow()
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect();
+        open.sort();
+        open.dedup();
+        let _ = self.header.sender().send(HeaderMsg::SetOpenHomes(open));
     }
 }
 

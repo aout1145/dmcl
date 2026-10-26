@@ -66,6 +66,8 @@ pub(crate) struct Header {
     _theme: Controller<ThemeSwitcher>,
     /// 根目录菜单里的行。
     roots: FactoryVecDeque<RootRow>,
+    /// 根目录菜单按钮；选中某一行后主动收起。
+    root_menu_button: Option<gtk::MenuButton>,
     /// 当前默认主页的名字。
     default_root: String,
     /// 当前已经打开的主页名字。
@@ -110,6 +112,7 @@ impl SimpleComponent for Header {
                     set_hexpand: true,
 
                     // Minecraft 根目录：打开其它 root 的主页 / 设置默认主页。
+                    #[name(root_menu_button)]
                     gtk::MenuButton {
                         set_icon_name: "folder-symbolic",
                         set_tooltip_text: Some("Minecraft 目录"),
@@ -268,11 +271,12 @@ impl SimpleComponent for Header {
             root_rows.guard().push_back((root, is_default));
         }
         let roots_widget = root_rows.widget().clone();
-        let model = Header {
+        let mut model = Header {
             window,
             running: 0,
             _theme: theme,
             roots: root_rows,
+            root_menu_button: None,
             default_root,
             open_roots: BTreeSet::new(),
         };
@@ -281,6 +285,7 @@ impl SimpleComponent for Header {
         let roots_widget = &roots_widget;
         let theme_widget = &theme_widget;
         let widgets = view_output!();
+        model.root_menu_button = Some(widgets.root_menu_button.clone());
 
         ComponentParts { model, widgets }
     }
@@ -310,6 +315,10 @@ impl SimpleComponent for Header {
                 } else {
                     HeaderOut::SetDefaultRoot(name)
                 };
+                if let Some(button) = self.root_menu_button.clone() {
+                    // 等这次点击完全结束再收菜单，避免 popover 消失后同一次点击漏到页面上。
+                    gtk::glib::idle_add_local_once(move || button.set_active(false));
+                }
                 let _ = sender.output(out);
             }
             HeaderMsg::About => about::show(&self.window),

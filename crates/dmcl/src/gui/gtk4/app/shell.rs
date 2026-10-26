@@ -5,16 +5,15 @@
 //! * [`Shell::run`] 把一条任务链跑起来，把进度事件转发给任务 popup，并返回一个
 //!   **可 `await` 的结果句柄**（不是回调）；
 //! * [`Shell::open_tasks`] 主动打开任务列表窗口；
-//! * [`Shell::toast`] 在主界面弹一行提示。
+//! * [`Shell::global_toast`] / [`Shell::page_toast`] 在主界面弹提示，前者始终显示，
+//!   后者只在页面可见时显示。
 
 use std::cell::Cell;
-
-use relm4::gtk;
 
 use dmcl_task::{Cancelled, TaskChain};
 
 use super::tasks::TaskMsg;
-use super::toast;
+use super::toast::{PageToast, ToastService};
 
 /// 任务结果句柄：`finished().await` 拿到任务产出。
 pub(crate) struct TaskHandle<O> {
@@ -31,16 +30,16 @@ impl<O> TaskHandle<O> {
 pub(crate) struct Shell {
     /// 任务 popup 的入口（主线程）。
     tasks: relm4::Sender<TaskMsg>,
-    /// 主界面的提示层。
-    toast_layer: gtk::Box,
+    /// 应用级提示服务。
+    toasts: ToastService,
     next_id: Cell<u64>,
 }
 
 impl Shell {
-    pub fn new(tasks: relm4::Sender<TaskMsg>, toast_layer: gtk::Box) -> Self {
+    pub fn new(tasks: relm4::Sender<TaskMsg>, toasts: ToastService) -> Self {
         Self {
             tasks,
-            toast_layer,
+            toasts,
             next_id: Cell::new(0),
         }
     }
@@ -89,8 +88,13 @@ impl Shell {
         let _ = self.tasks.send(TaskMsg::Open);
     }
 
-    /// 在主界面弹一行提示。
-    pub fn toast(&self, text: &str) {
-        toast::show(&self.toast_layer, text);
+    /// 应用级提示：始终显示，不依赖页面是否可见。
+    pub fn global_toast(&self, text: &str) {
+        self.toasts.global_toast(text);
+    }
+
+    /// 页面级提示：页面当前可见时才显示，否则直接丢弃。
+    pub fn page_toast(&self, page: &PageToast, text: &str) {
+        self.toasts.page_toast(page, text);
     }
 }

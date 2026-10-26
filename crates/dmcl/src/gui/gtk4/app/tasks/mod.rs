@@ -21,7 +21,7 @@ pub(crate) use message::TaskMsg;
 /// 任务卡片的全局样式（日志区边框）。
 pub(crate) use task_card::CSS;
 
-use super::toast;
+use super::ToastService;
 use task_card::{CardOut, TaskCard};
 
 /// 任务窗口发给 root 的消息。
@@ -40,7 +40,7 @@ pub(crate) struct TaskCenter {
     cards: FactoryVecDeque<TaskCard>,
     cancels: HashMap<u64, CancelHandle>,
     /// 弹起止提示用。
-    toast: gtk::Box,
+    toasts: ToastService,
     /// 主窗口：任务窗口关着时，确认框挂它。
     window: adw::ApplicationWindow,
     /// 上次上报给标题栏的未结束任务数，只在变化时发消息。
@@ -49,7 +49,7 @@ pub(crate) struct TaskCenter {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for TaskCenter {
-    type Init = (adw::ApplicationWindow, gtk::Box);
+    type Init = (adw::ApplicationWindow, ToastService);
     type Input = TaskMsg;
     type Output = TaskCenterOut;
 
@@ -102,7 +102,7 @@ impl SimpleComponent for TaskCenter {
     }
 
     fn init(
-        (window, toast): Self::Init,
+        (window, toasts): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -118,7 +118,7 @@ impl SimpleComponent for TaskCenter {
             dialog: root.clone(),
             cards,
             cancels: HashMap::new(),
-            toast,
+            toasts,
             window,
             reported_running: 0,
         };
@@ -135,7 +135,7 @@ impl SimpleComponent for TaskCenter {
             TaskMsg::Start { id, name, cancel } => {
                 self.cards.guard().push_front((id, name.clone()));
                 self.cancels.insert(id, cancel);
-                toast::show(&self.toast, &format!("任务「{name}」开始"));
+                self.toasts.global_toast(&format!("任务「{name}」开始"));
             }
             TaskMsg::Event { id, event } => {
                 // 需要用户拍板的警告：弹模态确认框（任务在 gate 上等着）。
@@ -186,16 +186,13 @@ impl SimpleComponent for TaskCenter {
                     }
                 }
                 self.cancels.remove(&id);
-                toast::show(
-                    &self.toast,
-                    &if cancelled {
-                        format!("任务「{name}」已取消")
-                    } else if ok {
-                        format!("任务「{name}」完成")
-                    } else {
-                        format!("任务「{name}」失败")
-                    },
-                );
+                self.toasts.global_toast(&if cancelled {
+                    format!("任务「{name}」已取消")
+                } else if ok {
+                    format!("任务「{name}」完成")
+                } else {
+                    format!("任务「{name}」失败")
+                });
             }
             TaskMsg::CloseCard(index) => {
                 let index = index.current_index();

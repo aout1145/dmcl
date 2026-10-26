@@ -8,14 +8,15 @@
 `HomePage` 的初始化参数里带 `MinecraftRoot { name, path }`。版本目录监听、实例配置读取、
 安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。
 
-主页标签可以随时关闭。关闭后整个 `HomePage` 直接销毁：
+主页标签可以随时关闭，但关闭只影响显示：`HomePage` 从程序启动起就常驻，标签只是它的
+一个挂载点。
 
-- 版本目录 watcher 中止；
-- 本页启动的 monitor task 中止并 drop `GameMonitor`；
-- 游戏进程继续独立运行。
+- 关闭标签不会中止版本目录 watcher；
+- 关闭标签不会中止 monitor task，也不会 drop `GameMonitor`；
+- 游戏进程继续独立运行；
+- 重新打开同一 root 时把同一个根 widget 挂回新标签，选中项、运行状态和启动链都保留。
 
-重新打开同一 root 会创建新的 `HomePage`，运行状态从 Idle 开始，不恢复已经脱离页面的
-进程状态。
+最后一个主页标签也可以关闭，此时内容区为空，仍可从标题栏的根目录菜单重新打开。
 
 ## 视图
 
@@ -72,19 +73,28 @@ select! {
 HomeMsg::MonitorExited { name, stopped, abnormal }
 ```
 
-它能精确判断正常退出、异常退出、用户主动停止。页面关闭后 monitor task 中止，
-`GameMonitor` 被 drop，进程继续运行，但主页不再知道它的状态。
+它能精确判断正常退出、异常退出、用户主动停止。关闭标签页后 monitor task 和 `GameMonitor`
+继续工作；重新打开页面时看到的就是最新状态。只有程序退出时才会中止这些任务。
 
 ## 启动 / 停止
 
 - **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」
   和本主页 root 拼出 `launch_chain`，交给 `Shell::run`。
-- 启动链的完成任务不挂在 `HomePage` 上：关闭页面后它继续运行；如果主页已经关闭，
-  `Launched` 消息发送失败，`GameMonitor` 随消息一起被丢弃，进程继续独立运行。
+- 启动链的完成任务不挂在 `HomePage` 的 `TaskGuard` 上：关闭标签后启动链继续跑，
+  结果仍会回到常驻的 `HomePage`。
 - **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，
   立即给 monitor task 发停止信号。
 - **Running 阶段停止**：给 monitor task 发 stop。
 - **取消任务**：任务窗口自己持有 `CancelHandle`，与主页停止是两条路径。
+
+## 提示
+
+`HomePage` 持有自己的 `PageToast`：
+
+- 游戏正常退出 / 异常退出 / 用户停止、启动失败、版本目录 watcher 失败走
+  `Shell::global_toast`，标签关闭时也能看到。
+- 页面内反馈走 `Shell::page_toast`，页面不可见时直接丢弃。包括“正在启动 / 已在运行 /
+  正在停止”、读取已安装版本失败和管理页占位提示。
 
 ## 消息
 

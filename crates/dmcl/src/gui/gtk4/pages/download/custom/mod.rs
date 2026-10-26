@@ -30,7 +30,7 @@ use dmcl_mcmeta::layout::version_dir;
 
 use crate::config::{Config, MinecraftRoot};
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
-use crate::gui::gtk4::app::Shell;
+use crate::gui::gtk4::app::{PageToast, Shell};
 use crate::gui::gtk4::pages::download::common::instance_summary::{
     IconSource, InstanceSummary, SummaryIn, SummaryOut,
 };
@@ -46,6 +46,7 @@ pub(crate) struct CustomPage {
     /// 标签标题句柄：改标题、安装发起后关页都走它。
     tab: TabTitle,
     shell: Rc<Shell>,
+    page_toast: PageToast,
     config: Config,
     root: MinecraftRoot,
     summary: Controller<InstanceSummary>,
@@ -151,11 +152,12 @@ impl CustomPage {
     /// 安装当前装配：把任务交给任务窗口，然后立即关页并打开任务列表。
     fn install(&mut self, name: String) {
         let Some(mc) = self.mc_version.clone() else {
-            self.shell.toast("请先选择 Minecraft 版本");
+            self.shell
+                .page_toast(&self.page_toast, "请先选择 Minecraft 版本");
             return;
         };
         if name.trim().is_empty() {
-            self.shell.toast("实例名称不能为空");
+            self.shell.page_toast(&self.page_toast, "实例名称不能为空");
             return;
         }
         let mut spec = InstallSpec::new(mc.id, name.clone());
@@ -172,7 +174,8 @@ impl CustomPage {
         ) {
             Ok(options) => Arc::new(options),
             Err(err) => {
-                self.shell.toast(&format!("无法安装：{err:#}"));
+                self.shell
+                    .page_toast(&self.page_toast, &format!("无法安装：{err:#}"));
                 return;
             }
         };
@@ -217,13 +220,14 @@ impl SimpleComponent for CustomPage {
 
     fn init(
         init: Self::Init,
-        _root: Self::Root,
+        root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let PageInit {
             tab,
             args: (shell, config, root),
         } = init;
+        let page_toast = PageToast::new(&root_widget);
         let source = config.download_source();
 
         let summary = InstanceSummary::builder()
@@ -282,6 +286,7 @@ impl SimpleComponent for CustomPage {
         let model = CustomPage {
             tab,
             shell,
+            page_toast,
             config,
             root,
             summary,
