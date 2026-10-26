@@ -709,7 +709,7 @@ mod tests {
             config.javas.get("jdk"),
             Some(&PathBuf::from("/usr/lib/jvm/java-17/bin/java"))
         );
-        assert_eq!(config.root("test").unwrap().path, PathBuf::from("/mc"));
+        assert_eq!(config.root("test").unwrap().path, absolute("/mc"));
         assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(config.download.skip_music);
@@ -857,7 +857,7 @@ mod tests {
             }"#,
         );
         assert_eq!(config.minecraft_root, "a");
-        assert_eq!(config.root("a").unwrap().path, PathBuf::from("/a"));
+        assert_eq!(config.root("a").unwrap().path, absolute("/a"));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("minecraft_root"));
     }
@@ -873,7 +873,7 @@ mod tests {
                 "minecraft_root": "a"
             }"#,
         );
-        assert_eq!(config.root("a").unwrap().path, PathBuf::from("/first"));
+        assert_eq!(config.root("a").unwrap().path, absolute("/first"));
         assert_eq!(config.roots().len(), 1);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("重复的根目录：a"));
@@ -885,7 +885,7 @@ mod tests {
         config.minecraft_roots.push(test_root("test", "/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.minecraft_root, "test");
-        assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
+        assert_eq!(config.default_root().unwrap().path, absolute("/mc"));
 
         let err = config.select_minecraft_root("nope").unwrap_err();
         assert!(err.to_string().contains("根目录不存在：nope"));
@@ -898,7 +898,7 @@ mod tests {
         config.minecraft_roots.push(test_root("test", "/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.default_root().unwrap().name, "test");
-        assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
+        assert_eq!(config.default_root().unwrap().path, absolute("/mc"));
         assert_eq!(
             config.root(CURRENT_ROOT_NAME).unwrap().path,
             absolute(".minecraft")
