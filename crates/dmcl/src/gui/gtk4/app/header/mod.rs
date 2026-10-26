@@ -1,14 +1,15 @@
-//! 标题栏：一行里排「Minecraft 目录」+ 标签页栏 + 账号 / 任务 / 设置 / 主菜单 +
-//! 窗口按钮。
+//! 标题栏：一行里排「Minecraft 目录」+ 标签页栏 + 任务 / 主菜单 + 窗口按钮。
 //!
-//! 账号 / 设置 是占位 popup；任务按钮、根目录菜单通过 [`HeaderOut`] 交给 root；
-//! 外观切换在 [`theme`]，点击「关于」打开 [`about`] 里的对话框。
+//! 任务按钮、根目录菜单和主菜单里的设置入口通过 [`HeaderOut`] 交给 root；外观切换在
+//! [`theme`]，点击「关于」打开 [`about`] 里的对话框。主菜单行带 GTK 助记符，应用级加速键
+//! 由根组件注册。
 
 use std::collections::BTreeSet;
 
 use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
+use relm4::gtk::glib::variant::ToVariant;
 use relm4::prelude::*;
 
 use crate::config::MinecraftRoot;
@@ -35,9 +36,9 @@ headerbar.dmcl-header .dmcl-task-badge { min-width: 16px; min-height: 16px; padd
 #[derive(Debug)]
 pub(crate) enum HeaderOut {
     /// 点任务按钮：打开任务对话框。
-    OpenTasks,
+    Tasks,
     /// 打开或聚焦某个 root 的主页。
-    OpenHome(String),
+    Home(String),
 }
 
 /// 标题栏自己的消息。
@@ -136,22 +137,6 @@ impl SimpleComponent for Header {
                     set_size_request: (28, -1),
                 },
 
-                gtk::MenuButton {
-                    set_icon_name: "system-users-symbolic",
-                    set_tooltip_text: Some("账号"),
-
-                    #[wrap(Some)]
-                    set_popover: account_popover = &gtk::Popover {
-                        gtk::Label {
-                            set_label: "账号功能尚未实现",
-                            set_margin_top: 8,
-                            set_margin_bottom: 8,
-                            set_margin_start: 12,
-                            set_margin_end: 12,
-                        },
-                    },
-                },
-
                 // 任务按钮：右上角叠一个运行中数量角标。
                 gtk::Overlay {
                     gtk::Button {
@@ -159,7 +144,7 @@ impl SimpleComponent for Header {
                         set_tooltip_text: Some("任务"),
                         add_css_class: "flat",
                         connect_clicked[sender] => move |_| {
-                            let _ = sender.output(HeaderOut::OpenTasks);
+                            let _ = sender.output(HeaderOut::Tasks);
                         },
                     },
 
@@ -178,55 +163,13 @@ impl SimpleComponent for Header {
                     },
                 },
 
-                gtk::MenuButton {
-                    set_icon_name: "preferences-system-symbolic",
-                    set_tooltip_text: Some("设置"),
-
-                    #[wrap(Some)]
-                    set_popover: settings_popover = &gtk::Popover {
-                        gtk::Label {
-                            set_label: "设置功能尚未实现",
-                            set_margin_top: 8,
-                            set_margin_bottom: 8,
-                            set_margin_start: 12,
-                            set_margin_end: 12,
-                        },
-                    },
-                },
-
-                // GNOME 应用常见的主菜单：外观圆形色板 + 关于。
+                // GNOME 应用常见的主菜单：GtkPopoverMenu 由 GMenu 驱动，外观圆形色板
+                // 作为 custom child 插进第一段；菜单项交给应用级 action。
+                #[name(menu_button)]
                 gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
                     set_tooltip_text: Some("主菜单"),
-
-                    #[wrap(Some)]
-                    set_popover: menu_popover = &gtk::Popover {
-                        gtk::Box {
-                            set_orientation: gtk::Orientation::Vertical,
-                            set_spacing: 6,
-                            set_margin_top: 8,
-                            set_margin_bottom: 6,
-                            set_margin_start: 8,
-                            set_margin_end: 8,
-
-                            #[local_ref]
-                            theme_widget -> gtk::Box {},
-
-                            gtk::Separator {},
-
-                            gtk::Button {
-                                set_label: "关于",
-                                add_css_class: "flat",
-                                set_halign: gtk::Align::Fill,
-                                connect_clicked[sender, menu_popover] => move |_| {
-                                    menu_popover.popdown();
-                                    sender.input(HeaderMsg::About);
-                                },
-                            },
-                        },
-                    },
                 },
-
                 // 窗口按钮：头栏自带的那套关掉了，这里自己加在行尾。
                 // `decoration-layout` 默认跟随桌面设置；桌面不画窗口按钮时它自己宽度为 0。
                 gtk::WindowControls {
@@ -269,9 +212,15 @@ impl SimpleComponent for Header {
 
         let tab_bar_widget = &tab_bar;
         let roots_widget = &roots_widget;
-        let theme_widget = &theme_widget;
         let widgets = view_output!();
         model.root_menu_button = Some(widgets.root_menu_button.clone());
+
+        // 主菜单用 GNOME 应用常见的 GtkPopoverMenu + GMenu：普通项由 GTK 生成标准
+        // GtkModelButton，外观色板作为 custom child 替换第一段里的占位项。
+        let menu = primary_menu();
+        let menu_popover = gtk::PopoverMenu::from_model(Some(&menu));
+        menu_popover.add_child(&theme_widget, "theme");
+        widgets.menu_button.set_popover(Some(&menu_popover));
 
         ComponentParts { model, widgets }
     }
@@ -292,7 +241,7 @@ impl SimpleComponent for Header {
                     // 等这次点击完全结束再收菜单，避免 popover 消失后同一次点击漏到页面上。
                     gtk::glib::idle_add_local_once(move || button.set_active(false));
                 }
-                let _ = sender.output(HeaderOut::OpenHome(name));
+                let _ = sender.output(HeaderOut::Home(name));
             }
             HeaderMsg::About => about::show(&self.window),
         }
@@ -306,4 +255,45 @@ impl Header {
             row.open = self.open_roots.contains(&row.root.name);
         }
     }
+}
+
+/// 主菜单的 GMenu 结构：外观色板占位项 / 两个设置入口 / 关于。
+///
+/// `accel` 是 GtkPopoverMenu 读取的菜单元数据；GTK 会把它渲染成菜单右侧的纯文本
+/// 快捷键提示。真正的键盘绑定仍由根组件注册到 `app.*` action 上。
+fn primary_menu() -> gtk::gio::Menu {
+    let menu = gtk::gio::Menu::new();
+
+    let theme = gtk::gio::Menu::new();
+    let theme_item = gtk::gio::MenuItem::new(None, None);
+    theme_item.set_attribute_value("custom", Some(&"theme".to_variant()));
+    theme.append_item(&theme_item);
+    menu.append_section(None, &theme);
+
+    let options = gtk::gio::Menu::new();
+    options.append_item(&menu_item(
+        "启动器选项(_L)",
+        "app.launcher-options",
+        Some("<Control>comma"),
+    ));
+    options.append_item(&menu_item(
+        "全局游戏选项(_G)",
+        "app.game-options",
+        Some("<Control><Shift>comma"),
+    ));
+    menu.append_section(None, &options);
+
+    let about = gtk::gio::Menu::new();
+    about.append_item(&menu_item("关于(_A)", "app.about", None));
+    menu.append_section(None, &about);
+
+    menu
+}
+
+fn menu_item(label: &str, action: &str, accel: Option<&str>) -> gtk::gio::MenuItem {
+    let item = gtk::gio::MenuItem::new(Some(label), Some(action));
+    if let Some(accel) = accel {
+        item.set_attribute_value("accel", Some(&accel.to_variant()));
+    }
+    item
 }

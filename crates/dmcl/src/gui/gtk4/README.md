@@ -19,7 +19,7 @@
 
 - cargo feature **`gtk4`，默认关**，用 `--features gtk4` 开启；`relm4` 是可选的依赖
   （Linux / Windows / macOS）。
-- 需要系统 **GTK ≥ 4.18 / libadwaita ≥ 1.7**（relm4 开 `gnome_48`；用到了 `AdwWrapBox`、
+- 需要系统 **GTK ≥ 4.22 / libadwaita ≥ 1.9**（relm4 开 `gnome_50`；用到了 `AdwWrapBox`、
   `AdwSpinner`、`AdwDialog` 等较新的 Adw 控件）。
 - 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；显式的 `gui` 命令在前端不可用时直接报错。
 - 无子命令是单独路径：`gui::run_default` 有 `gtk4` 就启动 GUI，否则打印帮助并退出。
@@ -47,10 +47,10 @@
   | 标签页 | `AdwTabView` / `AdwTabBar` |
 
 - **仍用 Gtk 的地方**：`GtkBox` / `GtkLabel` / `GtkTextView` / `GtkButton` /
-  `GtkScrolledWindow` / `GtkMenuButton` / `GtkPopover` / `GtkGestureClick` /
-  `GtkProgressBar` / `GtkImage` / `GtkExpander` —— Adw 没有对应控件，或语义更合适。
-  例如任务日志用 `GtkTextView` 增量追加、用 `GtkExpander` 而不是 `AdwExpanderRow`：
-  后者是「偏好设置行」形态（行内边距、hover、分隔线），放进卡片里不合适。
+  `GtkScrolledWindow` / `GtkMenuButton` / `GtkPopover` / `GtkPopoverMenu` / `GMenu` /
+  `GtkGestureClick` / `GtkProgressBar` / `GtkImage` / `GtkExpander` —— Adw 没有对应控件，
+  或语义更合适。例如任务日志用 `GtkTextView` 增量追加、用 `GtkExpander` 而不是
+  `AdwExpanderRow`：后者是「偏好设置行」形态（行内边距、hover、分隔线），放进卡片里不合适。
 - **图标**：UI 图标用 Adwaita 主题的 `*-symbolic`，只挑稳定常见的名字，不打包位图；实例图标
   用 `AdwAvatar` 首字母彩色头像，不内置 Mojang 贴图。
 - **运行状态**用彩色文字 / 圆点（CSS class）而不是图标。
@@ -58,7 +58,7 @@
   `.monospace`）；需要自定义 CSS 时用 class + display 级 provider，class 带 `dmcl-` 命名空间
   （GTK 4.10 起 per-widget provider 已废弃）。各模块自带 CSS，由 `run` 统一挂上。
 - **版本**：用到新的 Adw 控件时，把 relm4 的 `gnome_4x` feature 抬到对应版本（当前
-  `gnome_48` → GTK 4.18 / adw 1.7）。
+  `gnome_50` → GTK 4.22 / adw 1.9）。
 
 ## 状态驱动：状态放模型，界面用 `view!` 刷新
 
@@ -107,6 +107,9 @@ gtk4/
     │   ├── mod.rs
     │   ├── message.rs
     │   └── instance_card.rs
+    ├── settings/
+    │   ├── README.md            # 启动器选项 / 全局游戏选项
+    │   └── mod.rs
     └── download/
         ├── README.md            # 下载域 / 公共组件 / 数据流
         ├── common/              # download 域公共组件（不是全 app 通用小部件）
@@ -125,17 +128,19 @@ gtk4/
 
 | 范围 | 主要组件 / 服务 | 文档 |
 | --- | --- | --- |
-| app 外壳 | 根组件、`Shell`、`PageHost`、标题栏、toast | [app/README.md](app/README.md) |
+| app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
 | 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
+| 设置页 | `LauncherOptionsPage`、`GameOptionsPage` | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 
 ## 消息与边界
 
-消息按组件拆分，不集中在一个文件里。根组件只接收标题栏的 `HeaderOut`（打开自定义页 /
-任务窗口）和任务窗口的 `TaskCenterOut`（运行中数量角标），页面与任务的动作彼此独立。
-页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件完整的消息表见对应目录的文档。
+消息按组件拆分，不集中在一个文件里。根组件接收标题栏的 `HeaderOut`（打开主页、设置页、
+任务窗口）、应用级快捷键的打开设置页消息和任务窗口的 `TaskCenterOut`（运行中数量角标），
+页面与任务的动作彼此独立。页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件
+完整的消息表见对应目录的文档。
 
 跨组件的边界只有三条：
 
@@ -161,7 +166,7 @@ cargo doc --no-deps --workspace
 ```
 
 CI 在 **Linux / Windows / macOS** 三个平台都跑 GTK4 的 clippy、测试和 release 构建；
-Linux 需要 GTK ≥ 4.18 / libadwaita ≥ 1.7。
+Linux 需要 GTK ≥ 4.22 / libadwaita ≥ 1.9。
 
 ### 2. 纯逻辑单测
 
@@ -234,7 +239,7 @@ Debian / Ubuntu 的 `gtk4-broadwayd` 在 `libgtk-4-bin` 包里。等应用窗口
 - Forge 版本下拉的类别 chips（稳定 / 推荐）。
 - 实例分类下拉的启用与持久化。
 - 任务按钮的「运行中数量」角标。
-- 账号 / 设置 popup 的实际功能。
+- 账号功能；启动器选项 / 全局游戏选项的正式设置内容。
 - 游戏异常退出的错误报告窗口（远期）。
 - 删除实例等破坏性操作。
 

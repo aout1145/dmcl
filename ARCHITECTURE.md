@@ -340,12 +340,14 @@ GTK4 + libadwaita 前端在 `crates/dmcl/src/gui/gtk4`，用 relm4，由 cargo f
 [crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)
 （整体架构、编译运行、GNOME HIG 约定与 GTK 测试方法）：
 
-- [app/README.md](crates/dmcl/src/gui/gtk4/app/README.md)：根组件、`Shell`、`PageHost`、
-  标题栏、toast；
+- [app/README.md](crates/dmcl/src/gui/gtk4/app/README.md)：根组件、`Shell`、
+  `PageHost` / `PageSlot`、标题栏、toast、快捷键；
 - [app/tasks/README.md](crates/dmcl/src/gui/gtk4/app/tasks/README.md)：任务窗口、
   任务卡片、警告确认；
 - [pages/home/README.md](crates/dmcl/src/gui/gtk4/pages/home/README.md)：主页、实例磁贴、
   启动 / 停止；
+- [pages/settings/README.md](crates/dmcl/src/gui/gtk4/pages/settings/README.md)：启动器选项、
+  全局游戏选项；
 - [pages/download/README.md](crates/dmcl/src/gui/gtk4/pages/download/README.md)：下载域数据流、
   `InstanceSummary`、`VersionSelect`；
 - [pages/download/custom/README.md](crates/dmcl/src/gui/gtk4/pages/download/custom/README.md)：

@@ -3,9 +3,10 @@
 //! 每个 root 的主页从启动起就常驻：关闭标签页只影响用户看到的标签，不销毁
 //! `HomePage`。运行状态、watcher、选中项都由常驻的主页保留。
 //!
-//! 页面（`pages/` 下实现 [`Page`](page_host::Page) 的组件）与任务对话框（`tasks`）都是
-//! 独立组件、各带自己的消息；页面的打开/关闭/保活交给 [`PageHost`](page_host::PageHost)，
-//! 共享能力（跑任务、弹提示、打开任务对话框）在 [`Shell`] 里。这里没有实例业务逻辑。
+//! 页面与任务对话框（`tasks`）都是独立组件、各带自己的消息。一次性页面（实现
+//! [`Page`](page_host::Page)）交给 [`PageHost`](page_host::PageHost) 懒创建；常驻页面由
+//! [`PageSlot`](page_host::PageSlot) 直接持有。共享能力（跑任务、弹提示、打开任务对话框）
+//! 在 [`Shell`] 里。这里没有实例业务逻辑。
 
 mod config_warning;
 mod header;
@@ -17,7 +18,6 @@ mod toast;
 pub(crate) use shell::Shell;
 pub(crate) use toast::{PageToast, ToastService};
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use relm4::adw;
@@ -30,8 +30,9 @@ use crate::config::{Config, LoadedConfig, MinecraftRoot};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
+use crate::gui::gtk4::pages::settings::{GameOptionsPage, LauncherOptionsPage};
 use header::{Header, HeaderMsg, HeaderOut};
-use page_host::PageHost;
+use page_host::{PageHost, PageSlot};
 use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
 
 /// 根组件收到的消息。
@@ -44,8 +45,14 @@ enum AppMsg {
         root: String,
         out: HomeOut,
     },
-    /// 某个主页标签已经被移除。
-    HomeTabClosed,
+    /// 打开或聚焦启动器选项（应用级快捷键）。
+    OpenLauncherOptions,
+    /// 打开或聚焦全局游戏选项（应用级快捷键）。
+    OpenGameOptions,
+    /// 打开「关于」对话框（主菜单的应用级 action）。
+    About,
+    /// 某个标签已经被移除；清理对应页面的标签句柄。
+    TabClosed(adw::TabPage),
     /// 主窗口收到关闭请求。
     CloseRequested,
 }
@@ -56,12 +63,14 @@ struct AppModel {
     header: Controller<Header>,
     /// 任务入口：标题栏的「任务」按钮转发给任务组件。
     tasks: Sender<TaskMsg>,
-    // 宿主本身要活到窗口关闭（打开的页面由它保活）。
+    // 一次性页面的宿主：打开的 CustomPage 由它保活。
     page_host: Rc<PageHost>,
-    /// 主页标签 → root 名字；关闭标签时清理，也用来判断主页是否可见。
-    home_pages: Rc<RefCell<Vec<(adw::TabPage, String)>>>,
-    /// 所有 root 的主页控制器；关闭标签不会移除。
-    homes: Vec<(String, Controller<HomePage>)>,
+    /// 所有 root 的主页；关闭标签只清空槽位的标签句柄，组件继续存活。
+    homes: Vec<(String, PageSlot<HomePage>)>,
+    /// 启动器选项：常驻页面，最多一个标签。
+    launcher_options: PageSlot<LauncherOptionsPage>,
+    /// 全局游戏选项：常驻页面，最多一个标签。
+    game_options: PageSlot<GameOptionsPage>,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
     config: Config,
@@ -92,7 +101,7 @@ impl SimpleComponent for AppModel {
 
             #[wrap(Some)]
             set_content = &adw::ToolbarView {
-                // 标题栏（一行：根目录 / 标签页栏 / 账号任务设置主菜单 / 窗口按钮）
+                // 标题栏（一行：根目录 / 标签页栏 / 任务主菜单 / 窗口按钮）
                 add_top_bar: &header_widget,
 
                 #[wrap(Some)]
@@ -123,9 +132,11 @@ impl SimpleComponent for AppModel {
         let LoadedConfig { config, error } = loaded;
         let tab_view = adw::TabView::new();
 
-        // 页面宿主：把实现了 Page 的组件挂成标签页，并管它们的生命周期。
+        // 页面宿主：只负责 CustomPage 这类关闭即销毁的一次性页面。
         let page_host = Rc::new(PageHost::new(tab_view.clone()));
-        let home_pages = Rc::new(RefCell::new(Vec::<(adw::TabPage, String)>::new()));
+
+        // 应用级 action：主菜单项和应用快捷键共用同一组入口，避免菜单点击走另一条路径。
+        register_menu_actions(&sender);
 
         // 标题栏是独立组件；需要页面宿主 / 任务组件的动作通过 HeaderOut 回来。
         let roots = config.roots();
@@ -167,26 +178,32 @@ impl SimpleComponent for AppModel {
                         out,
                     }
                 });
-            homes.push((name, controller));
+            homes.push((
+                name,
+                PageSlot {
+                    controller,
+                    tab: None,
+                },
+            ));
         }
 
-        // 标签被移除时只清掉标签映射；HomePage 继续常驻，运行状态不会丢。
+        // 设置页同样是常驻页面；启动时创建，之后重复触发只聚焦已有标签。
+        let launcher_options = PageSlot {
+            controller: LauncherOptionsPage::builder().launch(()).detach(),
+            tab: None,
+        };
+        let game_options = PageSlot {
+            controller: GameOptionsPage::builder().launch(()).detach(),
+            tab: None,
+        };
+
+        // 标签被移除时只清掉各页面的标签句柄；常驻页面继续存活，运行状态不会丢。
+        // 关闭主窗口时，`AdwTabView` 会在组件 runtime 关闭之后才 detach 标签页；此时
+        // 清理已经没有意义，用 `send` 静默丢弃，避免 `input()` 因 receiver 已关闭而 panic。
         {
-            let page_host = page_host.clone();
-            let home_pages = home_pages.clone();
-            let sender = sender.clone();
+            let input = sender.input_sender().clone();
             tab_view.connect_page_detached(move |_, page, _| {
-                page_host.close(page);
-                let home_root = {
-                    let mut pages = home_pages.borrow_mut();
-                    pages
-                        .iter()
-                        .position(|(home_page, _)| home_page == page)
-                        .map(|index| pages.remove(index).1)
-                };
-                if home_root.is_some() {
-                    let _ = sender.input_sender().send(AppMsg::HomeTabClosed);
-                }
+                let _ = input.send(AppMsg::TabClosed(page.clone()));
             });
         }
 
@@ -195,8 +212,9 @@ impl SimpleComponent for AppModel {
             header,
             tasks: tasks_sender,
             page_host,
-            home_pages,
             homes,
+            launcher_options,
+            game_options,
             shell,
             config,
             tab_view,
@@ -208,10 +226,15 @@ impl SimpleComponent for AppModel {
 
     fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         match message {
-            AppMsg::Header(HeaderOut::OpenTasks) => {
+            AppMsg::Header(HeaderOut::Tasks) => {
                 let _ = self.tasks.send(TaskMsg::Open);
             }
-            AppMsg::Header(HeaderOut::OpenHome(name)) => self.open_home(&name),
+            AppMsg::Header(HeaderOut::Home(name)) => self.open_home(&name),
+            AppMsg::OpenLauncherOptions => self.open_launcher_options(),
+            AppMsg::OpenGameOptions => self.open_game_options(),
+            AppMsg::About => {
+                let _ = self.header.sender().send(HeaderMsg::About);
+            }
             AppMsg::Home {
                 root,
                 out: HomeOut::CreateCustom,
@@ -220,7 +243,17 @@ impl SimpleComponent for AppModel {
                 let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
             }
             AppMsg::Tasks(TaskCenterOut::Quit) => self.window.destroy(),
-            AppMsg::HomeTabClosed => self.sync_header_homes(),
+            AppMsg::TabClosed(page) => {
+                // 一次性页面：关闭即销毁。
+                self.page_host.close(&page);
+                // 常驻页面：只清空标签句柄，组件继续存活。
+                for (_, slot) in &mut self.homes {
+                    slot.close(&page);
+                }
+                self.launcher_options.close(&page);
+                self.game_options.close(&page);
+                self.sync_header_homes();
+            }
             AppMsg::CloseRequested => {
                 let _ = self.tasks.send(TaskMsg::CloseMain);
             }
@@ -231,34 +264,33 @@ impl SimpleComponent for AppModel {
 impl AppModel {
     /// 打开或聚焦某个 root 的主页标签。
     fn open_home(&mut self, name: &str) {
-        let existing_page = self
-            .home_pages
-            .borrow()
+        let Some(index) = self
+            .homes
             .iter()
-            .find(|(_, home_root)| home_root == name)
-            .map(|(page, _)| page.clone());
-        if let Some(page) = existing_page {
-            self.tab_view.set_selected_page(&page);
+            .position(|(home_root, _)| home_root == name)
+        else {
+            self.shell
+                .global_toast(&format!("配置里找不到主页：{name}"));
             return;
-        }
-
-        let (widget, home_sender) = {
-            let Some((_, controller)) = self.homes.iter().find(|(home_root, _)| home_root == name)
-            else {
-                self.shell
-                    .global_toast(&format!("配置里找不到主页：{name}"));
-                return;
-            };
-            (controller.widget().clone(), controller.sender().clone())
         };
-
-        let page = self.tab_view.append(&widget);
-        page.set_title(&home_tab_title(name));
-        self.tab_view.set_selected_page(&page);
-        self.home_pages.borrow_mut().push((page, name.to_string()));
-        // 隐藏期间目录可能已经变化；打开时补一次刷新。
-        let _ = home_sender.send(HomeMsg::Reload);
+        let (_, slot) = &mut self.homes[index];
+        let reopen = slot.tab.is_none();
+        slot.open(&self.tab_view, &home_tab_title(name));
+        if reopen {
+            // 隐藏期间目录可能已经变化；重新打开时补一次刷新。
+            let _ = slot.controller.sender().send(HomeMsg::Reload);
+        }
         self.sync_header_homes();
+    }
+
+    /// 打开或聚焦启动器选项。
+    fn open_launcher_options(&mut self) {
+        self.launcher_options.open(&self.tab_view, "启动器选项");
+    }
+
+    /// 打开或聚焦全局游戏选项。
+    fn open_game_options(&mut self) {
+        self.game_options.open(&self.tab_view, "全局游戏选项");
     }
 
     /// 新建实例页绑定到发出请求的主页 root。
@@ -277,15 +309,42 @@ impl AppModel {
 
     fn sync_header_homes(&self) {
         let mut open: Vec<String> = self
-            .home_pages
-            .borrow()
+            .homes
             .iter()
-            .map(|(_, name)| name.clone())
+            .filter(|(_, slot)| slot.tab.is_some())
+            .map(|(name, _)| name.clone())
             .collect();
         open.sort();
         open.dedup();
         let _ = self.header.sender().send(HeaderMsg::SetOpenHomes(open));
     }
+}
+
+/// 注册主菜单项对应的应用级 action 与快捷键。
+fn register_menu_actions(sender: &ComponentSender<AppModel>) {
+    let app = relm4::main_adw_application();
+
+    let action = gtk::gio::SimpleAction::new("launcher-options", None);
+    let action_sender = sender.clone();
+    action.connect_activate(move |_, _| action_sender.input(AppMsg::OpenLauncherOptions));
+    app.add_action(&action);
+    app.set_accels_for_action("app.launcher-options", &["<Control>comma"]);
+
+    let action = gtk::gio::SimpleAction::new("game-options", None);
+    let action_sender = sender.clone();
+    action.connect_activate(move |_, _| action_sender.input(AppMsg::OpenGameOptions));
+    app.add_action(&action);
+    // Shift 会把逗号键的 keyval 变成 `<`（less）；两个都注册，保证 `Ctrl+Shift+,`
+    // 在不同键盘布局 / GDK 后端下都能触发。
+    app.set_accels_for_action(
+        "app.game-options",
+        &["<Control><Shift>comma", "<Control><Shift>less"],
+    );
+
+    let action = gtk::gio::SimpleAction::new("about", None);
+    let action_sender = sender.clone();
+    action.connect_activate(move |_, _| action_sender.input(AppMsg::About));
+    app.add_action(&action);
 }
 
 fn home_tab_title(root_name: &str) -> String {

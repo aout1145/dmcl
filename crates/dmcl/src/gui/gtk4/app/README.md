@@ -10,11 +10,13 @@
 - `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层都由 `view!` 搭出来；
 - 启动 `Header`、`TaskCenter`；按配置里的全部 `minecraft_roots` 创建常驻 `HomePage`，
   启动时只给默认 root 建标签页；
-- 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页、设置默认 root 和任务；主页的
-  `HomeOut::CreateCustom` 打开新建实例页；`HomeTabClosed` 只把对应标签状态设为关闭；
-  `TaskCenterOut` 负责任务角标与退出；
-- 所有主页标签都可以关闭。标签 `page-detached` 时清理 `PageHost` 和标签映射，但
-  `HomePage` 继续常驻；重新打开时把同一个根 widget 挂到新标签，运行状态不会丢。
+- 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页和任务；主页的
+  `HomeOut::CreateCustom` 打开新建实例页；`TabClosed` 清理对应页面的标签句柄并同步根目录
+  勾选；主菜单和快捷键共用 `app.*` action，分别发 `OpenLauncherOptions` /
+  `OpenGameOptions` / `About`；`TaskCenterOut` 负责任务角标与退出；
+- 所有标签都可以关闭。标签 `page-detached` 时发送 `TabClosed`，清理 `PageHost` 和各
+  `PageSlot` 的标签句柄，但常驻页面继续存活；重新打开时把同一个根 widget 挂到新标签，
+  运行状态不会丢。
 
 标题栏也是独立组件（`header/mod.rs`，根目录菜单行在 `header/root_row.rs`，外观切换在
 `header/theme.rs`，「关于」在 `header/about.rs`），整行由 `view!` 声明，再由根组件的
@@ -48,46 +50,69 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 保持通用。结束消息还会带一个 `cancelled` 标记：Shell 从返回的错误里认出 `Cancelled`，
 让任务卡片显示「已取消」而不是「失败」。
 
-## 页面宿主
+## 页面生命周期
 
-`app/page_host.rs` 负责把「实现了 `Page` 的 relm4 组件」挂成标签页，并保活：
+`app/page_host.rs` 按页面是否需要长期保活分成两种：
 
-- 页面组件的 `Init` 固定是 `PageInit`（`TabTitle` + 页面自己的参数）；
-- `PageHost::open_page::<C>(args)` 启动组件、`AdwTabView::append` 出标签页、绑好标题句柄、
-  切到新标签页，并把控制器存进保活表（`page-detached` 时丢弃）；
-- `TabTitle` 是页面**直接**改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动
-  组件再 append，所以绑定前 `set_title` 会缓存、绑定后补写；`close()` 内置 `tab_view` +
-  `tab_page` 引用，调 `tab_view.close_page`；所有标签（包括主页）都允许关闭。
+- **一次性页面**（`CustomPage`）：实现 `Page`，`Init` 固定是 `PageInit`（`TabTitle` +
+  页面自己的参数）。`PageHost::open_page::<C>(args)` 启动组件、`AdwTabView::append` 出
+  标签页、绑好标题句柄、切到新标签页，并把控制器存进保活表；`page-detached` 时丢弃。
+- **常驻页面**（主页、启动器选项、全局游戏选项）：启动时创建组件，由 `PageSlot<C>` 直接
+  持有 `Controller<C>` 和 `Option<AdwTabPage>`。`PageSlot::open` 在已打开时只聚焦，关闭后
+  重新 append 同一个根 widget；`PageSlot::close` 只清空标签句柄，组件和页面状态继续保留。
+  设置页固定两个字段，主页按 root 名字存放在 `Vec<(String, PageSlot<HomePage>)>` 里，不需要
+  字符串 key 或类型擦除注册表。
 
-新增页面：在 `pages/` 下写一个 `impl Page` + `#[relm4::component]` 的组件，`type Args` 是
-它的实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page` 即可。
+`TabTitle` 是页面**直接**改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动
+组件再 append，所以绑定前 `set_title` 会缓存、绑定后补写；`close()` 内置 `tab_view` +
+`tab_page` 引用，调 `tab_view.close_page`；所有标签（包括主页）都允许关闭。
+
+新增一次性页面：在 `pages/` 下写一个 `impl Page` + `#[relm4::component]` 的组件，
+`type Args` 是它的实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page`。
+新增常驻页面：在根组件加一个 `PageSlot<C>` 字段，启动时 `launch` 一次，并在 `TabClosed`
+里调用它的 `close`。
 
 ## 标题栏与标签页
 
-- `AdwHeaderBar` 的 title widget 是**一整行** `GtkBox`：`+`、`AdwTabBar`、账号 / 任务 /
-  设置、`GtkWindowControls`。头栏把 title widget 摆在 `GtkCenterBox` 正中（中间宽度 =
+- `AdwHeaderBar` 的 title widget 是**一整行** `GtkBox`：目录菜单按钮、`AdwTabBar`、任务 /
+  主菜单、`GtkWindowControls`。头栏把 title widget 摆在 `GtkCenterBox` 正中（中间宽度 =
   总宽 − 2×max(左, 右)），若把标签栏单独当 title widget、其余按钮分头 `pack_start` /
   `pack_end`，左窄右宽时标签栏会被推到右边、左边空出一大截；所以整行都并进 title widget，
   并把 `show-start-title-buttons` / `show-end-title-buttons` 关掉、窗口按钮自己加在行尾——
   左右两侧宽度都变成 0，标签栏正好铺满「目录菜单 → 窗口按钮」之间。
 - 标签栏 `autohide(false)`：页面少时也一直显示，避免关闭标签时整条标签栏跟着
   `GtkRevealer` 滑走、和标签自身的收缩动画叠在一起。
-- 标签页是 `AdwTabView`。所有页面都可关闭：关闭主页标签只移除 `AdwTabPage`，`HomePage`
-  继续存活，游戏进程和监视任务都不受影响；重新打开时把同一个根 widget 加到标签末尾。
-  `PageHost` 只管非主页页面，标签移除时清理保活。
+- 标签页是 `AdwTabView`。所有页面都可关闭：关闭主页或设置页标签只移除 `AdwTabPage`，
+  `PageSlot` 里的组件继续存活，重新打开时把同一个根 widget 加到标签末尾。`PageHost`
+  只负责 `CustomPage` 这类关闭即销毁的一次性页面，标签移除时清理保活。
 - 标题栏最左侧是「Minecraft 目录」菜单，列出全部 `minecraft_roots`：打开 / 聚焦主页、
   标记已打开。新建实例由主页右下角的悬浮按钮打开；`CustomPage` 使用主页
-  捕获的 root，App 不维护「当前选中的主页是哪个 root」。账号、设置是占位 popup；任务按钮
-  通过 `HeaderOut::OpenTasks` 打开任务对话框。
-- 最右侧的三点主菜单提供外观切换和「关于」。外观切换是 `header/theme.rs` 里的独立子组件
-  `ThemeSwitcher`，用 GNOME 应用里常见的「跟随系统 / 浅色 / 深色」圆形色板：一组互斥的
-  `GtkCheckButton`，把 `radio` 指示器画成圆形，再叠一个选中对勾；分别对应
-  `AdwStyleManager` 的 `Default` / `ForceLight` / `ForceDark`。「关于」由
-  `header/about.rs` 打开 `AdwAboutDialog`。
+  捕获的 root，App 不维护「当前选中的主页是哪个 root」。任务按钮通过
+  `HeaderOut::Tasks` 打开任务对话框。
+- 最右侧的三点主菜单是 `GtkMenuButton` + `GtkPopoverMenu`，菜单结构由 `GMenu` 生成，
+  和 GNOME 应用的主菜单同一条路径：普通项是 GTK 生成的 `GtkModelButton`，统一处理
+  行高、分隔线、助记符和右侧快捷键；设置项直接调用 `app.launcher-options` /
+  `app.game-options`，关于调用 `app.about`。外观切换是 `header/theme.rs` 里的独立子组件
+  `ThemeSwitcher`，作为 `custom` child 插进 `GtkPopoverMenu` 的第一段。它照 GNOME Text
+  Editor 的 `EditorThemeSelector` 实现：横向 `GtkBox` 间距 12、外边距 9，三个互斥
+  `GtkCheckButton` 都 `hexpand` 并居中，色板本身是 44px 圆形，`radio` 指示器透明后挪到
+  右下角，选中时显示对勾；分别对应 `AdwStyleManager` 的 `Default` / `ForceLight` /
+  `ForceDark`。「关于」由 `header/about.rs` 打开 `AdwAboutDialog`。
 - 任务按钮右上角有运行中数量角标；任务窗口在任务开始 / 结束 / 清除时把未结束任务数上报给
   根组件，再转给标题栏，角标为 0 时隐藏。
 - 标题栏布局用 `view!` 声明。标签栏仍占满中间宽度；在它和右侧按钮之间留一段 28px 的固定
   `GtkWindowHandle`，拖这段空白可以移动窗口，避免拖拽被标签栏内部的滚动区吃掉。
+
+## 快捷键与助记符
+
+- 应用级 action：`app.launcher-options`（`Ctrl+,`）、`app.game-options`
+  （`Ctrl+Shift+,`）、`app.about`，在根组件 `init` 里注册。前两个分别发
+  `AppMsg::OpenLauncherOptions` / `AppMsg::OpenGameOptions`，`app.about` 发
+  `AppMsg::About` 再转给标题栏。
+- 菜单项由 `GMenu` 生成，标签里的 `_L` / `_G` / `_A` 就是 `GtkModelButton` 的助记符：
+  菜单打开时 `Alt+L` / `Alt+G` / `Alt+A` 直接激活对应 action，不需要手写 mnemonic widget。
+- 菜单右侧的快捷键来自 `GMenu` 项的 `accel` 属性，由 `GtkPopoverMenu` 按平台渲染成
+  `Ctrl+,` / `Shift+Ctrl+,` 这类纯文本。
 
 ## 标题栏 CSS
 

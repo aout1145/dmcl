@@ -1,7 +1,7 @@
 on: [push, pull_request]
 
 # GTK4 + libadwaita 图形前端：单独验证 `--features gtk4`。
-# 需要 GTK ≥4.18 / libadwaita ≥1.7（用到 AdwWrapBox / AdwSpinner / AdwWindow）。
+# 需要 GTK ≥4.22 / libadwaita ≥1.9（用到 AdwWrapBox / AdwWindow 等较新的 Adw 控件）。
 jobs:
   gui-linux:
     name: GUI (GTK4, Linux)

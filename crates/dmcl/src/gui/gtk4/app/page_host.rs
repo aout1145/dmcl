@@ -1,8 +1,12 @@
-//! 页面宿主：把「实现了 [`Page`] 的组件」挂成标签页，并管它们的生命周期。
+//! 页面生命周期：一次性页面用 [`PageHost`] 懒创建，长期保活页面用 [`PageSlot`] 直接持有。
 //!
-//! 页面组件的 `Init` 固定是 [`PageInit`]（标签句柄 + 页面自己的参数）。打开页面用
-//! [`PageHost::open_page`]：它启动组件、把根控件 append 成新的标签页、绑好标题句柄、切到新
-//! 标签页，并**保活**组件控制器；标签被移除时（`page-detached`）再把它丢掉。
+//! 一次性页面（如 `CustomPage`）实现 [`Page`]，`Init` 固定是 [`PageInit`]（标签句柄 + 页面
+//! 自己的参数）。打开页面用 [`PageHost::open_page`]：它启动组件、把根控件 append 成新的标签
+//! 页、绑好标题句柄、切到新标签页，并**保活**组件控制器；标签被移除时（`page-detached`）再
+//! 把它丢掉。
+//!
+//! 长期保活页面（如主页和设置页）在启动时创建好组件，由 [`PageSlot`] 持有控制器与当前标签；
+//! 关闭标签只清空标签句柄，组件本身继续存活，重新打开时把同一个根控件挂到新标签。
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -114,5 +118,43 @@ impl PageHost {
     /// 标签页被移除时丢掉页面的保活（由 `page-detached` 调用）。
     pub fn close(&self, page: &adw::TabPage) {
         self.opened.borrow_mut().remove(page);
+    }
+}
+
+/// 长期保活页面的句柄：组件控制器 + 当前标签。
+///
+/// 页面在启动时创建，关闭标签只把 [`PageSlot::tab`] 置空，控制器和组件状态继续保留；
+/// 再次打开时把同一个根控件挂到新标签。
+pub(crate) struct PageSlot<C: Component> {
+    pub(crate) controller: Controller<C>,
+    /// 当前标签；关闭后为 `None`。
+    pub(crate) tab: Option<adw::TabPage>,
+}
+
+impl<C> PageSlot<C>
+where
+    C: Component<Root: IsA<gtk::Widget>>,
+{
+    /// 已打开就聚焦；否则把组件根控件挂成标签并记录。
+    pub fn open(&mut self, view: &adw::TabView, title: &str) {
+        match &self.tab {
+            Some(tab) => {
+                tab.set_title(title);
+                view.set_selected_page(tab);
+            }
+            None => {
+                let tab = view.append(self.controller.widget());
+                tab.set_title(title);
+                view.set_selected_page(&tab);
+                self.tab = Some(tab);
+            }
+        }
+    }
+
+    /// 标签被移除时清空句柄。
+    pub fn close(&mut self, page: &adw::TabPage) {
+        if self.tab.as_ref() == Some(page) {
+            self.tab = None;
+        }
     }
 }
