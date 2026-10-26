@@ -18,7 +18,6 @@ pub(crate) use shell::Shell;
 pub(crate) use toast::{PageToast, ToastService};
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use relm4::adw;
@@ -62,7 +61,7 @@ struct AppModel {
     /// 主页标签 → root 名字；关闭标签时清理，也用来判断主页是否可见。
     home_pages: Rc<RefCell<Vec<(adw::TabPage, String)>>>,
     /// 所有 root 的主页控制器；关闭标签不会移除。
-    homes: BTreeMap<String, Controller<HomePage>>,
+    homes: Vec<(String, Controller<HomePage>)>,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
     config: Config,
@@ -129,14 +128,9 @@ impl SimpleComponent for AppModel {
         let home_pages = Rc::new(RefCell::new(Vec::<(adw::TabPage, String)>::new()));
 
         // 标题栏是独立组件；需要页面宿主 / 任务组件的动作通过 HeaderOut 回来。
-        let roots: Vec<MinecraftRoot> = config.roots().collect();
+        let roots = config.roots();
         let header = Header::builder()
-            .launch((
-                tab_view.clone(),
-                root.clone(),
-                roots,
-                config.minecraft_root.clone(),
-            ))
+            .launch((tab_view.clone(), root.clone(), roots))
             .forward(sender.input_sender(), AppMsg::Header);
         let header_widget = header.widget().clone();
 
@@ -161,7 +155,7 @@ impl SimpleComponent for AppModel {
         let tasks_sender = tasks.sender().clone();
 
         // 所有 root 的主页从启动起就常驻；启动时只给默认 root 建标签页。
-        let mut homes = BTreeMap::new();
+        let mut homes = Vec::new();
         for home_root in config.roots() {
             let name = home_root.name.clone();
             let controller = HomePage::builder()
@@ -173,7 +167,7 @@ impl SimpleComponent for AppModel {
                         out,
                     }
                 });
-            homes.insert(name, controller);
+            homes.push((name, controller));
         }
 
         // 标签被移除时只清掉标签映射；HomePage 继续常驻，运行状态不会丢。
@@ -218,7 +212,6 @@ impl SimpleComponent for AppModel {
                 let _ = self.tasks.send(TaskMsg::Open);
             }
             AppMsg::Header(HeaderOut::OpenHome(name)) => self.open_home(&name),
-            AppMsg::Header(HeaderOut::SetDefaultRoot(name)) => self.set_default_root(&name),
             AppMsg::Home {
                 root,
                 out: HomeOut::CreateCustom,
@@ -250,7 +243,8 @@ impl AppModel {
         }
 
         let (widget, home_sender) = {
-            let Some(controller) = self.homes.get(name) else {
+            let Some((_, controller)) = self.homes.iter().find(|(home_root, _)| home_root == name)
+            else {
                 self.shell
                     .global_toast(&format!("配置里找不到主页：{name}"));
                 return;
@@ -279,27 +273,6 @@ impl AppModel {
         };
         self.page_host
             .open_page::<CustomPage>((self.shell.clone(), self.config.clone(), root));
-    }
-
-    fn set_default_root(&mut self, name: &str) {
-        let mut next = self.config.clone();
-        if let Err(err) = next.select_minecraft_root(name) {
-            self.shell
-                .global_toast(&format!("无法设置默认主页：{err:#}"));
-            return;
-        }
-        if let Err(err) = next.save_sync() {
-            self.shell
-                .global_toast(&format!("无法保存默认主页设置：{err:#}"));
-            return;
-        }
-        self.config = next;
-        let _ = self
-            .header
-            .sender()
-            .send(HeaderMsg::SetDefaultRoot(name.to_string()));
-        self.shell
-            .global_toast(&format!("默认主页已设为 {name}，下次启动生效"));
     }
 
     fn sync_header_homes(&self) {

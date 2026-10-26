@@ -76,7 +76,7 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   继续存活，游戏进程和监视任务都不受影响；重新打开时把同一个根 widget 加到标签末尾。
   `PageHost` 只管非主页页面，标签移除时清理保活。
 - 标题栏最左侧是「Minecraft 目录」菜单，列出全部 `minecraft_roots`：打开 / 聚焦主页、
-  标记已打开、设置默认主页。新建实例由主页右下角的悬浮按钮打开；`CustomPage` 使用主页
+  标记已打开。新建实例由主页右下角的悬浮按钮打开；`CustomPage` 使用主页
   捕获的 root，App 不维护「当前选中的主页是哪个 root」。账号、设置是占位 popup；任务按钮
   通过 `HeaderOut::OpenTasks` 打开任务对话框。
 - 最右侧的三点主菜单提供外观切换和「关于」。外观切换是 `header/theme.rs` 里的独立子组件

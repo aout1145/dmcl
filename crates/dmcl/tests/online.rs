@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use dmcl::config::{AccountConfig, Config};
+use dmcl::config::{AccountConfig, Config, MinecraftRoot};
 use dmcl_launch::GameLauncher;
 
 const VERSION: &str = "1.7.10";
@@ -22,7 +22,10 @@ fn work_dir() -> PathBuf {
 
 fn config_for(root: PathBuf) -> Config {
     let mut config = Config::default();
-    config.minecraft_roots.insert("test".to_string(), root);
+    config.minecraft_roots.push(MinecraftRoot {
+        name: "test".to_string(),
+        path: root,
+    });
     config.minecraft_root = "test".to_string();
     config.download.max_tasks = 8;
     config.download.chunk_threshold_mib = 1;

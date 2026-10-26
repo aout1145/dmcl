@@ -100,8 +100,8 @@ dmcl list-mc --type=release,snapshot
 根目录和 Java 表也可以通过直接编辑全局 `dmcl.json` 维护。账号目前只有离线模式，
 联机登录还没实现。图形界面的账号、设置、实例管理页面仍在开发中。
 
-图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页，
-也可以把某个 root 设为默认主页。所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
+图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
+所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
 页面；重新打开后选中项、运行状态和正在监视的游戏都还在。新建实例使用主页右下角的悬浮
 `+` 按钮；创建目标始终是该主页绑定的 root。
 
@@ -159,10 +159,17 @@ macOS `~/Library/Application Support`）。
   "javas": {
     "jdk-17": "/usr/lib/jvm/java-17/bin/java"
   },
-  "minecraft_roots": {
-    "default": "/home/me/.minecraft"
-  },
-  "minecraft_root": "default",
+  "minecraft_roots": [
+    {
+      "name": "当前目录",
+      "path": "${CWD}/.minecraft"
+    },
+    {
+      "name": "官方启动器",
+      "path": "/home/me/.minecraft"
+    }
+  ],
+  "minecraft_root": "当前目录",
   "download": {
     "max_tasks": 64,
     "skip_music": false,
@@ -177,8 +184,13 @@ macOS `~/Library/Application Support`）。
 
 - `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
-- `minecraft_root` 指向 `minecraft_roots` 里的某个根目录；相对路径在加载时按当前工作
-  目录补成绝对路径。
+- `minecraft_roots` 是具名根目录的数组，条目为 `{ "name": "...", "path": "..." }`；
+  `name` 直接作为界面上的显示名，必须唯一。默认有两个：「当前目录」
+  （`${CWD}/.minecraft`）和「官方启动器」（Windows 为 `%APPDATA%\.minecraft`、
+  macOS 为 `~/Library/Application Support/minecraft`、其它平台为 `~/.minecraft`）。
+- `path` 里的 `${CWD}` 表示当前工作目录，相对路径也按当前工作目录解析；两者都在使用根
+  目录时展开，配置里保留原文，保存配置不会把它们写死。
+- `minecraft_root` 指向 `minecraft_roots` 里的某个名字，默认「当前目录」。
 - `download.skip_music` 为 `true` 时跳过 `*.ogg` 资源（音乐与音效）。
 - `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，

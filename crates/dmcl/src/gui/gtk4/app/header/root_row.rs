@@ -9,29 +9,17 @@ use crate::config::MinecraftRoot;
 pub(super) struct RootRow {
     pub(super) root: MinecraftRoot,
     pub(super) open: bool,
-    pub(super) default: bool,
 }
 
 /// 根目录行发出的动作；带索引，由 Header 查回 root 名字。
 #[derive(Debug)]
 pub(crate) enum RootRowOut {
     Open(DynamicIndex),
-    SetDefault(DynamicIndex),
-}
-
-impl RootRow {
-    fn star_icon(&self) -> &'static str {
-        if self.default {
-            "starred-symbolic"
-        } else {
-            "non-starred-symbolic"
-        }
-    }
 }
 
 #[relm4::factory(pub(super))]
 impl FactoryComponent for RootRow {
-    type Init = (MinecraftRoot, bool);
+    type Init = MinecraftRoot;
     type Input = ();
     type Output = RootRowOut;
     type CommandOutput = ();
@@ -89,27 +77,10 @@ impl FactoryComponent for RootRow {
                     },
                 },
             },
-
-            gtk::Button {
-                set_icon_name: self.star_icon(),
-                add_css_class: "flat",
-                set_tooltip_text: Some("设为默认主页"),
-                connect_clicked[sender, index] => move |_| {
-                    let _ = sender.output(RootRowOut::SetDefault(index.clone()));
-                },
-            },
         }
     }
 
-    fn init_model(
-        (root, default): Self::Init,
-        _index: &DynamicIndex,
-        _sender: FactorySender<Self>,
-    ) -> Self {
-        Self {
-            root,
-            open: false,
-            default,
-        }
+    fn init_model(root: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
+        Self { root, open: false }
     }
 }

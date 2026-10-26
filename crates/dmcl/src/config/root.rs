@@ -1,38 +1,47 @@
 //! 具名的 Minecraft 根目录。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
+use dmcl_mcmeta::layout::absolute;
+use serde::{Deserialize, Serialize};
 
-use super::Config;
+use super::{Config, CWD_PLACEHOLDER};
 
 /// 一个具名的 Minecraft 根目录。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 配置里保存的是原始路径（可含 [`CWD_PLACEHOLDER`] 或相对路径）；
+/// [`Config::roots`] / [`Config::root`] / [`Config::default_root`] 返回的 `path`
+/// 已经展开占位符并绝对化。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MinecraftRoot {
-    /// `minecraft_roots` 里的名字。
+    /// 根目录名字，也是 GUI 里的显示名。
     pub name: String,
-    /// 已经绝对化的根目录路径。
+    /// 根目录路径。
     pub path: PathBuf,
 }
 
 impl Config {
-    /// 所有配置里的具名根目录。
-    pub fn roots(&self) -> impl Iterator<Item = MinecraftRoot> + '_ {
+    /// 所有具名根目录，保持配置里的顺序。
+    pub fn roots(&self) -> Vec<MinecraftRoot> {
         self.minecraft_roots
             .iter()
-            .map(|(name, path)| MinecraftRoot {
-                name: name.clone(),
-                path: path.clone(),
+            .map(|root| MinecraftRoot {
+                name: root.name.clone(),
+                path: resolve(&root.path),
             })
+            .collect()
     }
 
     /// 按名字取根目录。
     pub fn root(&self, name: &str) -> Result<MinecraftRoot> {
         self.minecraft_roots
-            .get(name)
-            .map(|path| MinecraftRoot {
-                name: name.to_string(),
-                path: path.clone(),
+            .iter()
+            .find(|root| root.name == name)
+            .map(|root| MinecraftRoot {
+                name: root.name.clone(),
+                path: resolve(&root.path),
             })
             .ok_or_else(|| anyhow!("根目录不存在：{name}"))
     }
@@ -40,10 +49,11 @@ impl Config {
     /// `minecraft_root` 指向的默认根目录。
     pub fn default_root(&self) -> Result<MinecraftRoot> {
         self.minecraft_roots
-            .get(&self.minecraft_root)
-            .map(|path| MinecraftRoot {
-                name: self.minecraft_root.clone(),
-                path: path.clone(),
+            .iter()
+            .find(|root| root.name == self.minecraft_root)
+            .map(|root| MinecraftRoot {
+                name: root.name.clone(),
+                path: resolve(&root.path),
             })
             .ok_or_else(|| {
                 anyhow!(
@@ -55,10 +65,20 @@ impl Config {
 
     /// 修改默认根目录；名字必须已经在 `minecraft_roots` 里。
     pub fn select_minecraft_root(&mut self, name: &str) -> Result<()> {
-        if !self.minecraft_roots.contains_key(name) {
+        if !self.minecraft_roots.iter().any(|root| root.name == name) {
             return Err(anyhow!("根目录不存在：{name}"));
         }
         self.minecraft_root = name.to_string();
         Ok(())
     }
+}
+
+/// 展开 `${CWD}` 并绝对化。
+fn resolve(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if !text.contains(CWD_PLACEHOLDER) {
+        return absolute(path);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    absolute(text.replace(CWD_PLACEHOLDER, &cwd.to_string_lossy()))
 }

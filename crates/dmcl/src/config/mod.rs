@@ -16,8 +16,11 @@
 //!   "launch": { "java": "autoselect", "account": "player", … },
 //!   "accounts": { "player": { "type": "offline", "username": "player" } },
 //!   "javas": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
-//!   "minecraft_roots": { "default": ".minecraft" },
-//!   "minecraft_root": "default",
+//!   "minecraft_roots": [
+//!     { "name": "当前目录", "path": "${CWD}/.minecraft" },
+//!     { "name": "官方启动器", "path": "…" }
+//!   ],
+//!   "minecraft_root": "当前目录",
 //!   "download": { "max_tasks": 64, "skip_music": false, … }
 //! }
 //! ```
@@ -32,7 +35,7 @@ pub use download::DownloadConfig;
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
 pub use root::MinecraftRoot;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -50,6 +53,17 @@ use serde::{Deserialize, Serialize};
 /// 1 MiB。
 const MIB: u64 = 1024 * 1024;
 
+/// 根目录路径里表示「当前工作目录」的占位符。
+///
+/// 它在取用根目录时展开，配置里始终保留原文，因此保存配置不会把当前目录写死。
+pub const CWD_PLACEHOLDER: &str = "${CWD}";
+
+/// 内置根目录「当前目录」的名字。
+const CURRENT_ROOT_NAME: &str = "当前目录";
+
+/// 内置根目录「官方启动器」的名字。
+const OFFICIAL_ROOT_NAME: &str = "官方启动器";
+
 /// 整份全局配置文档。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -57,7 +71,8 @@ pub struct Config {
     pub launch: LaunchConfig,
     pub accounts: BTreeMap<String, AccountConfig>,
     pub javas: JavaConfigs,
-    pub minecraft_roots: BTreeMap<String, PathBuf>,
+    /// 具名根目录。这里保存配置原文，`${CWD}` 与相对路径在取用根目录时解析。
+    pub minecraft_roots: Vec<MinecraftRoot>,
     pub minecraft_root: String,
     pub download: DownloadConfig,
 }
@@ -69,7 +84,7 @@ impl Default for Config {
             accounts: default_accounts(),
             javas: JavaConfigs::new(),
             minecraft_roots: default_roots(),
-            minecraft_root: "default".to_string(),
+            minecraft_root: CURRENT_ROOT_NAME.to_string(),
             download: DownloadConfig::default(),
         }
     }
@@ -79,8 +94,28 @@ fn default_accounts() -> BTreeMap<String, AccountConfig> {
     BTreeMap::from([("player".to_string(), AccountConfig::default())])
 }
 
-fn default_roots() -> BTreeMap<String, PathBuf> {
-    BTreeMap::from([("default".to_string(), PathBuf::from(".minecraft"))])
+fn default_roots() -> Vec<MinecraftRoot> {
+    vec![
+        MinecraftRoot {
+            name: CURRENT_ROOT_NAME.to_string(),
+            path: PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft")),
+        },
+        MinecraftRoot {
+            name: OFFICIAL_ROOT_NAME.to_string(),
+            path: official_launcher_root(),
+        },
+    ]
+}
+
+/// 官方启动器存放 Minecraft 的目录。
+fn official_launcher_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let dir = dirs::data_dir().map(|base| base.join(".minecraft"));
+    #[cfg(target_os = "macos")]
+    let dir = dirs::data_dir().map(|base| base.join("minecraft"));
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let dir = dirs::home_dir().map(|home| home.join(".minecraft"));
+    dir.unwrap_or_else(|| PathBuf::from(".minecraft"))
 }
 
 /// 一次配置加载的结果。
@@ -153,7 +188,7 @@ impl Config {
         }
     }
 
-    /// 读配置（文件不存在就用默认值），并把所有根目录补成绝对路径。
+    /// 读配置（文件不存在就用默认值）。
     ///
     /// 配置项本身的问题不会让加载失败：逐项回退默认值，汇总到
     /// [`LoadedConfig::error`] 里交给前端处理。
@@ -191,9 +226,8 @@ impl Config {
         Self::into_loaded(config, path, warnings)
     }
 
-    /// 补绝对路径并把警告包成 [`LoadedConfig`]（`load` / `load_sync` 共用）。
-    fn into_loaded(mut config: Self, path: PathBuf, warnings: Vec<ConfigWarning>) -> LoadedConfig {
-        config.absolutize_roots();
+    /// 把警告包成 [`LoadedConfig`]（`load` / `load_sync` 共用）。
+    fn into_loaded(config: Self, path: PathBuf, warnings: Vec<ConfigWarning>) -> LoadedConfig {
         let error = (!warnings.is_empty()).then_some(ConfigError { path, warnings });
         LoadedConfig { config, error }
     }
@@ -258,9 +292,8 @@ impl Config {
                     root["javas"] = serde_json::to_value(table).unwrap_or_default();
                 }
                 "minecraft_roots" => {
-                    let table =
-                        parse_table("minecraft_roots", body, default_roots(), &mut warnings);
-                    root["minecraft_roots"] = serde_json::to_value(table).unwrap_or_default();
+                    let roots = parse_roots(body, &mut warnings);
+                    root["minecraft_roots"] = serde_json::to_value(roots).unwrap_or_default();
                 }
                 "minecraft_root" => {
                     if body.is_string() {
@@ -295,13 +328,6 @@ impl Config {
         (config, warnings)
     }
 
-    /// 把所有根目录补成绝对路径（`load` / `load_sync` 共用）。
-    fn absolutize_roots(&mut self) {
-        for root in self.minecraft_roots.values_mut() {
-            *root = absolute(&*root);
-        }
-    }
-
     /// 校验全局选择项：根目录、账户、Java。失效项回退并产生警告。
     fn validate_selections(&mut self) -> Vec<ConfigWarning> {
         let mut warnings = Vec::new();
@@ -310,19 +336,45 @@ impl Config {
             self.minecraft_roots = default_roots();
             warnings.push(ConfigWarning {
                 message: "配置项「minecraft_roots」为空，已加入默认根目录".to_string(),
-                detail: "默认根目录为 default -> .minecraft".to_string(),
+                detail: format!(
+                    "默认根目录为 {CURRENT_ROOT_NAME} -> {CWD_PLACEHOLDER}/.minecraft、\
+                     {OFFICIAL_ROOT_NAME} -> {}",
+                    official_launcher_root().display()
+                ),
             });
         }
-        if !self.minecraft_roots.contains_key(&self.minecraft_root) {
-            let fallback = if self.minecraft_roots.contains_key("default") {
-                "default".to_string()
+
+        let mut names = BTreeSet::new();
+        let mut duplicates = Vec::new();
+        self.minecraft_roots.retain(|root| {
+            if names.insert(root.name.clone()) {
+                true
             } else {
-                self.minecraft_roots
-                    .keys()
-                    .next()
-                    .cloned()
-                    .unwrap_or_default()
-            };
+                if !duplicates.contains(&root.name) {
+                    duplicates.push(root.name.clone());
+                }
+                false
+            }
+        });
+        for name in duplicates {
+            warnings.push(ConfigWarning {
+                message: format!("配置项「minecraft_roots」里有重复的根目录：{name}，已保留第一个"),
+                detail: "根目录名字必须唯一".to_string(),
+            });
+        }
+
+        if !self
+            .minecraft_roots
+            .iter()
+            .any(|root| root.name == self.minecraft_root)
+        {
+            let fallback = self
+                .minecraft_roots
+                .iter()
+                .find(|root| root.name == CURRENT_ROOT_NAME)
+                .or_else(|| self.minecraft_roots.first())
+                .map(|root| root.name.clone())
+                .unwrap_or_default();
             warnings.push(ConfigWarning {
                 message: format!(
                     "配置项「minecraft_root」指向的根目录不存在：{}，改用「{fallback}」",
@@ -541,6 +593,28 @@ where
     serde_json::Value::Object(current)
 }
 
+/// 解析根目录数组：条目逐个校验，坏条目丢弃；整体替换默认根目录。
+fn parse_roots(body: serde_json::Value, warnings: &mut Vec<ConfigWarning>) -> Vec<MinecraftRoot> {
+    let serde_json::Value::Array(entries) = body else {
+        warnings.push(ConfigWarning {
+            message: "配置段「minecraft_roots」使用默认值".to_string(),
+            detail: "该段不是 JSON 数组".to_string(),
+        });
+        return default_roots();
+    };
+    let mut roots = Vec::with_capacity(entries.len());
+    for (index, raw) in entries.into_iter().enumerate() {
+        match serde_json::from_value::<MinecraftRoot>(raw) {
+            Ok(root) => roots.push(root),
+            Err(err) => warnings.push(ConfigWarning {
+                message: format!("配置项「minecraft_roots[{index}]」已忽略"),
+                detail: format!("值不合法：{err}"),
+            }),
+        }
+    }
+    roots
+}
+
 /// 解析一张动态表：条目逐个校验，坏条目丢弃；表整体替换默认表。
 fn parse_table<T>(
     section: &str,
@@ -597,6 +671,13 @@ mod tests {
         std::env::temp_dir().join(format!("dmcl-config-{label}-{}", std::process::id()))
     }
 
+    fn test_root(name: &str, path: impl Into<PathBuf>) -> MinecraftRoot {
+        MinecraftRoot {
+            name: name.to_string(),
+            path: path.into(),
+        }
+    }
+
     #[test]
     fn reads_the_global_layout() {
         let text = r#"{
@@ -609,7 +690,7 @@ mod tests {
                 "steve": { "type": "offline", "username": "Steve" }
             },
             "javas": { "jdk": "/usr/lib/jvm/java-17/bin/java" },
-            "minecraft_roots": { "test": "/mc" },
+            "minecraft_roots": [ { "name": "test", "path": "/mc" } ],
             "minecraft_root": "test",
             "download": { "mirror": "mirror-first", "skip_music": true }
         }"#;
@@ -628,10 +709,7 @@ mod tests {
             config.javas.get("jdk"),
             Some(&PathBuf::from("/usr/lib/jvm/java-17/bin/java"))
         );
-        assert_eq!(
-            config.minecraft_roots.get("test"),
-            Some(&PathBuf::from("/mc"))
-        );
+        assert_eq!(config.root("test").unwrap().path, PathBuf::from("/mc"));
         assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(config.download.skip_music);
@@ -642,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_include_a_player_account_a_default_root_and_launch() {
+    fn defaults_include_a_player_account_two_roots_and_launch() {
         let config = Config::default();
         assert_eq!(
             config.accounts.get("player"),
@@ -651,10 +729,19 @@ mod tests {
             })
         );
         assert_eq!(
-            config.minecraft_roots.get("default"),
-            Some(&PathBuf::from(".minecraft"))
+            config
+                .roots()
+                .iter()
+                .map(|root| root.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME]
         );
-        assert_eq!(config.minecraft_root, "default");
+        assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
+        assert_eq!(config.default_root().unwrap().path, absolute(".minecraft"));
+        assert_eq!(
+            config.minecraft_roots[0].path,
+            PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft"))
+        );
         assert_eq!(config.launch.account.as_deref(), Some("player"));
         assert!(config.launch.java.is_auto());
         assert_eq!(config.launch.custom_info, LAUNCHER_NAME);
@@ -702,7 +789,7 @@ mod tests {
         assert_eq!(config.launch.window_width, 1024);
         assert_eq!(config.launch.account.as_deref(), Some("player"));
         assert!(config.javas.is_empty());
-        assert_eq!(config.minecraft_root, "default");
+        assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
         assert!(!config.download.skip_music);
         assert_eq!(warnings.len(), 4);
         assert!(warnings.iter().any(|warning| {
@@ -730,7 +817,10 @@ mod tests {
                     "bad_type": { "type": "online", "username": "x" }
                 },
                 "javas": { "good": "/usr/bin/java", "bad": 1 },
-                "minecraft_roots": { "good": "/mc", "bad": 1 },
+                "minecraft_roots": [
+                    { "name": "good", "path": "/mc" },
+                    { "name": "bad", "path": 1 }
+                ],
                 "minecraft_root": "good"
             }"#,
         );
@@ -740,13 +830,13 @@ mod tests {
         assert!(!config.accounts.contains_key("bad_type"));
         assert!(config.javas.contains_key("good"));
         assert!(!config.javas.contains_key("bad"));
-        assert!(config.minecraft_roots.contains_key("good"));
-        assert!(!config.minecraft_roots.contains_key("bad"));
+        assert!(config.root("good").is_ok());
+        assert!(config.root("bad").is_err());
         for key in [
             "accounts.missing_name",
             "accounts.bad_type",
             "javas.bad",
-            "minecraft_roots.bad",
+            "minecraft_roots[1]",
         ] {
             assert!(
                 warnings.iter().any(|warning| warning.message.contains(key)),
@@ -758,20 +848,41 @@ mod tests {
     #[test]
     fn invalid_minecraft_root_falls_back_to_default_or_first_entry() {
         let (config, warnings) = Config::parse(
-            r#"{"minecraft_roots": {"a": "/a", "b": "/b"}, "minecraft_root": "nope"}"#,
+            r#"{
+                "minecraft_roots": [
+                    { "name": "a", "path": "/a" },
+                    { "name": "b", "path": "/b" }
+                ],
+                "minecraft_root": "nope"
+            }"#,
         );
         assert_eq!(config.minecraft_root, "a");
-        assert_eq!(config.minecraft_roots.get("a"), Some(&PathBuf::from("/a")));
+        assert_eq!(config.root("a").unwrap().path, PathBuf::from("/a"));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("minecraft_root"));
     }
 
     #[test]
+    fn duplicate_root_names_keep_the_first_entry() {
+        let (config, warnings) = Config::parse(
+            r#"{
+                "minecraft_roots": [
+                    { "name": "a", "path": "/first" },
+                    { "name": "a", "path": "/second" }
+                ],
+                "minecraft_root": "a"
+            }"#,
+        );
+        assert_eq!(config.root("a").unwrap().path, PathBuf::from("/first"));
+        assert_eq!(config.roots().len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("重复的根目录：a"));
+    }
+
+    #[test]
     fn select_minecraft_root_requires_an_existing_name() {
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), PathBuf::from("/mc"));
+        config.minecraft_roots.push(test_root("test", "/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
@@ -784,32 +895,37 @@ mod tests {
     #[test]
     fn named_roots_resolve_and_default_can_be_selected() {
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), PathBuf::from("/mc"));
+        config.minecraft_roots.push(test_root("test", "/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.default_root().unwrap().name, "test");
         assert_eq!(config.default_root().unwrap().path, PathBuf::from("/mc"));
-        assert_eq!(config.root("default").unwrap().name, "default");
         assert_eq!(
-            config.root("default").unwrap().path,
-            PathBuf::from(".minecraft")
+            config.root(CURRENT_ROOT_NAME).unwrap().path,
+            absolute(".minecraft")
         );
         assert_eq!(
-            config.roots().map(|root| root.name).collect::<Vec<_>>(),
-            vec!["default".to_string(), "test".to_string()]
+            config
+                .roots()
+                .iter()
+                .map(|root| root.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME, "test"]
         );
         assert!(config.root("nope").is_err());
     }
 
     #[test]
-    fn empty_root_table_gets_the_default_root() {
-        let (config, warnings) = Config::parse(r#"{"minecraft_roots": {}}"#);
+    fn empty_root_array_gets_the_default_roots() {
+        let (config, warnings) = Config::parse(r#"{"minecraft_roots": []}"#);
         assert_eq!(
-            config.minecraft_roots.get("default"),
-            Some(&PathBuf::from(".minecraft"))
+            config
+                .roots()
+                .iter()
+                .map(|root| root.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME]
         );
-        assert_eq!(config.minecraft_root, "default");
+        assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("minecraft_roots"));
     }
@@ -847,9 +963,7 @@ mod tests {
         config.launch.account = Some("steve".to_string());
         config.download.mirror = MirrorPolicy::MirrorFirst;
         config.download.skip_music = true;
-        config
-            .minecraft_roots
-            .insert("test".to_string(), PathBuf::from("mc-root"));
+        config.minecraft_roots.push(test_root("test", "mc-root"));
         config.minecraft_root = "test".to_string();
 
         std::fs::create_dir_all(&dir).unwrap();
@@ -867,13 +981,46 @@ mod tests {
         );
         assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(loaded.download.skip_music);
+        assert_eq!(loaded.root("test").unwrap().path, absolute("mc-root"));
         assert_eq!(
-            loaded.minecraft_roots.get("test"),
-            Some(&absolute("mc-root"))
+            loaded
+                .minecraft_roots
+                .iter()
+                .find(|root| root.name == "test")
+                .unwrap()
+                .path,
+            PathBuf::from("mc-root")
         );
-        assert!(loaded.minecraft_roots["test"].is_absolute());
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_cwd_placeholder_is_resolved_but_saved_as_is() {
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .push(test_root("minecraft", format!("{}/mc", CWD_PLACEHOLDER)));
+
+        let text = serde_json::to_string_pretty(&config).unwrap();
+        assert!(text.contains("\"${CWD}/.minecraft\""), "{text}");
+        assert!(text.contains("\"${CWD}/mc\""), "{text}");
+
+        let (loaded, warnings) = Config::parse(&text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(loaded.default_root().unwrap().path, absolute(".minecraft"));
+        assert_eq!(loaded.root("minecraft").unwrap().path, absolute("mc"));
+    }
+
+    #[test]
+    fn the_official_root_uses_the_platform_launcher_directory() {
+        let root = Config::default().root(OFFICIAL_ROOT_NAME).unwrap();
+        #[cfg(target_os = "windows")]
+        assert_eq!(root.path, dirs::data_dir().unwrap().join(".minecraft"));
+        #[cfg(target_os = "macos")]
+        assert_eq!(root.path, dirs::data_dir().unwrap().join("minecraft"));
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        assert_eq!(root.path, dirs::home_dir().unwrap().join(".minecraft"));
     }
 
     #[test]
@@ -883,9 +1030,7 @@ mod tests {
         let path = dir.join("dmcl.json");
 
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), PathBuf::from("mc-root"));
+        config.minecraft_roots.push(test_root("test", "mc-root"));
         config.minecraft_root = "test".to_string();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
@@ -893,14 +1038,17 @@ mod tests {
         let loaded = Config::load_sync(Some(&path));
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
         assert_eq!(
-            loaded.config.minecraft_roots.get("test"),
-            Some(&absolute("mc-root"))
+            loaded.config.root("test").unwrap().path,
+            absolute("mc-root")
         );
 
         let missing = Config::load_sync(Some(&dir.join("missing.json")));
         assert!(missing.error.is_none());
         assert_eq!(missing.config.launch.account.as_deref(), Some("player"));
-        assert!(missing.config.minecraft_roots["default"].is_absolute());
+        assert_eq!(
+            missing.config.default_root().unwrap().path,
+            absolute(".minecraft")
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -931,7 +1079,7 @@ mod tests {
         let mut config = Config::default();
         config
             .minecraft_roots
-            .insert("test".to_string(), dir.join("mc"));
+            .push(test_root("test", dir.join("mc")));
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
 
@@ -948,9 +1096,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), root.clone());
+        config.minecraft_roots.push(test_root("test", root.clone()));
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
 
@@ -980,9 +1126,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), root.clone());
+        config.minecraft_roots.push(test_root("test", root.clone()));
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
         config.launch.window_width = 1000;
@@ -1028,9 +1172,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .insert("test".to_string(), root.clone());
+        config.minecraft_roots.push(test_root("test", root.clone()));
         config.minecraft_root = "test".to_string();
 
         let path = instance_config_path(&root, "1.20.1");
@@ -1081,7 +1223,7 @@ mod tests {
         let mut config = Config::default();
         config
             .minecraft_roots
-            .insert("test".to_string(), dir.join("mc"));
+            .push(test_root("test", dir.join("mc")));
         config.minecraft_root = "test".to_string();
         config.download.max_tasks = 8;
         config.download.chunk_threshold_mib = 2;

@@ -38,8 +38,6 @@ pub(crate) enum HeaderOut {
     OpenTasks,
     /// 打开或聚焦某个 root 的主页。
     OpenHome(String),
-    /// 把某个 root 设为默认主页。
-    SetDefaultRoot(String),
 }
 
 /// 标题栏自己的消息。
@@ -49,8 +47,6 @@ pub(crate) enum HeaderMsg {
     SetRunningCount(usize),
     /// 更新已打开的主页集合。
     SetOpenHomes(Vec<String>),
-    /// 更新默认主页标记。
-    SetDefaultRoot(String),
     /// 根目录行发出的动作。
     RootAction(RootRowOut),
     /// 打开「关于」。
@@ -68,8 +64,6 @@ pub(crate) struct Header {
     roots: FactoryVecDeque<RootRow>,
     /// 根目录菜单按钮；选中某一行后主动收起。
     root_menu_button: Option<gtk::MenuButton>,
-    /// 当前默认主页的名字。
-    default_root: String,
     /// 当前已经打开的主页名字。
     open_roots: BTreeSet<String>,
 }
@@ -84,12 +78,7 @@ pub(crate) struct Header {
 /// 目录按钮并占满中间宽度，右侧留一小段固定的 `GtkWindowHandle` 当窗口拖拽区。
 #[relm4::component(pub(crate))]
 impl SimpleComponent for Header {
-    type Init = (
-        adw::TabView,
-        adw::ApplicationWindow,
-        Vec<MinecraftRoot>,
-        String,
-    );
+    type Init = (adw::TabView, adw::ApplicationWindow, Vec<MinecraftRoot>);
     type Input = HeaderMsg;
     type Output = HeaderOut;
 
@@ -111,7 +100,7 @@ impl SimpleComponent for Header {
                     set_spacing: 0,
                     set_hexpand: true,
 
-                    // Minecraft 根目录：打开其它 root 的主页 / 设置默认主页。
+                    // Minecraft 根目录：打开其它 root 的主页。
                     #[name(root_menu_button)]
                     gtk::MenuButton {
                         set_icon_name: "folder-symbolic",
@@ -248,7 +237,7 @@ impl SimpleComponent for Header {
     }
 
     fn init(
-        (tab_view, window, roots, default_root): Self::Init,
+        (tab_view, window, roots): Self::Init,
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -262,13 +251,11 @@ impl SimpleComponent for Header {
 
         let theme = ThemeSwitcher::builder().launch(()).detach();
         let theme_widget = theme.widget().clone();
-        let default_name = default_root.clone();
         let mut root_rows: FactoryVecDeque<RootRow> = FactoryVecDeque::builder()
             .launch(gtk::Box::new(gtk::Orientation::Vertical, 4))
             .forward(sender.input_sender(), HeaderMsg::RootAction);
         for root in roots {
-            let is_default = root.name == default_name;
-            root_rows.guard().push_back((root, is_default));
+            root_rows.guard().push_back(root);
         }
         let roots_widget = root_rows.widget().clone();
         let mut model = Header {
@@ -277,7 +264,6 @@ impl SimpleComponent for Header {
             _theme: theme,
             roots: root_rows,
             root_menu_button: None,
-            default_root,
             open_roots: BTreeSet::new(),
         };
 
@@ -297,29 +283,16 @@ impl SimpleComponent for Header {
                 self.open_roots = open.into_iter().collect();
                 self.sync_root_rows();
             }
-            HeaderMsg::SetDefaultRoot(default) => {
-                self.default_root = default;
-                self.sync_root_rows();
-            }
-            HeaderMsg::RootAction(out) => {
-                let (index, open) = match out {
-                    RootRowOut::Open(index) => (index, true),
-                    RootRowOut::SetDefault(index) => (index, false),
-                };
+            HeaderMsg::RootAction(RootRowOut::Open(index)) => {
                 let Some(row) = self.roots.get(index.current_index()) else {
                     return;
                 };
                 let name = row.root.name.clone();
-                let out = if open {
-                    HeaderOut::OpenHome(name)
-                } else {
-                    HeaderOut::SetDefaultRoot(name)
-                };
                 if let Some(button) = self.root_menu_button.clone() {
                     // 等这次点击完全结束再收菜单，避免 popover 消失后同一次点击漏到页面上。
                     gtk::glib::idle_add_local_once(move || button.set_active(false));
                 }
-                let _ = sender.output(out);
+                let _ = sender.output(HeaderOut::OpenHome(name));
             }
             HeaderMsg::About => about::show(&self.window),
         }
@@ -331,7 +304,6 @@ impl Header {
         let mut guard = self.roots.guard();
         for row in guard.iter_mut() {
             row.open = self.open_roots.contains(&row.root.name);
-            row.default = row.root.name == self.default_root;
         }
     }
 }
