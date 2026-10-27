@@ -149,9 +149,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 （`bin/dmcl`），方便将来复用到 GUI / 守护进程。
 
 全局配置包含 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
-`download`。`minecraft_roots` 是「名字 → 路径」映射，默认「当前目录」（`${CWD}/.minecraft`）
-与「官方启动器」（平台标准目录），`minecraft_root` 默认指向「当前目录」。动态表
-（`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序。配置加载按项
+`download`。`minecraft_roots` 是「名字 → 路径」映射，默认「当前目录」（`.minecraft`，
+相对当前工作目录）与「官方启动器」（平台标准目录），`minecraft_root` 默认指向「当前目录」。
+动态表（`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序。配置加载按项
 容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它当错误、逐条
 打印后退出，GUI 在启动后弹窗提示（确认写回修复后的全局配置，忽略则不写）并继续使用修复
 后的配置。各配置段的默认值、解析与校验按段放在 `crates/dmcl/src/config/` 下的
@@ -164,9 +164,10 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 `launch.account` 失效时回退为 `null`，启动时报错。GUI 在启动实例前若读到实例配置
 警告，会先弹确认框；确认后使用内存里修复过的配置继续，取消则不启动。
 
-应用层在取用根目录时把配置里的「名字 → 路径」映射解析成已展开的 `PathBuf`，再传给
-`load_instance` / `install_options` / `launch_option`。配置里的 `${CWD}` 占位符与相对
-路径在取用根目录时展开、绝对化，配置文档里保留原文，因此保存配置不会把当前工作目录写死。
+应用层在取用根目录时把配置里的「名字 → 路径」映射绝对化，再传给
+`load_instance` / `install_options` / `launch_option`。相对路径按启动时的工作目录解析，
+绝对化只发生在取用根目录时；读取配置和整体保存不会改写路径写法，图形界面保存目录时则写入
+规范化后的路径。
 `minecraft_root` 只决定启动时默认打开哪个根目录的主页；CLI 的全局选项
 `--minecraft-root=<name>` 只影响本次运行，两者都不会把「当前页面」和业务接口继续绑在一起。
 

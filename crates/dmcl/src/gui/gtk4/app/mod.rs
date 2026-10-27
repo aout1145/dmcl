@@ -34,7 +34,7 @@ use crate::config::{ConfigError, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
-use crate::gui::gtk4::pages::settings::PreferencesPage;
+use crate::gui::gtk4::pages::settings::{PreferencesMsg, PreferencesPage};
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::{PageHost, PageSlot};
 use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
@@ -211,7 +211,7 @@ impl SimpleComponent for AppModel {
 
         // 设置页同样是常驻页面；启动时创建，之后重复触发只聚焦已有标签。
         let preferences = PageSlot {
-            controller: PreferencesPage::builder().launch(()).detach(),
+            controller: PreferencesPage::builder().launch(shell.clone()).detach(),
             tab: None,
         };
 
@@ -254,6 +254,11 @@ impl SimpleComponent for AppModel {
                 for home in &self.homes {
                     let _ = home.page.controller.sender().send(HomeMsg::ConfigChanged);
                 }
+                let _ = self
+                    .preferences
+                    .controller
+                    .sender()
+                    .send(PreferencesMsg::ConfigChanged);
             }
             AppMsg::OpenPreferences => self.open_preferences(),
             AppMsg::About => {
@@ -399,6 +404,7 @@ pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<
         header::CSS,
         header::THEME_CSS,
         crate::gui::gtk4::pages::home::CSS,
+        crate::gui::gtk4::pages::settings::CSS,
         common::CSS,
         tasks::CSS,
         toast::CSS,

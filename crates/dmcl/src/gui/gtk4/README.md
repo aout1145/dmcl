@@ -131,7 +131,13 @@ gtk4/
     │   └── instance_card.rs
     ├── settings/
     │   ├── README.md            # 首选项
-    │   └── mod.rs
+    │   ├── mod.rs
+    │   ├── common/
+    │   │   ├── mod.rs
+    │   │   └── drag_list.rs     # 可拖动排序的列表
+    │   └── launcher/            # 首选项的分类
+    │       ├── mod.rs           # 左右分栏与分类列表
+    │       └── directory.rs     # Minecraft 目录管理、对话框与校验
     └── download/
         ├── README.md            # 下载域 / 公共组件 / 数据流
         ├── common/              # download 域公共组件（不是全 app 通用小部件）
@@ -153,7 +159,7 @@ gtk4/
 | app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
 | 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
-| 设置页 | `PreferencesPage` | [pages/settings/README.md](pages/settings/README.md) |
+| 设置页 | `PreferencesPage`、`DirectoryPage`、`RootRow`、`drag_list` | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 
@@ -263,7 +269,7 @@ Debian / Ubuntu 的 `gtk4-broadwayd` 在 `libgtk-4-bin` 包里。等应用窗口
 - Forge 版本下拉的类别 chips（稳定 / 推荐）。
 - 实例分类下拉的启用与持久化。
 - 任务按钮的「运行中数量」角标。
-- 账号功能；首选项的正式设置内容。
+- 账号功能；首选项里的账号、Java 管理和全局游戏选项分类。
 - 游戏异常退出的错误报告窗口（远期）。
 - 删除实例等破坏性操作。
 

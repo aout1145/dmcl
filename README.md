@@ -100,15 +100,17 @@ dmcl list-mc --type=release,snapshot
 （Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
 与 Homebrew）以及 `JAVA_HOME` 并写入全局配置。账户、根目录和 Java 表也可以通过直接编辑
 全局 `dmcl.json` 维护。账号目前只有离线模式，联机登录还没实现。图形界面的账号、实例管理
-页面仍在开发中；主菜单的「首选项」目前是空白设置页。
+页面仍在开发中；主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、
+设默认、拖动排序），账号、Java 管理和全局游戏选项还是置灰的占位项。目录的名称和路径修改在
+重启 DMCL 后生效。
 
 图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
 所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
 页面；重新打开后选中项、运行状态和正在监视的游戏都还在。新建实例使用主页右下角的悬浮
 `+` 按钮；创建目标始终是该主页绑定的 root。
 
-最右侧主菜单里的「首选项」也可以用 `Ctrl+,` 打开；首选项最多只有一个标签。菜单打开时，
-`Alt+P` / `Alt+A` 分别触发首选项和关于。
+最右侧主菜单里的「首选项」也可以用 `Ctrl+,` 打开；首选项最多只有一个标签，页面是左侧分类、
+右侧内容的双栏布局。菜单打开时，`Alt+P` / `Alt+A` 分别触发首选项和关于。
 
 ## 命令
 
@@ -165,7 +167,7 @@ macOS `~/Library/Application Support`）。
     "jdk-17": "/usr/lib/jvm/java-17/bin/java"
   },
   "minecraft_roots": {
-    "当前目录": "${CWD}/.minecraft",
+    "当前目录": ".minecraft",
     "官方启动器": "/home/me/.minecraft"
   },
   "minecraft_root": "当前目录",
@@ -186,11 +188,12 @@ macOS `~/Library/Application Support`）。
   `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
 - `minecraft_roots` 是「名字 → 路径」的映射，键直接作为界面上的显示名；默认有两个：
-  「当前目录」（`${CWD}/.minecraft`）和「官方启动器」（Windows 为
+  「当前目录」（`.minecraft`，相对当前工作目录）和「官方启动器」（Windows 为
   `%APPDATA%\.minecraft`、macOS 为 `~/Library/Application Support/minecraft`、
   其它平台为 `~/.minecraft`）。
-- 映射值里的 `${CWD}` 表示当前工作目录，相对路径也按当前工作目录解析；两者都在使用根
-  目录时展开，配置里保留原文，保存配置不会把它们写死。
+- 映射值可以写相对路径，按当前工作目录解析；取用根目录时才绝对化，读取配置不会改写它。
+- 图形界面添加 / 编辑目录时可以选「绝对路径」或「相对路径」；选相对时，工作目录下的路径
+  写成相对形式，其余会提示并自动改回绝对路径。输入的路径必须是已存在的目录。
 - `minecraft_root` 指向 `minecraft_roots` 里的某个名字，默认「当前目录」。
 - `accounts` / `javas` / `minecraft_roots` 都保持配置文件里的书写顺序。
 - `download.skip_music` 为 `true` 时跳过 `*.ogg` 资源（音乐与音效）。

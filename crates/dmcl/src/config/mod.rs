@@ -18,7 +18,7 @@
 //!   "accounts": { "player": { "type": "offline", "username": "player" } },
 //!   "javas": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
 //!   "minecraft_roots": {
-//!     "当前目录": "${CWD}/.minecraft",
+//!     "当前目录": ".minecraft",
 //!     "官方启动器": "…"
 //!   },
 //!   "minecraft_root": "当前目录",
@@ -40,7 +40,6 @@ mod root;
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
-pub use root::CWD_PLACEHOLDER;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
