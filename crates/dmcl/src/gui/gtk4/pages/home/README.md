@@ -5,7 +5,7 @@
 
 ## 一个主页 = 一个 root
 
-`HomePage` 的初始化参数里带 `MinecraftRoot { name, path }`。版本目录监听、实例配置读取、
+`HomePage` 的初始化参数里带该 root 已展开的 `PathBuf`。版本目录监听、实例配置读取、
 安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。
 
 主页标签可以随时关闭，但关闭只影响显示：`HomePage` 从程序启动起就常驻，标签只是它的

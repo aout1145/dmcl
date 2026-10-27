@@ -165,16 +165,10 @@ macOS `~/Library/Application Support`）。
   "javas": {
     "jdk-17": "/usr/lib/jvm/java-17/bin/java"
   },
-  "minecraft_roots": [
-    {
-      "name": "当前目录",
-      "path": "${CWD}/.minecraft"
-    },
-    {
-      "name": "官方启动器",
-      "path": "/home/me/.minecraft"
-    }
-  ],
+  "minecraft_roots": {
+    "当前目录": "${CWD}/.minecraft",
+    "官方启动器": "/home/me/.minecraft"
+  },
   "minecraft_root": "当前目录",
   "download": {
     "max_tasks": 64,
@@ -192,13 +186,14 @@ macOS `~/Library/Application Support`）。
 - `search-java` 自动生成的 `javas` 名字形如
   `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
-- `minecraft_roots` 是具名根目录的数组，条目为 `{ "name": "...", "path": "..." }`；
-  `name` 直接作为界面上的显示名，必须唯一。默认有两个：「当前目录」
-  （`${CWD}/.minecraft`）和「官方启动器」（Windows 为 `%APPDATA%\.minecraft`、
-  macOS 为 `~/Library/Application Support/minecraft`、其它平台为 `~/.minecraft`）。
-- `path` 里的 `${CWD}` 表示当前工作目录，相对路径也按当前工作目录解析；两者都在使用根
+- `minecraft_roots` 是「名字 → 路径」的映射，键直接作为界面上的显示名；默认有两个：
+  「当前目录」（`${CWD}/.minecraft`）和「官方启动器」（Windows 为
+  `%APPDATA%\.minecraft`、macOS 为 `~/Library/Application Support/minecraft`、
+  其它平台为 `~/.minecraft`）。
+- 映射值里的 `${CWD}` 表示当前工作目录，相对路径也按当前工作目录解析；两者都在使用根
   目录时展开，配置里保留原文，保存配置不会把它们写死。
 - `minecraft_root` 指向 `minecraft_roots` 里的某个名字，默认「当前目录」。
+- `accounts` / `javas` / `minecraft_roots` 都保持配置文件里的书写顺序。
 - `download.skip_music` 为 `true` 时跳过 `*.ogg` 资源（音乐与音效）。
 - `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，

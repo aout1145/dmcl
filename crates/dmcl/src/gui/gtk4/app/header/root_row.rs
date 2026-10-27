@@ -1,13 +1,14 @@
 //! 根目录菜单里的一行。
 
+use std::path::PathBuf;
+
 use relm4::gtk;
 use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
-use crate::config::MinecraftRoot;
-
 pub(super) struct RootRow {
-    pub(super) root: MinecraftRoot,
+    pub(super) name: String,
+    pub(super) path: PathBuf,
     pub(super) open: bool,
 }
 
@@ -19,7 +20,7 @@ pub(crate) enum RootRowOut {
 
 #[relm4::factory(pub(super))]
 impl FactoryComponent for RootRow {
-    type Init = MinecraftRoot;
+    type Init = (String, PathBuf);
     type Input = ();
     type Output = RootRowOut;
     type CommandOutput = ();
@@ -64,12 +65,12 @@ impl FactoryComponent for RootRow {
                         set_spacing: 1,
 
                         gtk::Label {
-                            set_label: &self.root.name,
+                            set_label: &self.name,
                             set_xalign: 0.0,
                         },
 
                         gtk::Label {
-                            set_label: &self.root.path.display().to_string(),
+                            set_label: &self.path.display().to_string(),
                             set_xalign: 0.0,
                             add_css_class: "caption",
                             add_css_class: "dim-label",
@@ -80,7 +81,15 @@ impl FactoryComponent for RootRow {
         }
     }
 
-    fn init_model(root: Self::Init, _index: &DynamicIndex, _sender: FactorySender<Self>) -> Self {
-        Self { root, open: false }
+    fn init_model(
+        (name, path): Self::Init,
+        _index: &DynamicIndex,
+        _sender: FactorySender<Self>,
+    ) -> Self {
+        Self {
+            name,
+            path,
+            open: false,
+        }
     }
 }

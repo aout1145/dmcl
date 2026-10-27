@@ -33,6 +33,7 @@ dmcl-launch.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+indexmap.workspace = true
 dirs.workspace = true
 anyhow.workspace = true
 clap.workspace = true

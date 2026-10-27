@@ -1,5 +1,6 @@
 //! `install` —— 安装原版，可顺带装模组加载器。
 
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -7,7 +8,7 @@ use anyhow::Result;
 use dmcl_install::{default_version_name, install_task, InstallSpec, LoaderKind};
 use dmcl_mcmeta::source::DownloadSource;
 
-use crate::config::{Config, MinecraftRoot};
+use crate::config::Config;
 
 use super::handle_event;
 use crate::cli::progress::ProgressPrinter;
@@ -44,7 +45,7 @@ impl InstallArgs {
 }
 
 /// `dmcl install <mc-version-id> [version-name] [--forge …]`。
-pub(crate) async fn run(args: InstallArgs, config: &Config, root: &MinecraftRoot) -> Result<()> {
+pub(crate) async fn run(args: InstallArgs, config: &Config, root_path: &Path) -> Result<()> {
     let source = config.download_source();
 
     // `dmcl-install` 现在强制要求具体版本：没给就现场查最新。
@@ -79,7 +80,7 @@ pub(crate) async fn run(args: InstallArgs, config: &Config, root: &MinecraftRoot
     }
 
     let launch = config.launch.clone();
-    let options = Arc::new(config.install_options(source, &launch, &root.path)?);
+    let options = Arc::new(config.install_options(source, &launch, root_path)?);
     let mut printer = ProgressPrinter::new();
     let result = install_task(options, spec)
         .run_with((), |event| handle_event(&mut printer, event))

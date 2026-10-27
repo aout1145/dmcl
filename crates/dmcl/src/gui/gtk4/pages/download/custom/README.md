@@ -13,14 +13,14 @@
 
 ## 装配
 
-`CustomPage` 的 `Init = PageInit<(Rc<Shell>, Config, MinecraftRoot)>`。页面由
+`CustomPage` 的 `Init = PageInit<(Rc<Shell>, Config, PathBuf)>`。页面由
 `InstanceSummary` 与四个 `VersionSelect` 组成：
 
 - `InstanceSummary` 推名称 / 图标 / 安装按钮状态；
 - MC 一行 + Forge / Fabric / NeoForge 三个加载器行；
 - 打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单取数跑起来（MC 取数器忽略上下文）；
 - 主页右下角「新建实例」→「自定义」把 `Rc<Shell>`、`Config` 的克隆和该主页的
-  `MinecraftRoot` 传进来；安装目标、实例是否已存在都只用这个 root；`download::common::CSS`
+  根目录路径传进来；安装目标、实例是否已存在都只用这个 root；`download::common::CSS`
   注册到全局样式。
 
 整页包在 `GtkScrolledWindow` 里；展开多个版本列表时页面可以滚。

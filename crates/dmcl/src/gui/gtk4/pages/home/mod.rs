@@ -1,6 +1,6 @@
 //! 主页：一个 Minecraft 根目录下的已安装实例。
 //!
-//! 每个主页固定绑定一个 [`MinecraftRoot`]，并从程序启动起常驻。关闭标签只影响显示，
+//! 每个主页固定绑定一个根目录，并从程序启动起常驻。关闭标签只影响显示，
 //! 不会结束游戏进程，也不会丢失运行状态；运行状态由本页持有的 [`GameMonitor`] 监视。
 //!
 //! 版本目录用 `notify` watch，出现变更事件后再重新读取列表，不做固定轮询。
@@ -26,7 +26,7 @@ use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::installed_versions;
 use dmcl_task::CancelHandle;
 
-use crate::config::{Config, LaunchConfig, MinecraftRoot};
+use crate::config::{Config, LaunchConfig};
 use crate::gui::gtk4::app::{PageToast, Shell};
 
 use instance_card::{CardOut, InstanceCard};
@@ -88,7 +88,7 @@ impl Drop for TaskGuard {
 pub(crate) struct HomePage {
     shell: Rc<Shell>,
     config: Config,
-    root: MinecraftRoot,
+    root_path: PathBuf,
     /// 主窗口：实例配置警告框以它为父窗口。
     window: adw::ApplicationWindow,
     /// 页面级提示：只有主页可见时才显示。
@@ -105,7 +105,7 @@ pub(crate) struct HomePage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for HomePage {
-    type Init = (Rc<Shell>, Config, MinecraftRoot, adw::ApplicationWindow);
+    type Init = (Rc<Shell>, Config, PathBuf, adw::ApplicationWindow);
     type Input = HomeMsg;
     type Output = HomeOut;
 
@@ -211,7 +211,7 @@ impl SimpleComponent for HomePage {
     }
 
     fn init(
-        (shell, config, root, window): Self::Init,
+        (shell, config, root_path, window): Self::Init,
         root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -224,7 +224,7 @@ impl SimpleComponent for HomePage {
         let mut model = HomePage {
             shell,
             config,
-            root,
+            root_path,
             window,
             page_toast: PageToast::new(&root_widget),
             instances,
@@ -239,7 +239,7 @@ impl SimpleComponent for HomePage {
 
         // 安装 / 删除版本后自动刷新：watch 版本目录，变化后再重新扫描。
         model.watch_task = Some(TaskGuard(relm4::spawn(watch_versions(
-            model.root.path.clone(),
+            model.root_path.clone(),
             sender.clone(),
         ))));
         sender.input(HomeMsg::Reload);
@@ -249,7 +249,7 @@ impl SimpleComponent for HomePage {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             HomeMsg::Reload => {
-                let root = self.root.path.clone();
+                let root = self.root_path.clone();
                 let sender = sender.clone();
                 relm4::spawn(async move {
                     let result = installed_versions(&root)
@@ -364,18 +364,18 @@ impl HomePage {
         name: &str,
         launch: &LaunchConfig,
     ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
-        let option = self.config.launch_option(launch, name, &self.root.path)?;
+        let option = self.config.launch_option(launch, name, &self.root_path)?;
         let install = std::sync::Arc::new(self.config.install_options(
             self.config.download_source(),
             launch,
-            &self.root.path,
+            &self.root_path,
         )?);
         Ok(dmcl_launch::launch_chain(option, install))
     }
 
     /// 读取实例配置；有警告先弹确认框，否则直接开始。
     fn request_start(&mut self, name: String, sender: &ComponentSender<Self>) {
-        let loaded = self.config.load_instance_sync(&self.root.path, &name);
+        let loaded = self.config.load_instance_sync(&self.root_path, &name);
         if let Some(error) = loaded.error {
             let launch = loaded.launch;
             let sender = sender.clone();

@@ -149,8 +149,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 （`bin/dmcl`），方便将来复用到 GUI / 守护进程。
 
 全局配置包含 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
-`download`。`minecraft_roots` 是具名根目录数组，默认「当前目录」（`${CWD}/.minecraft`）
-与「官方启动器」（平台标准目录），`minecraft_root` 默认指向「当前目录」。配置加载按项
+`download`。`minecraft_roots` 是「名字 → 路径」映射，默认「当前目录」（`${CWD}/.minecraft`）
+与「官方启动器」（平台标准目录），`minecraft_root` 默认指向「当前目录」。动态表
+（`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序。配置加载按项
 容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它当错误、逐条
 打印后退出，GUI 在启动后弹窗提示（确认写回修复后的全局配置，忽略则不写）并继续使用修复
 后的配置。
@@ -161,7 +162,7 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 `launch.account` 失效时回退为 `null`，启动时报错。GUI 在启动实例前若读到实例配置
 警告，会先弹确认框；确认后使用内存里修复过的配置继续，取消则不启动。
 
-应用层把根目录解析成显式的 `MinecraftRoot { name, path }`，再传给
+应用层在取用根目录时把配置里的「名字 → 路径」映射解析成已展开的 `PathBuf`，再传给
 `load_instance` / `install_options` / `launch_option`。配置里的 `${CWD}` 占位符与相对
 路径在取用根目录时展开、绝对化，配置文档里保留原文，因此保存配置不会把当前工作目录写死。
 `minecraft_root` 只决定启动时默认打开哪个根目录的主页；CLI 的全局选项
@@ -319,7 +320,7 @@ CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/m
 `dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、按路径去重后合并进
 全局 `javas` 并保存。
 
-GUI 的主页按 `MinecraftRoot` 分标签：标题栏最左侧的根目录菜单负责打开 / 聚焦主页；每个
+GUI 的主页按根目录分标签：标题栏最左侧的根目录菜单负责打开 / 聚焦主页；每个
 主页右下角的悬浮 `+` 打开「创建实例」对话框，`CustomPage` 使用该主页捕获的
 root，App 不需要跟踪当前选中的主页。所有 root 的 `HomePage` 从启动起常驻，关闭标签只移除
 `AdwTabPage`，重新打开时把同一个根 widget 挂回标签；`GameMonitor` 监视任务和版本目录

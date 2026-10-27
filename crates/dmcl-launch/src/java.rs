@@ -10,12 +10,13 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use dmcl_mcmeta::os::{Arch, Os};
+use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::{Digest, Sha1};
 use walkdir::WalkDir;
 
-/// java 配置表：名字 → 可执行文件。
-pub type JavaConfigs = BTreeMap<String, PathBuf>;
+/// java 配置表：名字 → 可执行文件，保持顺序。
+pub type JavaConfigs = IndexMap<String, PathBuf>;
 
 /// 表示「自动选择」的哨兵字符串。
 pub const JAVA_AUTOSELECT: &str = "autoselect";

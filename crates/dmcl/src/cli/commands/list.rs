@@ -1,12 +1,14 @@
 //! `list` / `list-*` —— 列出已安装的版本，或可安装的版本。
 
+use std::path::Path;
+
 use anyhow::Result;
 
-use crate::config::{Config, MinecraftRoot};
+use crate::config::Config;
 
 /// `list` —— 列出**已安装**的版本。
-pub(crate) async fn installed(root: &MinecraftRoot) -> Result<()> {
-    let versions = dmcl_mcmeta::layout::installed_versions(&root.path).await?;
+pub(crate) async fn installed(root_path: &Path) -> Result<()> {
+    let versions = dmcl_mcmeta::layout::installed_versions(root_path).await?;
     if versions.is_empty() {
         println!("还没有安装任何版本。");
         return Ok(());

@@ -5,14 +5,13 @@
 //! 由根组件注册。
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
 use relm4::gtk::glib::variant::ToVariant;
 use relm4::prelude::*;
-
-use crate::config::MinecraftRoot;
 
 mod about;
 mod root_row;
@@ -79,7 +78,7 @@ pub(crate) struct Header {
 /// 目录按钮并占满中间宽度，右侧留一小段固定的 `GtkWindowHandle` 当窗口拖拽区。
 #[relm4::component(pub(crate))]
 impl SimpleComponent for Header {
-    type Init = (adw::TabView, adw::ApplicationWindow, Vec<MinecraftRoot>);
+    type Init = (adw::TabView, adw::ApplicationWindow, Vec<(String, PathBuf)>);
     type Input = HeaderMsg;
     type Output = HeaderOut;
 
@@ -236,7 +235,7 @@ impl SimpleComponent for Header {
                 let Some(row) = self.roots.get(index.current_index()) else {
                     return;
                 };
-                let name = row.root.name.clone();
+                let name = row.name.clone();
                 if let Some(button) = self.root_menu_button.clone() {
                     // 等这次点击完全结束再收菜单，避免 popover 消失后同一次点击漏到页面上。
                     gtk::glib::idle_add_local_once(move || button.set_active(false));
@@ -252,7 +251,7 @@ impl Header {
     fn sync_root_rows(&mut self) {
         let mut guard = self.roots.guard();
         for row in guard.iter_mut() {
-            row.open = self.open_roots.contains(&row.root.name);
+            row.open = self.open_roots.contains(&row.name);
         }
     }
 }

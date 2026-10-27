@@ -26,7 +26,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 use relm4::Sender;
 
-use crate::config::{Config, LoadedConfig, MinecraftRoot};
+use crate::config::{Config, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
@@ -81,7 +81,7 @@ struct AppModel {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for AppModel {
-    type Init = (LoadedConfig, MinecraftRoot);
+    type Init = (LoadedConfig, String);
     type Input = AppMsg;
     type Output = ();
 
@@ -125,7 +125,7 @@ impl SimpleComponent for AppModel {
     }
 
     fn init(
-        (loaded, startup_root): Self::Init,
+        (loaded, startup_root_name): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -167,10 +167,9 @@ impl SimpleComponent for AppModel {
 
         // 所有 root 的主页从启动起就常驻；启动时只给默认 root 建标签页。
         let mut homes = Vec::new();
-        for home_root in config.roots() {
-            let name = home_root.name.clone();
+        for (name, path) in config.roots() {
             let controller = HomePage::builder()
-                .launch((shell.clone(), config.clone(), home_root, root.clone()))
+                .launch((shell.clone(), config.clone(), path, root.clone()))
                 .forward(sender.input_sender(), {
                     let name = name.clone();
                     move |out| AppMsg::Home {
@@ -220,7 +219,7 @@ impl SimpleComponent for AppModel {
             tab_view,
             window: root.clone(),
         };
-        model.open_home(&startup_root.name);
+        model.open_home(&startup_root_name);
         ComponentParts { model, widgets }
     }
 
@@ -295,16 +294,19 @@ impl AppModel {
 
     /// 新建实例页绑定到发出请求的主页 root。
     fn open_custom(&mut self, root_name: &str) {
-        let root = match self.config.root(root_name) {
-            Ok(root) => root,
+        let root_path = match self.config.root_path(root_name) {
+            Ok(path) => path,
             Err(err) => {
                 self.shell
                     .global_toast(&format!("无法确定安装目录：{err:#}"));
                 return;
             }
         };
-        self.page_host
-            .open_page::<CustomPage>((self.shell.clone(), self.config.clone(), root));
+        self.page_host.open_page::<CustomPage>((
+            self.shell.clone(),
+            self.config.clone(),
+            root_path,
+        ));
     }
 
     fn sync_header_homes(&self) {
@@ -352,7 +354,7 @@ fn home_tab_title(root_name: &str) -> String {
 }
 
 /// 启动 GTK4 界面；窗口关闭前一直阻塞在主线程。
-pub(crate) fn run(loaded: LoadedConfig, startup_root: MinecraftRoot) -> anyhow::Result<()> {
+pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<()> {
     // 只把程序名传给 GApplication：`dmcl gui` 里的 `gui` 是给我们自己解析的，
     // 别让它被当成要打开的文件（否则 GLib 会警告 "can not open files"）。
     let mut args: Vec<String> = std::env::args().take(1).collect();

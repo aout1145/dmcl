@@ -16,14 +16,16 @@
 //!   "launch": { "java": "autoselect", "account": "player", … },
 //!   "accounts": { "player": { "type": "offline", "username": "player" } },
 //!   "javas": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
-//!   "minecraft_roots": [
-//!     { "name": "当前目录", "path": "${CWD}/.minecraft" },
-//!     { "name": "官方启动器", "path": "…" }
-//!   ],
+//!   "minecraft_roots": {
+//!     "当前目录": "${CWD}/.minecraft",
+//!     "官方启动器": "…"
+//!   },
 //!   "minecraft_root": "当前目录",
 //!   "download": { "max_tasks": 64, "skip_music": false, … }
 //! }
 //! ```
+//!
+//! 动态表（`accounts` / `javas` / `minecraft_roots`）用 [`IndexMap`] 保存，顺序与配置文件一致。
 
 mod account;
 mod download;
@@ -33,9 +35,7 @@ mod root;
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
-pub use root::MinecraftRoot;
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -47,6 +47,7 @@ use dmcl_launch::{
 };
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::source::DownloadSource;
+use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -69,10 +70,10 @@ const OFFICIAL_ROOT_NAME: &str = "官方启动器";
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub launch: LaunchConfig,
-    pub accounts: BTreeMap<String, AccountConfig>,
+    pub accounts: IndexMap<String, AccountConfig>,
     pub javas: JavaConfigs,
-    /// 具名根目录。这里保存配置原文，`${CWD}` 与相对路径在取用根目录时解析。
-    pub minecraft_roots: Vec<MinecraftRoot>,
+    /// 具名根目录：名字 → 原始路径。顺序与配置文件一致。
+    pub minecraft_roots: IndexMap<String, PathBuf>,
     pub minecraft_root: String,
     pub download: DownloadConfig,
 }
@@ -90,21 +91,18 @@ impl Default for Config {
     }
 }
 
-fn default_accounts() -> BTreeMap<String, AccountConfig> {
-    BTreeMap::from([("player".to_string(), AccountConfig::default())])
+fn default_accounts() -> IndexMap<String, AccountConfig> {
+    IndexMap::from([("player".to_string(), AccountConfig::default())])
 }
 
-fn default_roots() -> Vec<MinecraftRoot> {
-    vec![
-        MinecraftRoot {
-            name: CURRENT_ROOT_NAME.to_string(),
-            path: PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft")),
-        },
-        MinecraftRoot {
-            name: OFFICIAL_ROOT_NAME.to_string(),
-            path: official_launcher_root(),
-        },
-    ]
+fn default_roots() -> IndexMap<String, PathBuf> {
+    IndexMap::from([
+        (
+            CURRENT_ROOT_NAME.to_string(),
+            PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft")),
+        ),
+        (OFFICIAL_ROOT_NAME.to_string(), official_launcher_root()),
+    ])
 }
 
 /// 官方启动器存放 Minecraft 的目录。
@@ -344,37 +342,16 @@ impl Config {
             });
         }
 
-        let mut names = BTreeSet::new();
-        let mut duplicates = Vec::new();
-        self.minecraft_roots.retain(|root| {
-            if names.insert(root.name.clone()) {
-                true
+        if !self.minecraft_roots.contains_key(&self.minecraft_root) {
+            let fallback = if self.minecraft_roots.contains_key(CURRENT_ROOT_NAME) {
+                CURRENT_ROOT_NAME.to_string()
             } else {
-                if !duplicates.contains(&root.name) {
-                    duplicates.push(root.name.clone());
-                }
-                false
-            }
-        });
-        for name in duplicates {
-            warnings.push(ConfigWarning {
-                message: format!("配置项「minecraft_roots」里有重复的根目录：{name}，已保留第一个"),
-                detail: "根目录名字必须唯一".to_string(),
-            });
-        }
-
-        if !self
-            .minecraft_roots
-            .iter()
-            .any(|root| root.name == self.minecraft_root)
-        {
-            let fallback = self
-                .minecraft_roots
-                .iter()
-                .find(|root| root.name == CURRENT_ROOT_NAME)
-                .or_else(|| self.minecraft_roots.first())
-                .map(|root| root.name.clone())
-                .unwrap_or_default();
+                self.minecraft_roots
+                    .keys()
+                    .next()
+                    .cloned()
+                    .unwrap_or_default()
+            };
             warnings.push(ConfigWarning {
                 message: format!(
                     "配置项「minecraft_root」指向的根目录不存在：{}，改用「{fallback}」",
@@ -509,7 +486,7 @@ impl Config {
 /// 账户 / Java 选择项回退；全局配置和实例配置共用。
 pub(super) fn validate_launch_choices(
     launch: &mut LaunchConfig,
-    accounts: &BTreeMap<String, AccountConfig>,
+    accounts: &IndexMap<String, AccountConfig>,
     javas: &JavaConfigs,
 ) -> Vec<ConfigWarning> {
     let mut warnings = Vec::new();
@@ -593,21 +570,26 @@ where
     serde_json::Value::Object(current)
 }
 
-/// 解析根目录数组：条目逐个校验，坏条目丢弃；整体替换默认根目录。
-fn parse_roots(body: serde_json::Value, warnings: &mut Vec<ConfigWarning>) -> Vec<MinecraftRoot> {
-    let serde_json::Value::Array(entries) = body else {
+/// 解析根目录对象：名字 → 路径，条目逐个校验，坏条目丢弃。
+fn parse_roots(
+    body: serde_json::Value,
+    warnings: &mut Vec<ConfigWarning>,
+) -> IndexMap<String, PathBuf> {
+    let serde_json::Value::Object(entries) = body else {
         warnings.push(ConfigWarning {
             message: "配置段「minecraft_roots」使用默认值".to_string(),
-            detail: "该段不是 JSON 数组".to_string(),
+            detail: "该段不是 JSON 对象".to_string(),
         });
         return default_roots();
     };
-    let mut roots = Vec::with_capacity(entries.len());
-    for (index, raw) in entries.into_iter().enumerate() {
-        match serde_json::from_value::<MinecraftRoot>(raw) {
-            Ok(root) => roots.push(root),
+    let mut roots = IndexMap::with_capacity(entries.len());
+    for (name, raw) in entries {
+        match serde_json::from_value::<PathBuf>(raw) {
+            Ok(path) => {
+                roots.insert(name, path);
+            }
             Err(err) => warnings.push(ConfigWarning {
-                message: format!("配置项「minecraft_roots[{index}]」已忽略"),
+                message: format!("配置项「minecraft_roots.{name}」已忽略"),
                 detail: format!("值不合法：{err}"),
             }),
         }
@@ -619,9 +601,9 @@ fn parse_roots(body: serde_json::Value, warnings: &mut Vec<ConfigWarning>) -> Ve
 fn parse_table<T>(
     section: &str,
     body: serde_json::Value,
-    fallback: BTreeMap<String, T>,
+    fallback: IndexMap<String, T>,
     warnings: &mut Vec<ConfigWarning>,
-) -> BTreeMap<String, T>
+) -> IndexMap<String, T>
 where
     T: DeserializeOwned,
 {
@@ -632,7 +614,7 @@ where
         });
         return fallback;
     };
-    let mut table = BTreeMap::new();
+    let mut table = IndexMap::with_capacity(entries.len());
     for (name, raw) in entries {
         match serde_json::from_value::<T>(raw) {
             Ok(value) => {
@@ -671,13 +653,6 @@ mod tests {
         std::env::temp_dir().join(format!("dmcl-config-{label}-{}", std::process::id()))
     }
 
-    fn test_root(name: &str, path: impl Into<PathBuf>) -> MinecraftRoot {
-        MinecraftRoot {
-            name: name.to_string(),
-            path: path.into(),
-        }
-    }
-
     #[test]
     fn reads_the_global_layout() {
         let text = r#"{
@@ -690,7 +665,7 @@ mod tests {
                 "steve": { "type": "offline", "username": "Steve" }
             },
             "javas": { "jdk": "/usr/lib/jvm/java-17/bin/java" },
-            "minecraft_roots": [ { "name": "test", "path": "/mc" } ],
+            "minecraft_roots": { "test": "/mc" },
             "minecraft_root": "test",
             "download": { "mirror": "mirror-first", "skip_music": true }
         }"#;
@@ -709,7 +684,7 @@ mod tests {
             config.javas.get("jdk"),
             Some(&PathBuf::from("/usr/lib/jvm/java-17/bin/java"))
         );
-        assert_eq!(config.root("test").unwrap().path, absolute("/mc"));
+        assert_eq!(config.root_path("test").unwrap(), absolute("/mc"));
         assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(config.download.skip_music);
@@ -731,16 +706,19 @@ mod tests {
         assert_eq!(
             config
                 .roots()
-                .iter()
-                .map(|root| root.name.as_str())
+                .into_iter()
+                .map(|(name, _)| name)
                 .collect::<Vec<_>>(),
-            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME]
+            vec![
+                CURRENT_ROOT_NAME.to_string(),
+                OFFICIAL_ROOT_NAME.to_string()
+            ]
         );
         assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
-        assert_eq!(config.default_root().unwrap().path, absolute(".minecraft"));
+        assert_eq!(config.default_root_path().unwrap(), absolute(".minecraft"));
         assert_eq!(
-            config.minecraft_roots[0].path,
-            PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft"))
+            config.minecraft_roots.get(CURRENT_ROOT_NAME),
+            Some(&PathBuf::from(format!("{CWD_PLACEHOLDER}/.minecraft")))
         );
         assert_eq!(config.launch.account.as_deref(), Some("player"));
         assert!(config.launch.java.is_auto());
@@ -817,10 +795,10 @@ mod tests {
                     "bad_type": { "type": "online", "username": "x" }
                 },
                 "javas": { "good": "/usr/bin/java", "bad": 1 },
-                "minecraft_roots": [
-                    { "name": "good", "path": "/mc" },
-                    { "name": "bad", "path": 1 }
-                ],
+                "minecraft_roots": {
+                    "good": "/mc",
+                    "bad": 1
+                },
                 "minecraft_root": "good"
             }"#,
         );
@@ -830,13 +808,13 @@ mod tests {
         assert!(!config.accounts.contains_key("bad_type"));
         assert!(config.javas.contains_key("good"));
         assert!(!config.javas.contains_key("bad"));
-        assert!(config.root("good").is_ok());
-        assert!(config.root("bad").is_err());
+        assert!(config.root_path("good").is_ok());
+        assert!(config.root_path("bad").is_err());
         for key in [
             "accounts.missing_name",
             "accounts.bad_type",
             "javas.bad",
-            "minecraft_roots[1]",
+            "minecraft_roots.bad",
         ] {
             assert!(
                 warnings.iter().any(|warning| warning.message.contains(key)),
@@ -849,43 +827,106 @@ mod tests {
     fn invalid_minecraft_root_falls_back_to_default_or_first_entry() {
         let (config, warnings) = Config::parse(
             r#"{
-                "minecraft_roots": [
-                    { "name": "a", "path": "/a" },
-                    { "name": "b", "path": "/b" }
-                ],
+                "minecraft_roots": { "a": "/a", "b": "/b" },
                 "minecraft_root": "nope"
             }"#,
         );
         assert_eq!(config.minecraft_root, "a");
-        assert_eq!(config.root("a").unwrap().path, absolute("/a"));
+        assert_eq!(config.root_path("a").unwrap(), absolute("/a"));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("minecraft_root"));
     }
 
     #[test]
-    fn duplicate_root_names_keep_the_first_entry() {
-        let (config, warnings) = Config::parse(
-            r#"{
-                "minecraft_roots": [
-                    { "name": "a", "path": "/first" },
-                    { "name": "a", "path": "/second" }
-                ],
-                "minecraft_root": "a"
-            }"#,
+    fn roots_keep_the_file_order() {
+        let text = r#"{
+            "minecraft_roots": { "b": "/b", "a": "/a" },
+            "minecraft_root": "a"
+        }"#;
+        let (config, warnings) = Config::parse(text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            config
+                .roots()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec!["b".to_string(), "a".to_string()]
         );
-        assert_eq!(config.root("a").unwrap().path, absolute("/first"));
-        assert_eq!(config.roots().len(), 1);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].message.contains("重复的根目录：a"));
+
+        let saved = serde_json::to_string_pretty(&config).unwrap();
+        let roots_at = saved.find("\"minecraft_roots\"").unwrap();
+        let first = saved[roots_at..].find("\"b\"").unwrap();
+        let second = saved[roots_at..].find("\"a\"").unwrap();
+        assert!(first < second, "{saved}");
+
+        let (reloaded, warnings) = Config::parse(&saved);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            reloaded
+                .roots()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            vec!["b".to_string(), "a".to_string()]
+        );
+    }
+
+    #[test]
+    fn dynamic_tables_keep_the_file_order() {
+        let text = r#"{
+            "launch": { "account": "a" },
+            "accounts": {
+                "b": { "type": "offline", "username": "B" },
+                "a": { "type": "offline", "username": "A" }
+            },
+            "javas": { "b": "/b/java", "a": "/a/java" }
+        }"#;
+        let (config, warnings) = Config::parse(text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            config
+                .accounts
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        assert_eq!(
+            config.javas.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+
+        let saved = serde_json::to_string_pretty(&config).unwrap();
+        let (reloaded, warnings) = Config::parse(&saved);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            reloaded
+                .accounts
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        assert_eq!(
+            reloaded
+                .javas
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
     }
 
     #[test]
     fn select_minecraft_root_requires_an_existing_name() {
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", "/mc"));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("/mc"));
         config.select_minecraft_root("test").unwrap();
         assert_eq!(config.minecraft_root, "test");
-        assert_eq!(config.default_root().unwrap().path, absolute("/mc"));
+        assert_eq!(config.default_root_path().unwrap(), absolute("/mc"));
 
         let err = config.select_minecraft_root("nope").unwrap_err();
         assert!(err.to_string().contains("根目录不存在：nope"));
@@ -895,35 +936,44 @@ mod tests {
     #[test]
     fn named_roots_resolve_and_default_can_be_selected() {
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", "/mc"));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("/mc"));
         config.select_minecraft_root("test").unwrap();
-        assert_eq!(config.default_root().unwrap().name, "test");
-        assert_eq!(config.default_root().unwrap().path, absolute("/mc"));
+        assert_eq!(config.default_root_name().unwrap(), "test");
+        assert_eq!(config.default_root_path().unwrap(), absolute("/mc"));
         assert_eq!(
-            config.root(CURRENT_ROOT_NAME).unwrap().path,
+            config.root_path(CURRENT_ROOT_NAME).unwrap(),
             absolute(".minecraft")
         );
         assert_eq!(
             config
                 .roots()
-                .iter()
-                .map(|root| root.name.as_str())
+                .into_iter()
+                .map(|(name, _)| name)
                 .collect::<Vec<_>>(),
-            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME, "test"]
+            vec![
+                CURRENT_ROOT_NAME.to_string(),
+                OFFICIAL_ROOT_NAME.to_string(),
+                "test".to_string()
+            ]
         );
-        assert!(config.root("nope").is_err());
+        assert!(config.root_path("nope").is_err());
     }
 
     #[test]
-    fn empty_root_array_gets_the_default_roots() {
-        let (config, warnings) = Config::parse(r#"{"minecraft_roots": []}"#);
+    fn empty_root_map_gets_the_default_roots() {
+        let (config, warnings) = Config::parse(r#"{"minecraft_roots": {}}"#);
         assert_eq!(
             config
                 .roots()
-                .iter()
-                .map(|root| root.name.as_str())
+                .into_iter()
+                .map(|(name, _)| name)
                 .collect::<Vec<_>>(),
-            vec![CURRENT_ROOT_NAME, OFFICIAL_ROOT_NAME]
+            vec![
+                CURRENT_ROOT_NAME.to_string(),
+                OFFICIAL_ROOT_NAME.to_string()
+            ]
         );
         assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
         assert_eq!(warnings.len(), 1);
@@ -963,7 +1013,9 @@ mod tests {
         config.launch.account = Some("steve".to_string());
         config.download.mirror = MirrorPolicy::MirrorFirst;
         config.download.skip_music = true;
-        config.minecraft_roots.push(test_root("test", "mc-root"));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("mc-root"));
         config.minecraft_root = "test".to_string();
 
         std::fs::create_dir_all(&dir).unwrap();
@@ -981,15 +1033,10 @@ mod tests {
         );
         assert_eq!(loaded.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(loaded.download.skip_music);
-        assert_eq!(loaded.root("test").unwrap().path, absolute("mc-root"));
+        assert_eq!(loaded.root_path("test").unwrap(), absolute("mc-root"));
         assert_eq!(
-            loaded
-                .minecraft_roots
-                .iter()
-                .find(|root| root.name == "test")
-                .unwrap()
-                .path,
-            PathBuf::from("mc-root")
+            loaded.minecraft_roots.get("test"),
+            Some(&PathBuf::from("mc-root"))
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -998,9 +1045,10 @@ mod tests {
     #[test]
     fn the_cwd_placeholder_is_resolved_but_saved_as_is() {
         let mut config = Config::default();
-        config
-            .minecraft_roots
-            .push(test_root("minecraft", format!("{}/mc", CWD_PLACEHOLDER)));
+        config.minecraft_roots.insert(
+            "minecraft".to_string(),
+            PathBuf::from(format!("{}/mc", CWD_PLACEHOLDER)),
+        );
 
         let text = serde_json::to_string_pretty(&config).unwrap();
         assert!(text.contains("\"${CWD}/.minecraft\""), "{text}");
@@ -1008,19 +1056,19 @@ mod tests {
 
         let (loaded, warnings) = Config::parse(&text);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(loaded.default_root().unwrap().path, absolute(".minecraft"));
-        assert_eq!(loaded.root("minecraft").unwrap().path, absolute("mc"));
+        assert_eq!(loaded.default_root_path().unwrap(), absolute(".minecraft"));
+        assert_eq!(loaded.root_path("minecraft").unwrap(), absolute("mc"));
     }
 
     #[test]
     fn the_official_root_uses_the_platform_launcher_directory() {
-        let root = Config::default().root(OFFICIAL_ROOT_NAME).unwrap();
+        let root = Config::default().root_path(OFFICIAL_ROOT_NAME).unwrap();
         #[cfg(target_os = "windows")]
-        assert_eq!(root.path, dirs::data_dir().unwrap().join(".minecraft"));
+        assert_eq!(root, dirs::data_dir().unwrap().join(".minecraft"));
         #[cfg(target_os = "macos")]
-        assert_eq!(root.path, dirs::data_dir().unwrap().join("minecraft"));
+        assert_eq!(root, dirs::data_dir().unwrap().join("minecraft"));
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        assert_eq!(root.path, dirs::home_dir().unwrap().join(".minecraft"));
+        assert_eq!(root, dirs::home_dir().unwrap().join(".minecraft"));
     }
 
     #[test]
@@ -1030,7 +1078,9 @@ mod tests {
         let path = dir.join("dmcl.json");
 
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", "mc-root"));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), PathBuf::from("mc-root"));
         config.minecraft_root = "test".to_string();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
@@ -1038,7 +1088,7 @@ mod tests {
         let loaded = Config::load_sync(Some(&path));
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
         assert_eq!(
-            loaded.config.root("test").unwrap().path,
+            loaded.config.root_path("test").unwrap(),
             absolute("mc-root")
         );
 
@@ -1046,7 +1096,7 @@ mod tests {
         assert!(missing.error.is_none());
         assert_eq!(missing.config.launch.account.as_deref(), Some("player"));
         assert_eq!(
-            missing.config.default_root().unwrap().path,
+            missing.config.default_root_path().unwrap(),
             absolute(".minecraft")
         );
 
@@ -1079,7 +1129,7 @@ mod tests {
         let mut config = Config::default();
         config
             .minecraft_roots
-            .push(test_root("test", dir.join("mc")));
+            .insert("test".to_string(), dir.join("mc"));
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
 
@@ -1096,7 +1146,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", root.clone()));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
 
@@ -1126,7 +1178,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", root.clone()));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = 3000;
         config.launch.window_width = 1000;
@@ -1172,7 +1226,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
         let mut config = Config::default();
-        config.minecraft_roots.push(test_root("test", root.clone()));
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
 
         let path = instance_config_path(&root, "1.20.1");
@@ -1223,7 +1279,7 @@ mod tests {
         let mut config = Config::default();
         config
             .minecraft_roots
-            .push(test_root("test", dir.join("mc")));
+            .insert("test".to_string(), dir.join("mc"));
         config.minecraft_root = "test".to_string();
         config.download.max_tasks = 8;
         config.download.chunk_threshold_mib = 2;

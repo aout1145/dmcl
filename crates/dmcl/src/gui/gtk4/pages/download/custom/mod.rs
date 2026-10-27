@@ -18,6 +18,7 @@ mod loaders;
 mod message;
 mod versions;
 
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use relm4::prelude::*;
 use dmcl_install::{default_version_name, InstallSpec, LoaderKind};
 use dmcl_mcmeta::layout::version_dir;
 
-use crate::config::{Config, MinecraftRoot};
+use crate::config::Config;
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
 use crate::gui::gtk4::app::{PageToast, Shell};
 use crate::gui::gtk4::pages::download::common::instance_summary::{
@@ -48,7 +49,7 @@ pub(crate) struct CustomPage {
     shell: Rc<Shell>,
     page_toast: PageToast,
     config: Config,
-    root: MinecraftRoot,
+    root_path: PathBuf,
     summary: Controller<InstanceSummary>,
     /// MC 版本下拉（只保活，页面不再向它发消息）。
     _mc: Controller<VersionSelect>,
@@ -73,7 +74,7 @@ impl CustomPage {
     /// 路径用原始名称（和安装器一致），只把全空白当作空；不要 `trim` 后再查，
     /// 否则 `"26.3 "` 会被误判成已有的 `26.3`。
     fn version_exists(&self, name: &str) -> bool {
-        !name.trim().is_empty() && version_dir(&self.root.path, name).exists()
+        !name.trim().is_empty() && version_dir(&self.root_path, name).exists()
     }
 
     /// 按同组选择刷新加载器冲突：已选中的行让其它同组行禁用并显示「与 xx 冲突」。
@@ -170,7 +171,7 @@ impl CustomPage {
         let options = match self.config.install_options(
             self.config.download_source(),
             &self.config.launch,
-            &self.root.path,
+            &self.root_path,
         ) {
             Ok(options) => Arc::new(options),
             Err(err) => {
@@ -195,7 +196,7 @@ impl CustomPage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for CustomPage {
-    type Init = PageInit<(Rc<Shell>, Config, MinecraftRoot)>;
+    type Init = PageInit<(Rc<Shell>, Config, PathBuf)>;
     type Input = CustomMsg;
     type Output = ();
 
@@ -225,7 +226,7 @@ impl SimpleComponent for CustomPage {
     ) -> ComponentParts<Self> {
         let PageInit {
             tab,
-            args: (shell, config, root),
+            args: (shell, config, root_path),
         } = init;
         let page_toast = PageToast::new(&root_widget);
         let source = config.download_source();
@@ -288,7 +289,7 @@ impl SimpleComponent for CustomPage {
             shell,
             page_toast,
             config,
-            root,
+            root_path,
             summary,
             _mc: mc,
             loaders,
@@ -342,7 +343,7 @@ impl SimpleComponent for CustomPage {
 }
 
 impl Page for CustomPage {
-    type Args = (Rc<Shell>, Config, MinecraftRoot);
+    type Args = (Rc<Shell>, Config, PathBuf);
 }
 
 /// 从组件输出里取选择（`Changed` 是唯一输出）。
