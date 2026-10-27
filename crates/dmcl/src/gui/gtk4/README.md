@@ -12,6 +12,8 @@
   `TaskChain` 跑起来、把 `TaskEvent` 渲染成界面。业务 crate 一行不改。
 - 页面（主页、新建实例等）是 **relm4 组件**，各自拥有状态、消息与 widget；app 层的共享能力
   收在 `Shell` 服务里；根组件只做组装。
+- 整个前端共用一份配置（见下文「共享配置」），组件不各存一份 `Config`，也不会把配置
+  逐层往下传。
 - 一个主页绑定一个根目录；标题栏的根目录菜单可以打开多个主页。所有 root 的主页
   从启动起常驻，关闭标签只影响显示，页面状态和运行中的游戏监视不会丢失。
 
@@ -77,6 +79,24 @@
 - 参考实现：`pages/home` 的实例网格、空状态、底部操作栏都由 `InstanceState` + `#[watch]`
   驱动。
 
+## 共享配置
+
+整个前端只有一份 `Config`，由 `app/config_store.rs` 管理：
+
+- `ConfigStore` 是进程级单例（`static OnceLock`），在 `app::run` 里用启动时读到的配置
+  初始化。单例里只有配置锁、保存锁和一条 `tokio::sync::watch` 版本号；**唯一的订阅者是
+  根组件**，它在 GLib 主线程上把版本变化转成 `AppMsg::ConfigChanged`。
+- 组件需要读配置时用 `config_store::store().config()` 拿一个 `ConfigRef`（只读句柄），
+  需要写时用 `config_store::store().update(...)`。不接收 `Config` 参数，也不各存副本。
+- `ConfigRef` 指向的就是共享的那份配置：`update` 在原地改，之前拿到的句柄也能读到新值。
+- 跨页面自动刷新是「`update` → 根组件消息 → 页面消息 → `#[watch]` 重画」：`#[watch]`
+  本身不会监听外部状态，页面必须先收到一条消息。
+- `update` 自己负责异步落盘，并强制调用方传一个失败处理函数（在 GLib 主线程上执行）；
+  保存内部串行化，连续修改时最后一次写入包含全部改动。`update` 必须在 GTK 主线程调用。
+- 读 guard 要短命：`std::sync::RwLock` 不可重入，持着 guard 调 `update` 会自锁。
+- `minecraft_roots` 只增不减：配置新增 root 时根组件补建常驻主页；删除 root 不销毁页面，
+  只从标题栏菜单移除；同名 root 改路径不热更新。
+
 ## 目录结构
 
 ```text
@@ -84,8 +104,10 @@ gtk4/
 ├── README.md                    # 本文：整体架构 + GTK 测试
 ├── mod.rs                       # RelmApp 启动 + 全局 CSS
 ├── app/                         # 界面框架：服务 + 组装
-│   ├── README.md                # app 层：根组件 / Shell / PageHost / 标题栏 / toast
+│   ├── README.md                # app 层：根组件 / Shell / 共享配置 / PageHost / 标题栏 / toast
 │   ├── mod.rs
+│   ├── config_store.rs          # 全局共享配置：config() / update()
+│   ├── config_warning.rs        # 配置加载警告弹窗
 │   ├── page_host.rs
 │   ├── shell.rs
 │   ├── toast.rs
@@ -142,12 +164,14 @@ gtk4/
 页面与任务的动作彼此独立。页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件
 完整的消息表见对应目录的文档。
 
-跨组件的边界只有三条：
+跨组件的边界只有四条：
 
 - **页面 → `Shell`**：传 `TaskChain`，拿回可 `await` 的结果句柄；任务事件由 `Shell` 转发给
   任务窗口。
 - **页面 → 子组件**：通过组件输入消息推自动值、冲突与安装按钮状态。
 - **子组件 → 页面**：通过组件输出消息上报选择、名称变化和安装请求。
+- **页面 ↔ 共享配置**：直接向全局 `ConfigStore` 订阅 / 修改；写完后由订阅消息通知需要
+  重画的组件。
 
 ## GTK 测试
 

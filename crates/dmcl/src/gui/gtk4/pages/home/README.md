@@ -6,7 +6,8 @@
 ## 一个主页 = 一个 root
 
 `HomePage` 的初始化参数里带该 root 已展开的 `PathBuf`。版本目录监听、实例配置读取、
-安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。
+安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。`Config` 不随参数传入：
+页面持有全局 `ConfigStore` 的只读句柄，启动 / 安装时现读，运行时改配置立即生效。
 
 主页标签可以随时关闭，但关闭只影响显示：`HomePage` 从程序启动起就常驻，标签只是它的
 一个挂载点。
@@ -79,7 +80,8 @@ HomeMsg::MonitorExited { name, stopped, abnormal }
 ## 启动 / 停止
 
 - **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」
-  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`。
+  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`。全局 `launch` 从共享配置的
+  `ConfigRef` 现读，不缓存启动那一刻的副本。
 - 启动链的完成任务不挂在 `HomePage` 的 `TaskGuard` 上：关闭标签后启动链继续跑，
   结果仍会回到常驻的 `HomePage`。
 - **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，
@@ -110,6 +112,7 @@ MonitorExited { name, stopped, abnormal }
 WatchFailed(String)
 Manage
 CreateInstance
+ConfigChanged
 ```
 
 对外只输出 `HomeOut::CreateCustom`；App 用创建主页时捕获的 root 打开新建实例页。

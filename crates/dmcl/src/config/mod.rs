@@ -4,8 +4,9 @@
 //! 表示「缺键保留默认值」。加载时逐项容错：不合法的配置项回退成默认值并汇总成
 //! [`ConfigError`]，缺键仍然静默用默认值。
 //!
-//! **没有全局 `config` 变量**：[`Config`] 就是一个普通值，由前端（CLI / GUI）持有并传下去；
-//! 各业务 crate 都不知道配置文件的存在（见各自的 `*Options`）。
+//! **没有全局 `config` 变量**：[`Config`] 就是一个普通值；CLI 直接拿着它，GUI 把它放进
+//! `gtk4::app::config_store` 的共享仓库、给各页面发只读句柄。各业务 crate 都不知道配置
+//! 文件的存在（见各自的 `*Options`）。
 //!
 //! 全局配置分为 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
 //! `download` 六部分；每个实例还可以在
@@ -381,19 +382,6 @@ impl Config {
         }
         tokio::fs::write(&path, text)
             .await
-            .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
-        Ok(())
-    }
-
-    /// [`Config::save`] 的同步版本，给 GTK 回调这类不能等待 future 的地方用。
-    pub fn save_sync(&self) -> Result<()> {
-        let path = Self::path();
-        let text = serde_json::to_string_pretty(self)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
-        }
-        std::fs::write(&path, text)
             .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
         Ok(())
     }

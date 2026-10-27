@@ -26,8 +26,8 @@ use dmcl_launch::GameMonitor;
 use dmcl_mcmeta::layout::installed_versions;
 use dmcl_task::CancelHandle;
 
-use crate::config::{Config, LaunchConfig};
-use crate::gui::gtk4::app::{PageToast, Shell};
+use crate::config::LaunchConfig;
+use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
 
 use instance_card::{CardOut, InstanceCard};
 pub(crate) use message::HomeMsg;
@@ -87,7 +87,8 @@ impl Drop for TaskGuard {
 
 pub(crate) struct HomePage {
     shell: Rc<Shell>,
-    config: Config,
+    /// 共享配置的只读句柄；启动 / 安装时现读，始终是最新值。
+    config: ConfigRef,
     root_path: PathBuf,
     /// 主窗口：实例配置警告框以它为父窗口。
     window: adw::ApplicationWindow,
@@ -105,7 +106,7 @@ pub(crate) struct HomePage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for HomePage {
-    type Init = (Rc<Shell>, Config, PathBuf, adw::ApplicationWindow);
+    type Init = (Rc<Shell>, PathBuf, adw::ApplicationWindow);
     type Input = HomeMsg;
     type Output = HomeOut;
 
@@ -211,10 +212,11 @@ impl SimpleComponent for HomePage {
     }
 
     fn init(
-        (shell, config, root_path, window): Self::Init,
+        (shell, root_path, window): Self::Init,
         root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let config = config_store::store().config();
         let instances = FactoryVecDeque::builder()
             .launch(adw::WrapBox::new())
             .forward(sender.input_sender(), |msg| match msg {
@@ -353,6 +355,8 @@ impl SimpleComponent for HomePage {
                 }
             }
             HomeMsg::CreateInstance => create_instance::show(&self.window, &sender),
+            // 句柄指向的就是共享配置本身，不需要保存新值；消息只用来触发一次重画。
+            HomeMsg::ConfigChanged => {}
         }
     }
 }
@@ -364,9 +368,10 @@ impl HomePage {
         name: &str,
         launch: &LaunchConfig,
     ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
-        let option = self.config.launch_option(launch, name, &self.root_path)?;
-        let install = std::sync::Arc::new(self.config.install_options(
-            self.config.download_source(),
+        let config = self.config.read();
+        let option = config.launch_option(launch, name, &self.root_path)?;
+        let install = std::sync::Arc::new(config.install_options(
+            config.download_source(),
             launch,
             &self.root_path,
         )?);
@@ -375,7 +380,10 @@ impl HomePage {
 
     /// 读取实例配置；有警告先弹确认框，否则直接开始。
     fn request_start(&mut self, name: String, sender: &ComponentSender<Self>) {
-        let loaded = self.config.load_instance_sync(&self.root_path, &name);
+        let loaded = self
+            .config
+            .read()
+            .load_instance_sync(&self.root_path, &name);
         if let Some(error) = loaded.error {
             let launch = loaded.launch;
             let sender = sender.clone();

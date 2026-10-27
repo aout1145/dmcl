@@ -39,4 +39,6 @@ pub(crate) enum HomeMsg {
     Manage,
     /// 打开「新建实例」方式选择框。
     CreateInstance,
+    /// 共享配置变了：句柄指向新值，只需重画。
+    ConfigChanged,
 }

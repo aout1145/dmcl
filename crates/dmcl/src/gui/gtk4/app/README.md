@@ -11,9 +11,10 @@
 - 启动 `Header`、`TaskCenter`；按配置里的全部 `minecraft_roots` 创建常驻 `HomePage`，
   启动时只给默认 root 建标签页；
 - 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页和任务；主页的
-  `HomeOut::CreateCustom` 打开新建实例页；`TabClosed` 清理对应页面的标签句柄并同步根目录
-  勾选；主菜单和快捷键共用 `app.*` action，分别发 `OpenLauncherOptions` /
-  `OpenGameOptions` / `About`；`TaskCenterOut` 负责任务角标与退出；
+  `HomeOut::CreateCustom` 打开新建实例页；`ConfigChanged` 给配置里新增的 root 补建主页
+  并刷新标题栏菜单；`TabClosed` 清理对应页面的标签句柄并同步根目录勾选；主菜单和快捷键
+  共用 `app.*` action，分别发 `OpenLauncherOptions` / `OpenGameOptions` / `About`；
+  `TaskCenterOut` 负责任务角标与退出；
 - 所有标签都可以关闭。标签 `page-detached` 时发送 `TabClosed`，清理 `PageHost` 和各
   `PageSlot` 的标签句柄，但常驻页面继续存活；重新打开时把同一个根 widget 挂到新标签，
   运行状态不会丢。
@@ -22,6 +23,27 @@
 `header/theme.rs`，「关于」在 `header/about.rs`），整行由 `view!` 声明，再由根组件的
 `view!` 用 `add_top_bar` 挂上去。需要页面宿主 / 任务窗口配合的动作通过 `HeaderOut`
 上报给根组件。
+
+## 共享配置
+
+`app/config_store.rs` 管理整个前端唯一的一份 `Config`：
+
+- `ConfigStore` 是进程级单例（`static OnceLock`），GUI 入口把 `Config::load_sync` 读到的
+  配置经由 `app::run` 放进去。单例里只有配置锁、保存锁和一条 `tokio::sync::watch`
+  版本号，都是 `Send + Sync`。
+- 读配置：`config_store::store().config()`，返回 `ConfigRef`（只读句柄）；写配置：
+  `config_store::store().update(|config| …)`。组件不接收 `Config` 参数，也不再各存副本。
+- **只有根组件监听变更**：`init` 里 `spawn_local` 一个 `watch` 循环，收到变化后补建新
+  root 的主页、刷新标题栏菜单，并给主页发 `HomeMsg::ConfigChanged`。页面不各自订阅，
+  `#[watch]` 的重画由这条消息触发。
+- `update` 原地修改共享配置，释放写锁后才推进版本号；等到消息时值已经是最新的。
+- `update` 自己异步落盘，并强制传一个失败处理函数（在 GLib 主线程上执行）；保存锁串行化，
+  连续修改时最后一次写入包含全部改动。配置警告弹窗的「确认」就走这条路径。
+- 读 guard 要短命：持着 guard 调 `update` 会自锁。
+
+根目录列表只增不减：`AppMsg::ConfigChanged` 时给新 root 补建常驻 `HomePage`，删除 root
+不销毁页面、只从标题栏菜单移除；同名 root 改路径不热更新（页面已按旧路径挂了 watcher）。
+新 root 也不会自动打开标签页，需要从菜单点开。
 
 ## `Shell`
 
@@ -60,8 +82,8 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 - **常驻页面**（主页、启动器选项、全局游戏选项）：启动时创建组件，由 `PageSlot<C>` 直接
   持有 `Controller<C>` 和 `Option<AdwTabPage>`。`PageSlot::open` 在已打开时只聚焦，关闭后
   重新 append 同一个根 widget；`PageSlot::close` 只清空标签句柄，组件和页面状态继续保留。
-  设置页固定两个字段，主页按 root 名字存放在 `Vec<(String, PageSlot<HomePage>)>` 里，不需要
-  字符串 key 或类型擦除注册表。
+  设置页固定两个字段，主页按 root 名字存放在 `Vec<HomeSlot>` 里（`HomeSlot` 是
+  名字 + `PageSlot<HomePage>`），不需要字符串 key 或类型擦除注册表。
 
 `TabTitle` 是页面**直接**改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动
 组件再 append，所以绑定前 `set_title` 会缓存、绑定后补写；`close()` 内置 `tab_view` +

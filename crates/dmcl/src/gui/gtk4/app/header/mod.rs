@@ -47,6 +47,8 @@ pub(crate) enum HeaderMsg {
     SetRunningCount(usize),
     /// 更新已打开的主页集合。
     SetOpenHomes(Vec<String>),
+    /// 配置里的根目录列表变了，重建菜单行。
+    SetRoots(Vec<(String, PathBuf)>),
     /// 根目录行发出的动作。
     RootAction(RootRowOut),
     /// 打开「关于」。
@@ -62,6 +64,8 @@ pub(crate) struct Header {
     _theme: Controller<ThemeSwitcher>,
     /// 根目录菜单里的行。
     roots: FactoryVecDeque<RootRow>,
+    /// 菜单行当前对应的配置内容；配置变化时用来判断要不要重建。
+    configured_roots: Vec<(String, PathBuf)>,
     /// 根目录菜单按钮；选中某一行后主动收起。
     root_menu_button: Option<gtk::MenuButton>,
     /// 当前已经打开的主页名字。
@@ -196,8 +200,8 @@ impl SimpleComponent for Header {
         let mut root_rows: FactoryVecDeque<RootRow> = FactoryVecDeque::builder()
             .launch(gtk::Box::new(gtk::Orientation::Vertical, 4))
             .forward(sender.input_sender(), HeaderMsg::RootAction);
-        for root in roots {
-            root_rows.guard().push_back(root);
+        for root in &roots {
+            root_rows.guard().push_back(root.clone());
         }
         let roots_widget = root_rows.widget().clone();
         let mut model = Header {
@@ -205,6 +209,7 @@ impl SimpleComponent for Header {
             running: 0,
             _theme: theme,
             roots: root_rows,
+            configured_roots: roots,
             root_menu_button: None,
             open_roots: BTreeSet::new(),
         };
@@ -231,6 +236,13 @@ impl SimpleComponent for Header {
                 self.open_roots = open.into_iter().collect();
                 self.sync_root_rows();
             }
+            HeaderMsg::SetRoots(roots) => {
+                if self.configured_roots == roots {
+                    return;
+                }
+                self.configured_roots = roots;
+                self.rebuild_root_rows();
+            }
             HeaderMsg::RootAction(RootRowOut::Open(index)) => {
                 let Some(row) = self.roots.get(index.current_index()) else {
                     return;
@@ -248,6 +260,18 @@ impl SimpleComponent for Header {
 }
 
 impl Header {
+    /// 按配置重建根目录菜单行，并恢复「已打开」标记。
+    fn rebuild_root_rows(&mut self) {
+        {
+            let mut guard = self.roots.guard();
+            guard.clear();
+            for root in &self.configured_roots {
+                guard.push_back(root.clone());
+            }
+        }
+        self.sync_root_rows();
+    }
+
     fn sync_root_rows(&mut self) {
         let mut guard = self.roots.guard();
         for row in guard.iter_mut() {

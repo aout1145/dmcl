@@ -29,9 +29,8 @@ use relm4::prelude::*;
 use dmcl_install::{default_version_name, InstallSpec, LoaderKind};
 use dmcl_mcmeta::layout::version_dir;
 
-use crate::config::Config;
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
-use crate::gui::gtk4::app::{PageToast, Shell};
+use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
 use crate::gui::gtk4::pages::download::common::instance_summary::{
     IconSource, InstanceSummary, SummaryIn, SummaryOut,
 };
@@ -48,7 +47,8 @@ pub(crate) struct CustomPage {
     tab: TabTitle,
     shell: Rc<Shell>,
     page_toast: PageToast,
-    config: Config,
+    /// 共享配置的只读句柄；安装时现读，始终是最新值。
+    config: ConfigRef,
     root_path: PathBuf,
     summary: Controller<InstanceSummary>,
     /// MC 版本下拉（只保活，页面不再向它发消息）。
@@ -168,11 +168,11 @@ impl CustomPage {
                 spec = spec.with_loader(slot.kind, item.id.clone());
             }
         }
-        let options = match self.config.install_options(
-            self.config.download_source(),
-            &self.config.launch,
-            &self.root_path,
-        ) {
+        let options = {
+            let config = self.config.read();
+            config.install_options(config.download_source(), &config.launch, &self.root_path)
+        };
+        let options = match options {
             Ok(options) => Arc::new(options),
             Err(err) => {
                 self.shell
@@ -196,7 +196,7 @@ impl CustomPage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for CustomPage {
-    type Init = PageInit<(Rc<Shell>, Config, PathBuf)>;
+    type Init = PageInit<(Rc<Shell>, PathBuf)>;
     type Input = CustomMsg;
     type Output = ();
 
@@ -226,10 +226,11 @@ impl SimpleComponent for CustomPage {
     ) -> ComponentParts<Self> {
         let PageInit {
             tab,
-            args: (shell, config, root_path),
+            args: (shell, root_path),
         } = init;
         let page_toast = PageToast::new(&root_widget);
-        let source = config.download_source();
+        let config = config_store::store().config();
+        let source = config.read().download_source();
 
         let summary = InstanceSummary::builder()
             .launch(())
@@ -343,7 +344,7 @@ impl SimpleComponent for CustomPage {
 }
 
 impl Page for CustomPage {
-    type Args = (Rc<Shell>, Config, PathBuf);
+    type Args = (Rc<Shell>, PathBuf);
 }
 
 /// 从组件输出里取选择（`Changed` 是唯一输出）。

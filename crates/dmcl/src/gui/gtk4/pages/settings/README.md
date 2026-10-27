@@ -30,5 +30,11 @@
 ## 扩展
 
 具体设置项直接加在各自的 `view!` 里，用 `AdwPreferencesGroup` + `AdwActionRow` /
-`AdwSwitchRow` / `AdwEntryRow` / `AdwComboRow`。需要跨组件状态时给组件加 `Input` / `Output`
-消息，不要把状态放到根组件。
+`AdwSwitchRow` / `AdwEntryRow` / `AdwComboRow`。
+
+配置来自 `app/config_store.rs` 的全局单例，不通过 `Init` 传入：读用
+`config_store::store().config()` 拿 `ConfigRef`，写用
+`config_store::store().update(|config| …, |err| { … })`。`update` 自己异步落盘，第二个
+参数是保存失败的处理函数（在主线程上执行），必须给出。设置项在 `update` 里改配置，
+界面用 `#[watch]` 读 `ConfigRef`；需要重画时由根组件转发的 `ConfigChanged` 消息触发。
+跨页面状态不要放到根组件。

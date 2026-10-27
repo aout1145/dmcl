@@ -7,7 +7,8 @@ use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
 
-use crate::config::{Config, ConfigError};
+use crate::config::ConfigError;
+use crate::gui::gtk4::app::config_store;
 
 /// 配置警告卡片的全局样式。
 ///
@@ -23,7 +24,7 @@ pub(crate) const CSS: &str = "\
 }";
 
 /// 弹一个汇总全部配置警告的模态框。
-pub(crate) fn show(parent: &impl IsA<gtk::Window>, config: &Config, error: &ConfigError) {
+pub(crate) fn show(parent: &impl IsA<gtk::Window>, error: &ConfigError) {
     // AdwAlertDialog 没有按严重级别切换的内置外观，标题和图标都由 extra child 自己排。
     let dialog = adw::AlertDialog::new(None, None);
     dialog.add_response("ignore", "忽略");
@@ -105,19 +106,23 @@ pub(crate) fn show(parent: &impl IsA<gtk::Window>, config: &Config, error: &Conf
     dialog.set_extra_child(Some(&content));
 
     let window: gtk::Window = parent.clone().upcast();
-    let config = config.clone();
     let save_parent = window.clone();
     dialog.connect_response(None, move |_, response| {
         if response != "confirm" {
             return;
         }
-        if let Err(err) = config.save_sync() {
-            let dialog = adw::AlertDialog::new(Some("保存配置失败"), Some(&format!("{err:#}")));
-            dialog.add_response("ok", "知道了");
-            dialog.set_default_response(Some("ok"));
-            dialog.set_close_response("ok");
-            dialog.present(Some(&save_parent));
-        }
+        // 修复后的配置已经在共享仓库里，空闭包只负责触发异步落盘。
+        let parent = save_parent.clone();
+        config_store::store().update(
+            |_| (),
+            move |err| {
+                let dialog = adw::AlertDialog::new(Some("保存配置失败"), Some(&format!("{err:#}")));
+                dialog.add_response("ok", "知道了");
+                dialog.set_default_response(Some("ok"));
+                dialog.set_close_response("ok");
+                dialog.present(Some(&parent));
+            },
+        );
     });
     dialog.present(Some(&window));
 }

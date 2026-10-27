@@ -6,8 +6,10 @@
 //! 页面与任务对话框（`tasks`）都是独立组件、各带自己的消息。一次性页面（实现
 //! [`Page`](page_host::Page)）交给 [`PageHost`](page_host::PageHost) 懒创建；常驻页面由
 //! [`PageSlot`](page_host::PageSlot) 直接持有。共享能力（跑任务、弹提示、打开任务对话框）
-//! 在 [`Shell`] 里。这里没有实例业务逻辑。
+//! 在 [`Shell`] 里；共享配置是 [`config_store`] 里的全局单例，根组件负责初始化和订阅。
+//! 这里没有实例业务逻辑。
 
+pub(crate) mod config_store;
 mod config_warning;
 mod header;
 pub(crate) mod page_host;
@@ -15,9 +17,11 @@ pub(crate) mod shell;
 mod tasks;
 mod toast;
 
+pub(crate) use config_store::ConfigRef;
 pub(crate) use shell::Shell;
 pub(crate) use toast::{PageToast, ToastService};
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use relm4::adw;
@@ -26,7 +30,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 use relm4::Sender;
 
-use crate::config::{Config, LoadedConfig};
+use crate::config::{ConfigError, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
@@ -45,6 +49,8 @@ enum AppMsg {
         root: String,
         out: HomeOut,
     },
+    /// 共享配置改过了：补建新增 root 的主页，并刷新标题栏菜单。
+    ConfigChanged,
     /// 打开或聚焦启动器选项（应用级快捷键）。
     OpenLauncherOptions,
     /// 打开或聚焦全局游戏选项（应用级快捷键）。
@@ -57,6 +63,12 @@ enum AppMsg {
     CloseRequested,
 }
 
+/// 一个 root 的常驻主页。`name` 是创建时的 root 名字，用来和配置对齐。
+struct HomeSlot {
+    name: String,
+    page: PageSlot<HomePage>,
+}
+
 struct AppModel {
     // 子组件靠持有 Controller 存活。
     _tasks: Controller<TaskCenter>,
@@ -66,14 +78,15 @@ struct AppModel {
     // 一次性页面的宿主：打开的 CustomPage 由它保活。
     page_host: Rc<PageHost>,
     /// 所有 root 的主页；关闭标签只清空槽位的标签句柄，组件继续存活。
-    homes: Vec<(String, PageSlot<HomePage>)>,
+    homes: Vec<HomeSlot>,
     /// 启动器选项：常驻页面，最多一个标签。
     launcher_options: PageSlot<LauncherOptionsPage>,
     /// 全局游戏选项：常驻页面，最多一个标签。
     game_options: PageSlot<GameOptionsPage>,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
-    config: Config,
+    /// 共享配置的只读句柄，始终指向当前那份配置。
+    config: ConfigRef,
     tab_view: adw::TabView,
     /// 主窗口：任务组件确认可以退出后销毁它。
     window: adw::ApplicationWindow,
@@ -81,7 +94,7 @@ struct AppModel {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for AppModel {
-    type Init = (LoadedConfig, String);
+    type Init = (Option<ConfigError>, String);
     type Input = AppMsg;
     type Output = ();
 
@@ -125,11 +138,25 @@ impl SimpleComponent for AppModel {
     }
 
     fn init(
-        (loaded, startup_root_name): Self::Init,
+        (error, startup_root_name): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let LoadedConfig { config, error } = loaded;
+        // 全局仓库已在 `run` 里初始化；配置变更只由根组件监听，再分发给各页面。
+        let config = config_store::store().config();
+        let mut changes = config_store::store().changes();
+        let change_sender = sender.clone();
+        relm4::spawn_local(async move {
+            while changes.changed().await.is_ok() {
+                if change_sender
+                    .input_sender()
+                    .send(AppMsg::ConfigChanged)
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let tab_view = adw::TabView::new();
 
         // 页面宿主：只负责 CustomPage 这类关闭即销毁的一次性页面。
@@ -139,7 +166,7 @@ impl SimpleComponent for AppModel {
         register_menu_actions(&sender);
 
         // 标题栏是独立组件；需要页面宿主 / 任务组件的动作通过 HeaderOut 回来。
-        let roots = config.roots();
+        let roots = config.read().roots();
         let header = Header::builder()
             .launch((tab_view.clone(), root.clone(), roots))
             .forward(sender.input_sender(), AppMsg::Header);
@@ -151,8 +178,7 @@ impl SimpleComponent for AppModel {
         // 配置加载有问题时，等主窗口显示后再弹汇总警告；关掉后按修复后的配置继续。
         if let Some(error) = error {
             let window = root.clone();
-            let config = config.clone();
-            gtk::glib::idle_add_local_once(move || config_warning::show(&window, &config, &error));
+            gtk::glib::idle_add_local_once(move || config_warning::show(&window, &error));
         }
 
         // 任务对话框：组件本身就是那个模态窗口，自己管卡片/确认/提示/关闭清理。
@@ -166,10 +192,11 @@ impl SimpleComponent for AppModel {
         let tasks_sender = tasks.sender().clone();
 
         // 所有 root 的主页从启动起就常驻；启动时只给默认 root 建标签页。
+        let roots = config.read().roots();
         let mut homes = Vec::new();
-        for (name, path) in config.roots() {
+        for (name, path) in roots {
             let controller = HomePage::builder()
-                .launch((shell.clone(), config.clone(), path, root.clone()))
+                .launch((shell.clone(), path, root.clone()))
                 .forward(sender.input_sender(), {
                     let name = name.clone();
                     move |out| AppMsg::Home {
@@ -177,13 +204,13 @@ impl SimpleComponent for AppModel {
                         out,
                     }
                 });
-            homes.push((
+            homes.push(HomeSlot {
                 name,
-                PageSlot {
+                page: PageSlot {
                     controller,
                     tab: None,
                 },
-            ));
+            });
         }
 
         // 设置页同样是常驻页面；启动时创建，之后重复触发只聚焦已有标签。
@@ -223,12 +250,20 @@ impl SimpleComponent for AppModel {
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             AppMsg::Header(HeaderOut::Tasks) => {
                 let _ = self.tasks.send(TaskMsg::Open);
             }
             AppMsg::Header(HeaderOut::Home(name)) => self.open_home(&name),
+            AppMsg::ConfigChanged => {
+                // roots 只增不减：新 root 补建常驻主页，删掉的保留页面；菜单按配置刷新。
+                let roots = self.config.read().roots();
+                self.sync_roots(roots, &sender);
+                for home in &self.homes {
+                    let _ = home.page.controller.sender().send(HomeMsg::ConfigChanged);
+                }
+            }
             AppMsg::OpenLauncherOptions => self.open_launcher_options(),
             AppMsg::OpenGameOptions => self.open_game_options(),
             AppMsg::About => {
@@ -246,8 +281,8 @@ impl SimpleComponent for AppModel {
                 // 一次性页面：关闭即销毁。
                 self.page_host.close(&page);
                 // 常驻页面：只清空标签句柄，组件继续存活。
-                for (_, slot) in &mut self.homes {
-                    slot.close(&page);
+                for home in &mut self.homes {
+                    home.page.close(&page);
                 }
                 self.launcher_options.close(&page);
                 self.game_options.close(&page);
@@ -263,21 +298,16 @@ impl SimpleComponent for AppModel {
 impl AppModel {
     /// 打开或聚焦某个 root 的主页标签。
     fn open_home(&mut self, name: &str) {
-        let Some(index) = self
-            .homes
-            .iter()
-            .position(|(home_root, _)| home_root == name)
-        else {
+        let Some(home) = self.homes.iter_mut().find(|home| home.name == name) else {
             self.shell
                 .global_toast(&format!("配置里找不到主页：{name}"));
             return;
         };
-        let (_, slot) = &mut self.homes[index];
-        let reopen = slot.tab.is_none();
-        slot.open(&self.tab_view, &home_tab_title(name));
+        let reopen = home.page.tab.is_none();
+        home.page.open(&self.tab_view, &home_tab_title(name));
         if reopen {
             // 隐藏期间目录可能已经变化；重新打开时补一次刷新。
-            let _ = slot.controller.sender().send(HomeMsg::Reload);
+            let _ = home.page.controller.sender().send(HomeMsg::Reload);
         }
         self.sync_header_homes();
     }
@@ -294,7 +324,7 @@ impl AppModel {
 
     /// 新建实例页绑定到发出请求的主页 root。
     fn open_custom(&mut self, root_name: &str) {
-        let root_path = match self.config.root_path(root_name) {
+        let root_path = match self.config.read().root_path(root_name) {
             Ok(path) => path,
             Err(err) => {
                 self.shell
@@ -302,19 +332,45 @@ impl AppModel {
                 return;
             }
         };
-        self.page_host.open_page::<CustomPage>((
-            self.shell.clone(),
-            self.config.clone(),
-            root_path,
-        ));
+        self.page_host
+            .open_page::<CustomPage>((self.shell.clone(), root_path));
+    }
+
+    /// 配置里的 root 有增减：给新 root 补建主页，再把菜单交给标题栏。
+    ///
+    /// 只在新增时建页面——同名的 root 改路径不重建（页面已经按旧路径挂了 watcher），
+    /// 删除 root 也不销毁页面，已经打开的标签保留。
+    fn sync_roots(&mut self, roots: Vec<(String, PathBuf)>, sender: &ComponentSender<Self>) {
+        for (name, path) in &roots {
+            if self.homes.iter().any(|home| &home.name == name) {
+                continue;
+            }
+            let controller = HomePage::builder()
+                .launch((self.shell.clone(), path.clone(), self.window.clone()))
+                .forward(sender.input_sender(), {
+                    let name = name.clone();
+                    move |out| AppMsg::Home {
+                        root: name.clone(),
+                        out,
+                    }
+                });
+            self.homes.push(HomeSlot {
+                name: name.clone(),
+                page: PageSlot {
+                    controller,
+                    tab: None,
+                },
+            });
+        }
+        let _ = self.header.sender().send(HeaderMsg::SetRoots(roots));
     }
 
     fn sync_header_homes(&self) {
         let mut open: Vec<String> = self
             .homes
             .iter()
-            .filter(|(_, slot)| slot.tab.is_some())
-            .map(|(name, _)| name.clone())
+            .filter(|home| home.page.tab.is_some())
+            .map(|home| home.name.clone())
             .collect();
         open.sort();
         open.dedup();
@@ -355,6 +411,9 @@ fn home_tab_title(root_name: &str) -> String {
 
 /// 启动 GTK4 界面；窗口关闭前一直阻塞在主线程。
 pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<()> {
+    // 配置只读一次，之后所有页面都从全局仓库取；加载警告留给根组件弹窗。
+    let LoadedConfig { config, error } = loaded;
+    config_store::init(config);
     // 只把程序名传给 GApplication：`dmcl gui` 里的 `gui` 是给我们自己解析的，
     // 别让它被当成要打开的文件（否则 GLib 会警告 "can not open files"）。
     let mut args: Vec<String> = std::env::args().take(1).collect();
@@ -374,6 +433,6 @@ pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<
     ] {
         relm4::set_global_css_with_priority(css, relm4::gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    app.run::<AppModel>((loaded, startup_root));
+    app.run::<AppModel>((error, startup_root));
     Ok(())
 }
