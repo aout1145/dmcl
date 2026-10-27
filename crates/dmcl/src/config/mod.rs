@@ -300,17 +300,46 @@ impl Config {
 
     /// 持久化整份配置。
     pub async fn save(&self) -> Result<()> {
-        let path = Self::path();
+        self.save_to(&Self::path()).await
+    }
+
+    /// 把原配置文件备份为同目录的 `dmcl.old.json`，再持久化整份配置。
+    ///
+    /// 原文件不存在时只写入，不产生备份。
+    pub async fn save_with_backup(&self) -> Result<()> {
+        self.save_with_backup_to(&Self::path()).await
+    }
+
+    async fn save_to(&self, path: &Path) -> Result<()> {
         let text = serde_json::to_string_pretty(self)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
         }
-        tokio::fs::write(&path, text)
+        tokio::fs::write(path, text)
             .await
             .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
         Ok(())
+    }
+
+    async fn save_with_backup_to(&self, path: &Path) -> Result<()> {
+        let backup = path.with_file_name("dmcl.old.json");
+        match tokio::fs::copy(path, &backup).await {
+            Ok(_) => {}
+            // 原文件不存在时没有可备份的内容。
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "无法备份配置文件 {} 到 {}",
+                        path.display(),
+                        backup.display()
+                    )
+                });
+            }
+        }
+        self.save_to(path).await
     }
 
     /// 配置 + 传入的启动配置 → [`InstallOptions`]（含「用哪个 java 跑安装器 processor」）。
@@ -576,6 +605,45 @@ mod tests {
             loaded.minecraft_roots.get("test"),
             Some(&PathBuf::from("mc-root"))
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_with_backup_keeps_the_previous_file() {
+        let dir = temp_dir("backup");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dmcl.json");
+        let backup = dir.join("dmcl.old.json");
+        std::fs::write(&path, r#"{"launch":{"window_width":1024}}"#).unwrap();
+
+        Config::default().save_with_backup_to(&path).await.unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            r#"{"launch":{"window_width":1024}}"#
+        );
+        let saved: Config = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved.launch.window_width,
+            Config::default().launch.window_width
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_with_backup_does_not_create_a_backup_for_a_missing_file() {
+        let dir = temp_dir("backup-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dmcl.json");
+
+        Config::default().save_with_backup_to(&path).await.unwrap();
+
+        assert!(path.exists());
+        assert!(!dir.join("dmcl.old.json").exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

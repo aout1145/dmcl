@@ -171,10 +171,10 @@ impl SimpleComponent for AppModel {
         let tab_view_widget = &tab_view;
         let widgets = view_output!();
 
-        // 配置加载有问题时，等主窗口显示后再弹汇总警告；关掉后按修复后的配置继续。
+        // 配置加载有问题时，等主窗口显示后写回修复后的配置，并弹窗说明结果。
         if let Some(error) = error {
             let window = root.clone();
-            gtk::glib::idle_add_local_once(move || config_warning::show(&window, &error));
+            gtk::glib::idle_add_local_once(move || config_warning::repair(&window, &error));
         }
 
         // 任务对话框：组件本身就是那个模态窗口，自己管卡片/确认/提示/关闭清理。

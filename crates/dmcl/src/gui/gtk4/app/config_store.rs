@@ -47,6 +47,13 @@ impl ConfigRef {
     }
 }
 
+/// 落盘方式：普通保存，或先备份原文件再保存。
+#[derive(Clone, Copy)]
+enum PersistMode {
+    Plain,
+    WithBackup,
+}
+
 pub(crate) struct ConfigStore {
     config: Arc<RwLock<Config>>,
     /// 每次修改加一；根组件监听它。
@@ -84,7 +91,21 @@ impl ConfigStore {
         on_error: impl FnOnce(anyhow::Error) + 'static,
     ) {
         self.apply(f);
+        self.persist(PersistMode::Plain, move |result| {
+            if let Err(err) = result {
+                on_error(err);
+            }
+        });
+    }
 
+    /// 写入修复后的配置，并先把原文件备份为同目录的 `dmcl.old.json`。
+    ///
+    /// 保存结束后回到 GLib 主线程调用 `on_done`。必须在 GTK 主线程调用。
+    pub fn save_with_backup(&self, on_done: impl FnOnce(anyhow::Result<()>) + 'static) {
+        self.persist(PersistMode::WithBackup, on_done);
+    }
+
+    fn persist(&self, mode: PersistMode, on_done: impl FnOnce(anyhow::Result<()>) + 'static) {
         let config = Arc::clone(&self.config);
         let save_lock = Arc::clone(&self.save_lock);
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -93,14 +114,17 @@ impl ConfigStore {
             // 写盘不能跨 `await` 持读锁：先 clone 一份序列化用的快照。共享的那份配置
             // 没有变，这里只是给异步写文件用的临时副本。
             let snapshot = config.read().expect("配置锁已中毒").clone();
-            let _ = tx.send(snapshot.save().await);
+            let result = match mode {
+                PersistMode::Plain => snapshot.save().await,
+                PersistMode::WithBackup => snapshot.save_with_backup().await,
+            };
+            let _ = tx.send(result);
         });
         relm4::spawn_local(async move {
             match rx.await {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => on_error(err),
+                Ok(result) => on_done(result),
                 // 保存任务在回传结果之前结束：不能静默当成成功。
-                Err(_) => on_error(anyhow::anyhow!("保存配置任务意外结束")),
+                Err(_) => on_done(Err(anyhow::anyhow!("保存配置任务意外结束"))),
             }
         });
     }

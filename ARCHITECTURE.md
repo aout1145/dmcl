@@ -155,8 +155,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 相对当前工作目录）与「官方启动器」（平台标准目录），`minecraft_root` 默认指向「当前目录」。
 动态表（`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序。配置加载按项
 容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它当错误、逐条
-打印后退出，GUI 在启动后弹窗提示（确认写回修复后的全局配置，忽略则不写）并继续使用修复
-后的配置。各配置段的默认值、解析与校验按段放在 `crates/dmcl/src/config/` 下的
+打印后退出。GUI 在启动后自动把修复后的全局配置写回文件，先把原文件备份为同目录的
+`dmcl.old.json`，再弹窗说明修复结果并继续使用修复后的配置。各配置段的默认值、解析与
+校验按段放在 `crates/dmcl/src/config/` 下的
 `account.rs` / `java.rs` / `root.rs` / `launch.rs` / `download.rs`；`mod.rs` 只负责整份
 文档的读写、逐项容错与跨段编排。
 

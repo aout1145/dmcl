@@ -1,13 +1,13 @@
-//! 配置加载警告的汇总弹窗。
+//! 全局配置修复提示。
 //!
-//! 正文用卡片逐条列出「采取的措施 + 错误类型」；「确认」把修复后的配置写回文件，
-//! 「忽略」只关窗口、不写文件。
+//! 配置加载时坏掉的项已经回退成默认值。GUI 启动后立即把修复后的配置写回文件，
+//! 并把原文件备份为同目录的 `dmcl.old.json`；弹窗只说明修复结果。
 
 use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
 
-use crate::config::ConfigError;
+use crate::config::{ConfigError, ConfigWarning};
 use crate::gui::gtk4::app::config_store;
 
 /// 配置警告卡片的全局样式。
@@ -23,59 +23,35 @@ pub(crate) const CSS: &str = "\
     padding: 12px;
 }";
 
-/// 弹一个汇总全部配置警告的模态框。
-pub(crate) fn show(parent: &impl IsA<gtk::Window>, error: &ConfigError) {
-    // AdwAlertDialog 没有按严重级别切换的内置外观，标题和图标都由 extra child 自己排。
-    let dialog = adw::AlertDialog::new(None, None);
-    dialog.add_response("ignore", "忽略");
-    dialog.add_response("confirm", "确认");
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Suggested);
-    // 写文件有副作用，默认响应放在「忽略」上，避免回车误写。
-    dialog.set_default_response(Some("ignore"));
-    dialog.set_close_response("ignore");
+/// 写回修复后的配置，并弹出说明结果的模态框。
+pub(crate) fn repair(parent: &impl IsA<gtk::Window>, error: &ConfigError) {
+    let window: gtk::Window = parent.clone().upcast();
+    let warnings = error.warnings.clone();
+    config_store::store().save_with_backup(move |result| match result {
+        Ok(()) => show_result(&window, &warnings, true),
+        Err(_) => show_result(&window, &warnings, false),
+    });
+}
 
+fn show_result(parent: &gtk::Window, warnings: &[ConfigWarning], repaired: bool) {
+    let body = repaired.then_some("已自动修复，原文件备份为 dmcl.old.json");
+    let dialog = adw::AlertDialog::new(Some("读取配置文件时发生错误"), body);
+    dialog.add_response("ok", "确定");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.set_extra_child(Some(&warning_cards(warnings)));
+    dialog.present(Some(parent));
+}
+
+fn warning_cards(warnings: &[ConfigWarning]) -> gtk::ScrolledWindow {
     relm4::view! {
         cards = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
             set_spacing: 8,
         },
-
-        content = gtk::Box {
-            set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 12,
-
-            gtk::Box {
-                set_orientation: gtk::Orientation::Horizontal,
-                set_spacing: 8,
-                set_halign: gtk::Align::Center,
-
-                gtk::Image::from_icon_name("dialog-warning-symbolic") {
-                    set_pixel_size: 32,
-                    add_css_class: "warning",
-                },
-
-                gtk::Label {
-                    set_label: "警告",
-                    add_css_class: "title-1",
-                },
-            },
-
-            gtk::Label {
-                set_label: "读取配置文件时发生错误",
-                set_halign: gtk::Align::Center,
-            },
-
-            gtk::ScrolledWindow {
-                set_hscrollbar_policy: gtk::PolicyType::Never,
-                set_max_content_height: 320,
-                set_propagate_natural_height: true,
-                set_child: Some(&cards),
-                add_css_class: "dmcl-config-warning-scroll",
-            },
-        }
     }
 
-    for warning in &error.warnings {
+    for warning in warnings {
         relm4::view! {
             card = gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
@@ -103,26 +79,14 @@ pub(crate) fn show(parent: &impl IsA<gtk::Window>, error: &ConfigError) {
         cards.append(&card);
     }
 
-    dialog.set_extra_child(Some(&content));
-
-    let window: gtk::Window = parent.clone().upcast();
-    let save_parent = window.clone();
-    dialog.connect_response(None, move |_, response| {
-        if response != "confirm" {
-            return;
-        }
-        // 修复后的配置已经在共享仓库里，空闭包只负责触发异步落盘。
-        let parent = save_parent.clone();
-        config_store::store().update(
-            |_| (),
-            move |err| {
-                let dialog = adw::AlertDialog::new(Some("保存配置失败"), Some(&format!("{err:#}")));
-                dialog.add_response("ok", "知道了");
-                dialog.set_default_response(Some("ok"));
-                dialog.set_close_response("ok");
-                dialog.present(Some(&parent));
-            },
-        );
-    });
-    dialog.present(Some(&window));
+    relm4::view! {
+        scroll = gtk::ScrolledWindow {
+            set_hscrollbar_policy: gtk::PolicyType::Never,
+            set_max_content_height: 320,
+            set_propagate_natural_height: true,
+            set_child: Some(&cards),
+            add_css_class: "dmcl-config-warning-scroll",
+        },
+    }
+    scroll
 }

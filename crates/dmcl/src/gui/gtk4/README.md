@@ -93,6 +93,8 @@
   本身不会监听外部状态，页面必须先收到一条消息。
 - `update` 自己负责异步落盘，并强制调用方传一个失败处理函数（在 GLib 主线程上执行）；
   保存内部串行化，连续修改时最后一次写入包含全部改动。`update` 必须在 GTK 主线程调用。
+- 启动时加载配置发现的问题由 `save_with_backup` 修复：先备份原文件为同目录的
+  `dmcl.old.json`，再写入修复后的配置。
 - 读 guard 要短命：`std::sync::RwLock` 不可重入，持着 guard 调 `update` 会自锁。
 - `minecraft_roots` 只增不减：配置新增 root 时根组件补建常驻主页；删除 root 不销毁页面，
   只从标题栏菜单移除；同名 root 改路径不热更新。
@@ -107,7 +109,7 @@ gtk4/
 │   ├── README.md                # app 层：根组件 / Shell / 共享配置 / PageHost / 标题栏 / toast
 │   ├── mod.rs
 │   ├── config_store.rs          # 全局共享配置：config() / update()
-│   ├── config_warning.rs        # 配置加载警告弹窗
+│   ├── config_warning.rs        # 配置修复结果弹窗
 │   ├── page_host.rs
 │   ├── shell.rs
 │   ├── toast.rs
