@@ -34,7 +34,7 @@ use crate::config::{ConfigError, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
-use crate::gui::gtk4::pages::settings::{GameOptionsPage, LauncherOptionsPage};
+use crate::gui::gtk4::pages::settings::PreferencesPage;
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::{PageHost, PageSlot};
 use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
@@ -51,10 +51,8 @@ enum AppMsg {
     },
     /// 共享配置改过了：补建新增 root 的主页，并刷新标题栏菜单。
     ConfigChanged,
-    /// 打开或聚焦启动器选项（应用级快捷键）。
-    OpenLauncherOptions,
-    /// 打开或聚焦全局游戏选项（应用级快捷键）。
-    OpenGameOptions,
+    /// 打开或聚焦首选项（应用级快捷键）。
+    OpenPreferences,
     /// 打开「关于」对话框（主菜单的应用级 action）。
     About,
     /// 某个标签已经被移除；清理对应页面的标签句柄。
@@ -79,10 +77,8 @@ struct AppModel {
     page_host: Rc<PageHost>,
     /// 所有 root 的主页；关闭标签只清空槽位的标签句柄，组件继续存活。
     homes: Vec<HomeSlot>,
-    /// 启动器选项：常驻页面，最多一个标签。
-    launcher_options: PageSlot<LauncherOptionsPage>,
-    /// 全局游戏选项：常驻页面，最多一个标签。
-    game_options: PageSlot<GameOptionsPage>,
+    /// 首选项：常驻页面，最多一个标签。
+    preferences: PageSlot<PreferencesPage>,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
     /// 共享配置的只读句柄，始终指向当前那份配置。
@@ -214,12 +210,8 @@ impl SimpleComponent for AppModel {
         }
 
         // 设置页同样是常驻页面；启动时创建，之后重复触发只聚焦已有标签。
-        let launcher_options = PageSlot {
-            controller: LauncherOptionsPage::builder().launch(()).detach(),
-            tab: None,
-        };
-        let game_options = PageSlot {
-            controller: GameOptionsPage::builder().launch(()).detach(),
+        let preferences = PageSlot {
+            controller: PreferencesPage::builder().launch(()).detach(),
             tab: None,
         };
 
@@ -239,8 +231,7 @@ impl SimpleComponent for AppModel {
             tasks: tasks_sender,
             page_host,
             homes,
-            launcher_options,
-            game_options,
+            preferences,
             shell,
             config,
             tab_view,
@@ -264,8 +255,7 @@ impl SimpleComponent for AppModel {
                     let _ = home.page.controller.sender().send(HomeMsg::ConfigChanged);
                 }
             }
-            AppMsg::OpenLauncherOptions => self.open_launcher_options(),
-            AppMsg::OpenGameOptions => self.open_game_options(),
+            AppMsg::OpenPreferences => self.open_preferences(),
             AppMsg::About => {
                 let _ = self.header.sender().send(HeaderMsg::About);
             }
@@ -284,8 +274,7 @@ impl SimpleComponent for AppModel {
                 for home in &mut self.homes {
                     home.page.close(&page);
                 }
-                self.launcher_options.close(&page);
-                self.game_options.close(&page);
+                self.preferences.close(&page);
                 self.sync_header_homes();
             }
             AppMsg::CloseRequested => {
@@ -312,14 +301,9 @@ impl AppModel {
         self.sync_header_homes();
     }
 
-    /// 打开或聚焦启动器选项。
-    fn open_launcher_options(&mut self) {
-        self.launcher_options.open(&self.tab_view, "启动器选项");
-    }
-
-    /// 打开或聚焦全局游戏选项。
-    fn open_game_options(&mut self) {
-        self.game_options.open(&self.tab_view, "全局游戏选项");
+    /// 打开或聚焦首选项。
+    fn open_preferences(&mut self) {
+        self.preferences.open(&self.tab_view, "首选项");
     }
 
     /// 新建实例页绑定到发出请求的主页 root。
@@ -382,22 +366,11 @@ impl AppModel {
 fn register_menu_actions(sender: &ComponentSender<AppModel>) {
     let app = relm4::main_adw_application();
 
-    let action = gtk::gio::SimpleAction::new("launcher-options", None);
+    let action = gtk::gio::SimpleAction::new("preferences", None);
     let action_sender = sender.clone();
-    action.connect_activate(move |_, _| action_sender.input(AppMsg::OpenLauncherOptions));
+    action.connect_activate(move |_, _| action_sender.input(AppMsg::OpenPreferences));
     app.add_action(&action);
-    app.set_accels_for_action("app.launcher-options", &["<Control>comma"]);
-
-    let action = gtk::gio::SimpleAction::new("game-options", None);
-    let action_sender = sender.clone();
-    action.connect_activate(move |_, _| action_sender.input(AppMsg::OpenGameOptions));
-    app.add_action(&action);
-    // Shift 会把逗号键的 keyval 变成 `<`（less）；两个都注册，保证 `Ctrl+Shift+,`
-    // 在不同键盘布局 / GDK 后端下都能触发。
-    app.set_accels_for_action(
-        "app.game-options",
-        &["<Control><Shift>comma", "<Control><Shift>less"],
-    );
+    app.set_accels_for_action("app.preferences", &["<Control>comma"]);
 
     let action = gtk::gio::SimpleAction::new("about", None);
     let action_sender = sender.clone();

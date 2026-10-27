@@ -356,8 +356,7 @@ GTK4 + libadwaita 前端在 `crates/dmcl/src/gui/gtk4`，用 relm4，由 cargo f
   任务卡片、警告确认；
 - [pages/home/README.md](crates/dmcl/src/gui/gtk4/pages/home/README.md)：主页、实例磁贴、
   启动 / 停止；
-- [pages/settings/README.md](crates/dmcl/src/gui/gtk4/pages/settings/README.md)：启动器选项、
-  全局游戏选项；
+- [pages/settings/README.md](crates/dmcl/src/gui/gtk4/pages/settings/README.md)：首选项；
 - [pages/download/README.md](crates/dmcl/src/gui/gtk4/pages/download/README.md)：下载域数据流、
   `InstanceSummary`、`VersionSelect`；
 - [pages/download/custom/README.md](crates/dmcl/src/gui/gtk4/pages/download/custom/README.md)：

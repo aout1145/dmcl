@@ -13,7 +13,7 @@
 - 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页和任务；主页的
   `HomeOut::CreateCustom` 打开新建实例页；`ConfigChanged` 给配置里新增的 root 补建主页
   并刷新标题栏菜单；`TabClosed` 清理对应页面的标签句柄并同步根目录勾选；主菜单和快捷键
-  共用 `app.*` action，分别发 `OpenLauncherOptions` / `OpenGameOptions` / `About`；
+  共用 `app.*` action，分别发 `OpenPreferences` / `About`；
   `TaskCenterOut` 负责任务角标与退出；
 - 所有标签都可以关闭。标签 `page-detached` 时发送 `TabClosed`，清理 `PageHost` 和各
   `PageSlot` 的标签句柄，但常驻页面继续存活；重新打开时把同一个根 widget 挂到新标签，
@@ -79,10 +79,10 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 - **一次性页面**（`CustomPage`）：实现 `Page`，`Init` 固定是 `PageInit`（`TabTitle` +
   页面自己的参数）。`PageHost::open_page::<C>(args)` 启动组件、`AdwTabView::append` 出
   标签页、绑好标题句柄、切到新标签页，并把控制器存进保活表；`page-detached` 时丢弃。
-- **常驻页面**（主页、启动器选项、全局游戏选项）：启动时创建组件，由 `PageSlot<C>` 直接
+- **常驻页面**（主页、首选项）：启动时创建组件，由 `PageSlot<C>` 直接
   持有 `Controller<C>` 和 `Option<AdwTabPage>`。`PageSlot::open` 在已打开时只聚焦，关闭后
   重新 append 同一个根 widget；`PageSlot::close` 只清空标签句柄，组件和页面状态继续保留。
-  设置页固定两个字段，主页按 root 名字存放在 `Vec<HomeSlot>` 里（`HomeSlot` 是
+  设置页固定一个字段，主页按 root 名字存放在 `Vec<HomeSlot>` 里（`HomeSlot` 是
   名字 + `PageSlot<HomePage>`），不需要字符串 key 或类型擦除注册表。
 
 `TabTitle` 是页面**直接**改标签标题、请求关闭自己的句柄（不经消息）：`open_page` 先启动
@@ -113,8 +113,8 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   `HeaderOut::Tasks` 打开任务对话框。
 - 最右侧的三点主菜单是 `GtkMenuButton` + `GtkPopoverMenu`，菜单结构由 `GMenu` 生成，
   和 GNOME 应用的主菜单同一条路径：普通项是 GTK 生成的 `GtkModelButton`，统一处理
-  行高、分隔线、助记符和右侧快捷键；设置项直接调用 `app.launcher-options` /
-  `app.game-options`，关于调用 `app.about`。外观切换是 `header/theme.rs` 里的独立子组件
+  行高、分隔线、助记符和右侧快捷键；首选项直接调用 `app.preferences`，
+  关于调用 `app.about`。外观切换是 `header/theme.rs` 里的独立子组件
   `ThemeSwitcher`，作为 `custom` child 插进 `GtkPopoverMenu` 的第一段。它照 GNOME Text
   Editor 的 `EditorThemeSelector` 实现：横向 `GtkBox` 间距 12、外边距 9，三个互斥
   `GtkCheckButton` 都 `hexpand` 并居中，色板本身是 44px 圆形，`radio` 指示器透明后挪到
@@ -127,14 +127,13 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 
 ## 快捷键与助记符
 
-- 应用级 action：`app.launcher-options`（`Ctrl+,`）、`app.game-options`
-  （`Ctrl+Shift+,`）、`app.about`，在根组件 `init` 里注册。前两个分别发
-  `AppMsg::OpenLauncherOptions` / `AppMsg::OpenGameOptions`，`app.about` 发
+- 应用级 action：`app.preferences`（`Ctrl+,`）、`app.about`，在根组件 `init` 里注册。
+  `app.preferences` 发 `AppMsg::OpenPreferences`，`app.about` 发
   `AppMsg::About` 再转给标题栏。
-- 菜单项由 `GMenu` 生成，标签里的 `_L` / `_G` / `_A` 就是 `GtkModelButton` 的助记符：
-  菜单打开时 `Alt+L` / `Alt+G` / `Alt+A` 直接激活对应 action，不需要手写 mnemonic widget。
+- 菜单项由 `GMenu` 生成，标签里的 `_P` / `_A` 就是 `GtkModelButton` 的助记符：
+  菜单打开时 `Alt+P` / `Alt+A` 直接激活对应 action，不需要手写 mnemonic widget。
 - 菜单右侧的快捷键来自 `GMenu` 项的 `accel` 属性，由 `GtkPopoverMenu` 按平台渲染成
-  `Ctrl+,` / `Shift+Ctrl+,` 这类纯文本。
+  `Ctrl+,` 这类纯文本。
 
 ## 标题栏 CSS
 

@@ -280,7 +280,7 @@ impl Header {
     }
 }
 
-/// 主菜单的 GMenu 结构：外观色板占位项 / 两个设置入口 / 关于。
+/// 主菜单的 GMenu 结构：外观色板占位项 / 首选项 / 关于。
 ///
 /// `accel` 是 GtkPopoverMenu 读取的菜单元数据；GTK 会把它渲染成菜单右侧的纯文本
 /// 快捷键提示。真正的键盘绑定仍由根组件注册到 `app.*` action 上。
@@ -295,14 +295,9 @@ fn primary_menu() -> gtk::gio::Menu {
 
     let options = gtk::gio::Menu::new();
     options.append_item(&menu_item(
-        "启动器选项(_L)",
-        "app.launcher-options",
+        "首选项(_P)",
+        "app.preferences",
         Some("<Control>comma"),
-    ));
-    options.append_item(&menu_item(
-        "全局游戏选项(_G)",
-        "app.game-options",
-        Some("<Control><Shift>comma"),
     ));
     menu.append_section(None, &options);
 

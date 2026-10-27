@@ -130,7 +130,7 @@ gtk4/
     │   ├── message.rs
     │   └── instance_card.rs
     ├── settings/
-    │   ├── README.md            # 启动器选项 / 全局游戏选项
+    │   ├── README.md            # 首选项
     │   └── mod.rs
     └── download/
         ├── README.md            # 下载域 / 公共组件 / 数据流
@@ -153,14 +153,14 @@ gtk4/
 | app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
 | 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
-| 设置页 | `LauncherOptionsPage`、`GameOptionsPage` | [pages/settings/README.md](pages/settings/README.md) |
+| 设置页 | `PreferencesPage` | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 
 ## 消息与边界
 
-消息按组件拆分，不集中在一个文件里。根组件接收标题栏的 `HeaderOut`（打开主页、设置页、
-任务窗口）、应用级快捷键的打开设置页消息和任务窗口的 `TaskCenterOut`（运行中数量角标），
+消息按组件拆分，不集中在一个文件里。根组件接收标题栏的 `HeaderOut`（打开主页、
+任务窗口）、应用级快捷键的打开首选项消息和任务窗口的 `TaskCenterOut`（运行中数量角标），
 页面与任务的动作彼此独立。页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件
 完整的消息表见对应目录的文档。
 
@@ -263,7 +263,7 @@ Debian / Ubuntu 的 `gtk4-broadwayd` 在 `libgtk-4-bin` 包里。等应用窗口
 - Forge 版本下拉的类别 chips（稳定 / 推荐）。
 - 实例分类下拉的启用与持久化。
 - 任务按钮的「运行中数量」角标。
-- 账号功能；启动器选项 / 全局游戏选项的正式设置内容。
+- 账号功能；首选项的正式设置内容。
 - 游戏异常退出的错误报告窗口（远期）。
 - 删除实例等破坏性操作。
 
