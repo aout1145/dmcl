@@ -154,7 +154,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 （`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序。配置加载按项
 容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它当错误、逐条
 打印后退出，GUI 在启动后弹窗提示（确认写回修复后的全局配置，忽略则不写）并继续使用修复
-后的配置。
+后的配置。各配置段的默认值、解析与校验按段放在 `crates/dmcl/src/config/` 下的
+`account.rs` / `java.rs` / `root.rs` / `launch.rs` / `download.rs`；`mod.rs` 只负责整份
+文档的读写、逐项容错与跨段编排。
 
 实例配置位于 `<minecraft_root>/versions/<version_name>/dmcl.json`，只写 `launch`，
 以全局 `launch` 为底逐字段覆盖；文件不存在时完全使用全局 `launch`。实例配置只读：
