@@ -413,6 +413,7 @@ dependencies = [
  "relm4",
  "serde",
  "serde_json",
+ "sha1",
  "tokio",
 ]
 
@@ -454,9 +455,6 @@ dependencies = [
  "dmcl-install",
  "dmcl-mcmeta",
  "dmcl-task",
- "hex",
- "indexmap",
- "serde",
  "serde_json",
  "sha1",
  "tokio",

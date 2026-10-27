@@ -5,7 +5,7 @@
 //! 1. **底层启动与安装解耦**。[`GameLauncher`] 只负责拼命令行与启动进程，
 //!    文件完整性由 [`dmcl_install::check_integrity`] 负责，**是否修复交给调用者**。
 //!    想要「缺了就补」的一站式流程时，用 [`launch_chain`]。
-//! 2. **不读全局配置**。java 的选择（[`JavaChoice`] + [`JavaConfigs`]）、
+//! 2. **不读全局配置**。java 的选择由调用者通过 [`JavaSelector`] 注入，
 //!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
 //!
 //! 一站式启动把「检查并补全 → 生成参数 → 启动」串成一条任务链（见 [`crate::prepare`]）：
@@ -38,8 +38,8 @@ pub mod prepare;
 
 pub use account::{sha1_uuid, Account, OfflineAccount};
 pub use java::{
-    default_java_roots, find_java, select_java, JavaChoice, JavaConfigs, JavaOption,
-    JAVA_AUTOSELECT,
+    auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption, JavaSelector,
+    ScanJava,
 };
 pub use launcher::GameLauncher;
 pub use monitor::GameMonitor;

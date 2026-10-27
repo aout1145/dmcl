@@ -55,7 +55,7 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
 | `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
-| `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存、java 选择与候选表）                |
+| `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存、`JavaSelector`）                   |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 这样每个业务 crate 都能被 GUI / TUI / 测试用自定义选项直接调用。
@@ -140,7 +140,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 
 ### `dmcl-launch` —— 启动
 
-账号、Java 选择、命令行生成、启动与状态监控，见下文「启动与安装解耦」。
+账号、Java 探测 / 扫描 / 自动选择、命令行生成、启动与状态监控，见下文「启动与安装解耦」。
+这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
+调用者实现的 `JavaSelector` 决定。
 
 ### `dmcl` —— 应用
 
@@ -296,12 +298,14 @@ monitor.wait().await?;
   每个缺失项带目标路径 + URL 模板 + 校验值 + 原因（缺失 / 内容不符）；它**不检查 natives**；
 - 它**不下载任何东西**：修复由调用者跑 `dmcl-install` 的 `game_files_task`（已存在的文件会被跳过）；
 - Java 选择不读全局配置：`default_java_roots()` 按平台给出常见安装目录与 `JAVA_HOME`，
-  `find_java(roots)` 只返回扫描结果（扫不到就是空表），`select_java(required_major,
-&choice, &configs)` 接收配置表；
+  `find_java(roots)` 只返回扫描结果（扫不到就是空列表），`auto_select_java(required_major,
+  &options)` 只按缓存的 `major` / `arch` 选择（版本相等优先，其次最接近的更高版本，再其次
+  最高的更低版本；同一档内优先当前平台架构）、不执行 Java；`LaunchOption` 通过
+  `Arc<dyn JavaSelector>` 取 Java，配置层把 `JavaConfig` 转成 `JavaOption` 后实现选择器；
 - 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 准备 natives → 生成参数 →
-  启动」串成一条 `TaskChain<(), GameMonitor>`：**准备 natives** 先选好 java，再按这个 java 的
-  os / arch 跑 `natives_task`（下载 + 解压到 `natives_dir`，目录名带 os / arch）；参数只在
-  文件齐备、java 选好后才生成，且生成参数复用同一个 java，不再选第二次。
+  启动」串成一条 `TaskChain<(), GameMonitor>`：**准备 natives** 先选好 java，再按当前平台的
+  os 与这个 java 的 arch 跑 `natives_task`（下载 + 解压到 `natives_dir`，目录名带 os / arch）；
+  参数只在文件齐备、java 选好后才生成，且生成参数复用同一个 java，不再选第二次。
 
 ### 6. 加载器安装
 
@@ -326,8 +330,8 @@ CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/m
 交互式菜单或配置编辑器。
 
 安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取、也不创建实例
-`dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、按路径去重后合并进
-全局 `javas` 并保存。
+`dmcl.json`。`search-java` 是唯一会写 Java 配置的命令，它扫描本机、按路径去重后把
+`path` / `major` / `arch` 合并进全局 `javas` 并保存；之后启动只读这份缓存，不再探测。
 
 GUI 的主页按根目录分标签：标题栏最左侧的根目录菜单负责打开 / 聚焦主页；每个
 主页右下角的悬浮 `+` 打开「创建实例」对话框，`CustomPage` 使用该主页捕获的

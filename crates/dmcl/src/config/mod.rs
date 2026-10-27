@@ -16,7 +16,13 @@
 //! {
 //!   "launch": { "java": "autoselect", "account": "player", … },
 //!   "accounts": { "player": { "type": "offline", "username": "player" } },
-//!   "javas": { "jdk-17": "/usr/lib/jvm/java-17/bin/java" },
+//!   "javas": {
+//!     "jdk-17": {
+//!       "path": "/usr/lib/jvm/java-17/bin/java",
+//!       "major": 17,
+//!       "arch": "x86_64"
+//!     }
+//!   },
 //!   "minecraft_roots": {
 //!     "当前目录": ".minecraft",
 //!     "官方启动器": "…"
@@ -39,6 +45,8 @@ mod root;
 
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
+pub(crate) use java::configs_from_details;
+pub use java::{JavaChoice, JavaConfig, JavaConfigs};
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
 
 use std::path::{Path, PathBuf};
@@ -46,7 +54,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_install::InstallOptions;
-use dmcl_launch::JavaConfigs;
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::source::DownloadSource;
 use indexmap::IndexMap;
@@ -418,7 +425,6 @@ pub(crate) fn temp_dir(label: &str) -> PathBuf {
 mod tests {
     use super::root::CURRENT_ROOT_NAME;
     use super::*;
-    use dmcl_launch::JavaChoice;
     use dmcl_mcmeta::source::MirrorPolicy;
 
     #[test]
@@ -432,7 +438,13 @@ mod tests {
             "accounts": {
                 "steve": { "type": "offline", "username": "Steve" }
             },
-            "javas": { "jdk": "/usr/lib/jvm/java-17/bin/java" },
+            "javas": {
+                "jdk": {
+                    "path": "/usr/lib/jvm/java-17/bin/java",
+                    "major": 17,
+                    "arch": "x86_64"
+                }
+            },
             "minecraft_roots": { "test": "/mc" },
             "minecraft_root": "test",
             "download": { "mirror": "mirror-first", "skip_music": true }
@@ -450,7 +462,11 @@ mod tests {
         );
         assert_eq!(
             config.javas.get("jdk"),
-            Some(&PathBuf::from("/usr/lib/jvm/java-17/bin/java"))
+            Some(&JavaConfig {
+                path: PathBuf::from("/usr/lib/jvm/java-17/bin/java"),
+                major: 17,
+                arch: dmcl_mcmeta::os::Arch::X86_64,
+            })
         );
         assert_eq!(config.root_path("test").unwrap(), absolute("/mc"));
         assert_eq!(config.minecraft_root, "test");
@@ -622,9 +638,14 @@ mod tests {
         let mut config = Config::default();
         config.download.max_tasks = 8;
         config.download.skip_music = true;
-        config
-            .javas
-            .insert("jdk".to_string(), PathBuf::from("/nonexistent/bin/java"));
+        config.javas.insert(
+            "jdk".to_string(),
+            JavaConfig {
+                path: PathBuf::from("/nonexistent/bin/java"),
+                major: 17,
+                arch: dmcl_mcmeta::os::Arch::X86_64,
+            },
+        );
         config.launch.java = JavaChoice::Named("jdk".to_string());
 
         let root = dir.join("mc");

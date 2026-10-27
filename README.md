@@ -164,7 +164,11 @@ macOS `~/Library/Application Support`）。
     "player": { "type": "offline", "username": "player" }
   },
   "javas": {
-    "jdk-17": "/usr/lib/jvm/java-17/bin/java"
+    "jdk-17": {
+      "path": "/usr/lib/jvm/java-17/bin/java",
+      "major": 17,
+      "arch": "x86_64"
+    }
   },
   "minecraft_roots": {
     "当前目录": ".minecraft",
@@ -184,6 +188,9 @@ macOS `~/Library/Application Support`）。
 ```
 
 - `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
+- `javas` 的每一项只接受 `{ "path", "major", "arch" }` 对象，记录可执行文件路径、大版本号与
+  架构。已经有条目时，启动直接用这两个缓存字段选择 Java，不再执行 `java -version`；`javas`
+  为空且自动选择时仍会扫描常见目录。Java 换版本或换架构后重跑 `dmcl search-java` 刷新。
 - `search-java` 自动生成的 `javas` 名字形如
   `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。

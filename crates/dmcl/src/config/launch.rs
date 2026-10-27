@@ -1,13 +1,16 @@
 //! `launch.*` 段、实例覆盖，以及启动 Options 转换。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_launch::{JavaChoice, JavaConfigs, LaunchOption, LAUNCHER_NAME};
+use dmcl_launch::{LaunchOption, LAUNCHER_NAME};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use super::{account, java, AccountConfig, Config, ConfigError, ConfigWarning};
+use super::{
+    account, java, AccountConfig, Config, ConfigError, ConfigWarning, JavaChoice, JavaConfigs,
+};
 
 /// 全局 `launch.*` 段，也是实例覆盖后的结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,7 +192,10 @@ impl Config {
     ) -> Result<LaunchOption> {
         let account = self.selected_account(launch)?;
         let mut option = LaunchOption::new(account, root.to_path_buf(), version_name)
-            .with_java(launch.java.clone(), self.javas.clone())
+            .with_java(Arc::new(java::ConfigJava {
+                choice: launch.java.clone(),
+                configs: self.javas.clone(),
+            }))
             .with_local_layout(self.download.skip_music);
         option.window_width = launch.window_width;
         option.window_height = launch.window_height;
@@ -233,7 +239,7 @@ fn instance_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::temp_dir;
+    use crate::config::{temp_dir, JavaConfig};
 
     #[test]
     fn default_launch_uses_player_and_autoselect() {
@@ -396,9 +402,14 @@ mod tests {
         config.launch.custom_info = "test".to_string();
         config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
         config.launch.additional_game = "--foo bar".to_string();
-        config
-            .javas
-            .insert("jdk".to_string(), PathBuf::from("/nonexistent/bin/java"));
+        config.javas.insert(
+            "jdk".to_string(),
+            JavaConfig {
+                path: PathBuf::from("/nonexistent/bin/java"),
+                major: 17,
+                arch: dmcl_mcmeta::os::Arch::X86_64,
+            },
+        );
         config.launch.java = JavaChoice::Named("jdk".to_string());
 
         let option = config

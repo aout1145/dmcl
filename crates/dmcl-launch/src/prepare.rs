@@ -2,8 +2,8 @@
 //!
 //! * [`PrepareLaunchFilesTask`]（`Task<(), IntegrityStatus>`）——「检查文件完整性；
 //!   缺件时跑一次 `dmcl-install` 补全」，产出完整性检查结果；
-//! * [`PrepareNativesTask`]（`Task<IntegrityStatus, JavaOption>`）——先按配置选好 java，
-//!   再按这个 java 的 os / arch 下载 + 解压 natives（natives 只有在选好 java 后才能确定）；
+//! * [`PrepareNativesTask`]（`Task<IntegrityStatus, JavaOption>`）——先通过选择器选好 java，
+//!   再按当前平台的 os 与 java 的 arch 下载 + 解压 natives（natives 只有在选好 java 后才能确定）；
 //! * [`GenerateArgsTask`]（`Task<JavaOption, PreparedLaunch>`）——用已经选好的 java
 //!   生成启动参数，产出 [`PreparedLaunch`]；
 //! * [`LaunchTask`]（`Task<PreparedLaunch, GameMonitor>`）——用已生成的参数启动子进程，
@@ -21,9 +21,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use dmcl_install::{InstallOptions, IntegrityStatus};
 use dmcl_mcmeta::layout::read_version_json_safe;
+use dmcl_mcmeta::os::Os;
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
-use crate::java::{select_java, JavaOption};
+use crate::java::JavaOption;
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
@@ -78,7 +79,7 @@ impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
     }
 }
 
-/// 按配置选好 java，并按这个 java 的 os / arch 下载 + 解压 natives。
+/// 通过选择器选好 java，并按当前平台的 os 与 java 的 arch 下载 + 解压 natives。
 ///
 /// natives 的分类器（`natives-linux-64` 之类）取决于运行游戏的 JVM 架构，所以必须在
 /// 选好 java 之后才能确定要下哪一个、解到哪个目录。
@@ -106,23 +107,23 @@ impl Task<IntegrityStatus, JavaOption> for PrepareNativesTask {
         Box::pin(async move {
             let json =
                 read_version_json_safe(&self.option.root_path, &self.option.version_name).await?;
-            let java = select_java(
-                json.required_java_major(),
-                &self.option.java,
-                &self.option.java_configs,
-            )
-            .await?;
+            let java = self
+                .option
+                .java
+                .select_java(json.required_java_major())
+                .await?;
             ctx.log(format!(
-                "使用 java {}（{} / {}）",
-                java.version_str,
-                java.os.mc_name(),
+                "使用 Java {}：{}（{} / {}）",
+                java.major,
+                java.path.display(),
+                Os::current().mc_name(),
                 java.arch.name()
             ));
 
             let chain = dmcl_install::natives_task(
                 self.install.clone(),
                 self.option.version_name.clone(),
-                java.os,
+                Os::current(),
                 java.arch,
             );
             Task::<(), ()>::run(&chain, (), ctx).await?;
@@ -216,7 +217,7 @@ pub fn launch_chain(
 mod tests {
     use super::*;
     use crate::account::OfflineAccount;
-    use crate::java::{JavaChoice, JavaConfigs, JavaOption};
+    use crate::java::JavaDetails;
     use dmcl_mcmeta::source::DownloadSource;
     use std::sync::Arc;
 
@@ -252,19 +253,17 @@ mod tests {
     }
 
     /// 找一个能用的 java 可执行文件；本机没有就返回 `None`（跳过测试）。
-    async fn any_java() -> Option<PathBuf> {
+    async fn any_java() -> Option<JavaOption> {
         for candidate in [
             "/usr/bin/java",
             "/lib/jvm/java-27-openjdk/bin/java",
             "/lib/jvm/java-8-openjdk/jre/bin/java",
         ] {
             let path = PathBuf::from(candidate);
-            if JavaOption::probe(path.clone())
-                .await
-                .map(|java| java.is_usable())
-                .unwrap_or(false)
-            {
-                return Some(path);
+            if let Ok(java) = JavaDetails::probe(path).await {
+                if java.is_usable() {
+                    return Some(java.option);
+                }
             }
         }
         None
@@ -294,11 +293,9 @@ mod tests {
             .await
             .unwrap();
 
-        let mut configs = JavaConfigs::new();
-        configs.insert("test".to_string(), java);
         let option =
             LaunchOption::new(Arc::new(OfflineAccount::new("player")), root.clone(), "1.0")
-                .with_java(JavaChoice::Named("test".to_string()), configs);
+                .with_java(Arc::new(java));
 
         let integrity = PrepareLaunchFilesTask::new(install_options(&root), "1.0")
             .run((), TaskContext::detached("检查并补全文件"))
@@ -310,7 +307,7 @@ mod tests {
             .run(integrity, TaskContext::detached("准备 natives"))
             .await
             .unwrap();
-        assert!(java.is_usable());
+        assert!(java.major > 0);
 
         let prepared = GenerateArgsTask::new(option)
             .run(java, TaskContext::detached("生成启动参数"))

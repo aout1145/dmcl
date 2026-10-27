@@ -1,5 +1,7 @@
 //! 平台相关的名字与约定。
 
+use serde::{Deserialize, Serialize};
+
 // 只支持这三个平台；其它平台直接编译失败，而不是运行时报错。
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 compile_error!("dmcl 目前只支持 Windows / macOS / Linux");
@@ -52,10 +54,13 @@ impl Os {
 ///
 /// 既要给 Minecraft natives 分类器的 `${arch}`（只有 32 / 64），也要给 natives
 /// 目录名一个可读的架构名（`x86_64` 之类）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Arch {
+    #[serde(rename = "x86")]
     X86,
+    #[serde(rename = "x86_64")]
     X86_64,
+    #[serde(rename = "aarch64")]
     Aarch64,
 }
 
@@ -86,6 +91,14 @@ impl Arch {
             "x86" | "x86_32" | "i386" | "i486" | "i586" | "i686" => Some(Arch::X86),
             _ => None,
         }
+    }
+
+    /// 当前运行平台的 CPU 架构；无法识别时返回 `None`。
+    ///
+    /// 用编译目标（`std::env::consts::ARCH`）而不是 java 的 `os.arch` 属性，
+    /// 避免为拿平台架构去执行 Java。
+    pub fn current() -> Option<Self> {
+        Self::from_java_name(std::env::consts::ARCH)
     }
 }
 
@@ -136,6 +149,13 @@ mod tests {
         assert_eq!(Arch::from_java_name("arm64"), Some(Arch::Aarch64));
         assert_eq!(Arch::from_java_name("i386"), Some(Arch::X86));
         assert_eq!(Arch::from_java_name("sparc"), None);
+
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(Arch::current(), Some(Arch::X86_64));
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(Arch::current(), Some(Arch::Aarch64));
+        #[cfg(target_arch = "x86")]
+        assert_eq!(Arch::current(), Some(Arch::X86));
     }
 
     #[test]
@@ -145,6 +165,19 @@ mod tests {
         assert_eq!(Arch::Aarch64.mc_bits(), "64");
         assert_eq!(Arch::X86_64.name(), "x86_64");
         assert_eq!(Arch::Aarch64.name(), "aarch64");
+    }
+
+    #[test]
+    fn arch_round_trips_through_its_directory_name() {
+        for (arch, name) in [
+            (Arch::X86, "x86"),
+            (Arch::X86_64, "x86_64"),
+            (Arch::Aarch64, "aarch64"),
+        ] {
+            let text = serde_json::to_string(&arch).unwrap();
+            assert_eq!(text, format!("\"{name}\""));
+            assert_eq!(serde_json::from_str::<Arch>(&text).unwrap(), arch);
+        }
     }
 
     #[test]

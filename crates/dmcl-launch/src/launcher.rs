@@ -12,13 +12,13 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
-use dmcl_mcmeta::os::classpath_separator;
+use dmcl_mcmeta::os::{classpath_separator, Arch, Os};
 use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
 use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
 
 use crate::account::Account;
-use crate::java::{select_java, JavaOption};
+use crate::java::JavaOption;
 use crate::monitor::GameMonitor;
 use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 
@@ -167,27 +167,35 @@ impl GameLauncher {
             .await
     }
 
-    /// 同 [`GameLauncher::gen_args`]，但把「java 版本不匹配」等需要用户确认的警告
+    /// 同 [`GameLauncher::gen_args`]，但把「Java 版本 / 架构不匹配」等需要用户确认的警告
     /// 通过 `ctx` 上报，并**等待前端决定**是否继续。
     pub async fn gen_args_in(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
-        // java 路径；已经选好就直接用，否则按配置选一个。版本不匹配时先问用户。
+        // Java 路径；已经选好就直接用，否则按配置选一个。版本或架构不匹配时先问用户。
         let required_major = self.json.required_java_major();
         let java = match &self.java {
             Some(java) => java.clone(),
-            None => {
-                select_java(required_major, &self.option.java, &self.option.java_configs).await?
-            }
+            None => self.option.java.select_java(required_major).await?,
         };
-        if java.major_version != required_major {
-            ctx.confirm(format!(
-                "使用的 java 版本不匹配（需要 {required_major}，实际用 {}）",
-                java.major_version
-            ))
-            .await?;
+        let mut mismatches = Vec::new();
+        if java.major != required_major {
+            mismatches.push(format!(
+                "Java 版本不匹配（需要 {required_major}，实际为 {}）",
+                java.major
+            ));
+        }
+        if let Some(host) = Arch::current().filter(|host| *host != java.arch) {
+            mismatches.push(format!(
+                "Java 架构与当前平台不一致（Java 为 {}，平台为 {}）",
+                java.arch.name(),
+                host.name()
+            ));
+        }
+        if !mismatches.is_empty() {
+            ctx.confirm(mismatches.join("；")).await?;
         }
 
-        // natives 目录按所选 java 的 os / arch 区分
-        let natives_directory = natives_dir(&self.option.version_name, java.os, java.arch)
+        // natives 目录按运行平台的 os 与所选 java 的 arch 区分
+        let natives_directory = natives_dir(&self.option.version_name, Os::current(), java.arch)
             .to_string_lossy()
             .into_owned();
 
@@ -418,7 +426,7 @@ pub(crate) fn spawn_game(version_path: &std::path::Path, args: &[String]) -> Res
 mod tests {
     use super::*;
     use crate::account::OfflineAccount;
-    use dmcl_mcmeta::os::{Arch, Os};
+    use dmcl_mcmeta::os::Arch;
     use std::sync::Arc;
 
     /// "同名库保留最新版本"这一步现在依赖 `version-compare`。这些是 Minecraft
@@ -445,11 +453,8 @@ mod tests {
             version_path,
             java: Some(JavaOption {
                 path: PathBuf::from("/usr/bin/java"),
-                type_: "openjdk".to_string(),
+                major: 17,
                 arch: Arch::X86_64,
-                os: Os::current(),
-                major_version: 17,
-                version_str: "17.0.2".to_string(),
             }),
             json,
         }

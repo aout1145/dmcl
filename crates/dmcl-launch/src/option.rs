@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dmcl_install::PlanContext;
 
 use crate::account::Account;
-use crate::java::{JavaChoice, JavaConfigs};
+use crate::java::{JavaSelector, ScanJava};
 
 /// 启动器名字（替换 `${launcher_name}`）。
 pub const LAUNCHER_NAME: &str = "dmcl";
@@ -34,10 +34,8 @@ pub struct LaunchOption {
     pub custom_info: String,
     pub additional_jvm: Vec<String>,
     pub additional_game: Vec<String>,
-    /// 用哪个 java（默认自动选择）。
-    pub java: JavaChoice,
-    /// 候选 java 表（自动选择时用）。
-    pub java_configs: JavaConfigs,
+    /// 怎么选 java（默认扫描本机常见目录后自动选择）。
+    pub java: Arc<dyn JavaSelector>,
     /// 跳过 `*.ogg` 资源（完整性检查时也要一致，否则会把音乐报成缺失）。
     pub skip_music: bool,
 }
@@ -52,7 +50,6 @@ impl fmt::Debug for LaunchOption {
             .field("window_height", &self.window_height)
             .field("min_memory", &self.min_memory)
             .field("max_memory", &self.max_memory)
-            .field("java", &self.java)
             .finish_non_exhaustive()
     }
 }
@@ -78,16 +75,14 @@ impl LaunchOption {
                 "-Dfml.ignorePatchDiscrepancies=True".to_string(),
             ],
             additional_game: Vec::new(),
-            java: JavaChoice::Auto,
-            java_configs: JavaConfigs::new(),
+            java: Arc::new(ScanJava),
             skip_music: false,
         }
     }
 
-    /// 指定 java 选择方式与候选表。
-    pub fn with_java(mut self, choice: JavaChoice, configs: JavaConfigs) -> Self {
-        self.java = choice;
-        self.java_configs = configs;
+    /// 指定 java 选择器。
+    pub fn with_java(mut self, java: Arc<dyn JavaSelector>) -> Self {
+        self.java = java;
         self
     }
 
@@ -110,6 +105,8 @@ impl LaunchOption {
 mod tests {
     use super::*;
     use crate::account::OfflineAccount;
+    use crate::java::JavaOption;
+    use dmcl_mcmeta::os::Arch;
 
     #[test]
     fn defaults_match_the_original_struct() {
@@ -124,21 +121,22 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         assert!(option.additional_game.is_empty());
-        assert!(option.java.is_auto());
         assert_eq!(
             dmcl_mcmeta::layout::version_dir(&option.root_path, &option.version_name),
             PathBuf::from("/mc/versions/1.20.1")
         );
     }
 
-    #[test]
-    fn java_selection_can_be_supplied_by_the_caller() {
-        let mut configs = JavaConfigs::new();
-        configs.insert("jdk17".to_string(), PathBuf::from("/opt/jdk17/bin/java"));
+    #[tokio::test]
+    async fn java_selection_can_be_supplied_by_the_caller() {
+        let java = JavaOption {
+            path: PathBuf::from("/opt/jdk17/bin/java"),
+            major: 17,
+            arch: Arch::X86_64,
+        };
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.20.1")
-            .with_java(JavaChoice::Named("jdk17".to_string()), configs);
-        assert_eq!(option.java, JavaChoice::Named("jdk17".to_string()));
-        assert!(option.java_configs.contains_key("jdk17"));
+            .with_java(Arc::new(java.clone()));
+        assert_eq!(option.java.select_java(17).await.unwrap(), java);
         assert!(format!("{option:?}").contains('p'));
     }
 }

@@ -1,25 +1,136 @@
-//! Java 探测与选择。
+//! Java 探测、扫描与自动选择。
 //!
-//! **这里不碰配置**：配置表由调用者传入 / 接收（见 [`JavaConfigs`]）。
+//! 这里只处理**运行时的 Java 信息**：可执行文件路径、大版本、架构，以及探测得到的
+//! 厂商 / 完整版本。配置表（名字 → 配置项）由调用者维护，通过
+//! [`JavaSelector`] 注入选择结果；本模块不依赖 `IndexMap`。
 
 use std::collections::BTreeMap;
 use std::env;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_mcmeta::os::{Arch, Os};
-use indexmap::IndexMap;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sha1::{Digest, Sha1};
+use dmcl_mcmeta::os::Arch;
+use dmcl_task::BoxFuture;
 use walkdir::WalkDir;
 
-/// java 配置表：名字 → 可执行文件，保持顺序。
-pub type JavaConfigs = IndexMap<String, PathBuf>;
+/// 选择 Java 所需的最小信息：路径、大版本、架构。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JavaOption {
+    /// java 可执行文件。
+    pub path: PathBuf,
+    /// 大版本号（`1.8` ⇒ 8，`17.0.2` ⇒ 17）。
+    pub major: u32,
+    /// JVM 架构（`os.arch`）。
+    pub arch: Arch,
+}
 
-/// 表示「自动选择」的哨兵字符串。
-pub const JAVA_AUTOSELECT: &str = "autoselect";
+/// 探测得到的 Java 详细信息。
+#[derive(Debug, Clone)]
+pub struct JavaDetails {
+    /// 选择 Java 所需的信息。
+    pub option: JavaOption,
+    /// 厂商 / 类型，`java -version` 输出的第一个词（例如 `openjdk`）。
+    pub type_: String,
+    /// 完整版本字符串（`17.0.2`）。
+    pub version_str: String,
+}
+
+impl JavaDetails {
+    /// 探测一个 java 可执行文件。
+    ///
+    /// 用 `-XshowSettings:properties -version`：一次调用既能拿到版本横幅，又能拿到
+    /// `os.arch`（`java -version` 给不出 `x86_64` 这种信息）。
+    pub async fn probe(path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        let mut command = tokio::process::Command::new(&path);
+        command
+            .arg("-XshowSettings:properties")
+            .arg("-version")
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+            .await
+            .map_err(|_| anyhow!("探测 {} 超时", path.display()))?
+            .with_context(|| {
+                format!(
+                    "无法执行 {} -XshowSettings:properties -version",
+                    path.display()
+                )
+            })?;
+
+        // 属性与版本横幅通常都打在 stderr，有的实现写在 stdout，两个都收着
+        let mut raw = String::from_utf8_lossy(&output.stderr).into_owned();
+        raw.push_str(&String::from_utf8_lossy(&output.stdout));
+
+        let property = |key: &str| {
+            raw.lines()
+                .find_map(|line| line.trim().strip_prefix(key))
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+
+        let version_str = {
+            let property_version = property("java.version = ");
+            if property_version.is_empty() {
+                banner_version(&raw).unwrap_or_default()
+            } else {
+                property_version
+            }
+        };
+        let major = major_version_of(&version_str).unwrap_or(0);
+        let type_ = banner_type(&raw).unwrap_or("java").to_string();
+
+        // 架构必须能从 `os.arch` 认出来：认不出就报错，让调用者跳过这个 java，
+        // 而不是猜一个（natives 的 classifier 全押在它上面）
+        let os_arch = property("os.arch = ");
+        let arch = Arch::from_java_name(&os_arch).ok_or_else(|| {
+            anyhow!(
+                "无法确定 {} 的架构（os.arch = {os_arch:?}）",
+                path.display()
+            )
+        })?;
+
+        Ok(Self {
+            option: JavaOption { path, major, arch },
+            type_,
+            version_str,
+        })
+    }
+
+    /// 探测是否得到了可用的版本号。
+    pub fn is_usable(&self) -> bool {
+        self.option.major > 0
+    }
+}
+
+/// 按版本要求提供 Java；由调用者（配置层）实现。
+pub trait JavaSelector: Send + Sync {
+    /// 返回满足 `required_major` 的 Java。
+    fn select_java<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>>;
+}
+
+/// 一个已经确定的 Java 可以直接当选择器用。
+impl JavaSelector for JavaOption {
+    fn select_java<'a>(&'a self, _required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
+        Box::pin(async move { Ok(self.clone()) })
+    }
+}
+
+/// 没有配置表时的默认选择器：扫描本机常见目录后自动挑选。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanJava;
+
+impl JavaSelector for ScanJava {
+    fn select_java<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
+        Box::pin(async move {
+            let details = find_java(&default_java_roots()).await;
+            let options: Vec<JavaOption> = details.into_iter().map(|java| java.option).collect();
+            auto_select_java(required_major, &options)
+                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中提供 Java 路径"))
+        })
+    }
+}
 
 /// 本机默认的 java 扫描目录（按平台）。
 ///
@@ -147,176 +258,6 @@ fn child_dirs_with_prefix(base: &Path, prefixes: &[&str]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `launch.java` —— 要么自动选择，要么是 [`JavaConfigs`] 里的一个键。
-///
-/// 序列化成普通字符串（`"autoselect"` 或配置项名字），因此配置文件里直接写即可。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum JavaChoice {
-    /// 写成 `"autoselect"`。
-    #[default]
-    Auto,
-    /// [`JavaConfigs`] 里某一项的名字。
-    Named(String),
-}
-
-impl JavaChoice {
-    pub fn as_str(&self) -> &str {
-        match self {
-            JavaChoice::Auto => JAVA_AUTOSELECT,
-            JavaChoice::Named(name) => name,
-        }
-    }
-
-    /// 是否自动选择。
-    pub fn is_auto(&self) -> bool {
-        matches!(self, JavaChoice::Auto)
-    }
-}
-
-impl From<&str> for JavaChoice {
-    fn from(raw: &str) -> Self {
-        if raw == JAVA_AUTOSELECT {
-            JavaChoice::Auto
-        } else {
-            JavaChoice::Named(raw.to_string())
-        }
-    }
-}
-
-impl fmt::Display for JavaChoice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for JavaChoice {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for JavaChoice {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(JavaChoice::from(
-            String::deserialize(deserializer)?.as_str(),
-        ))
-    }
-}
-
-/// 一个探测过的 java 可执行文件。
-#[derive(Debug, Clone)]
-pub struct JavaOption {
-    /// java 可执行文件。
-    pub path: PathBuf,
-    /// 厂商 / 类型，`java -version` 输出的第一个词（例如 `openjdk`）。
-    pub type_: String,
-    /// JVM 所在的操作系统（`os.name`）。
-    pub os: Os,
-    /// JVM 架构（`os.arch`）。
-    pub arch: Arch,
-    /// 大版本号（`1.8` ⇒ 8，`17.0.2` ⇒ 17）。
-    pub major_version: u32,
-    /// 完整版本字符串（`17.0.2`）。
-    pub version_str: String,
-}
-
-impl JavaOption {
-    /// 探测一个 java 可执行文件。
-    ///
-    /// 用 `-XshowSettings:properties -version`：一次调用既能拿到版本横幅，又能拿到
-    /// `os.name` / `os.arch`（`java -version` 给不出 `linux` / `x86_64` 这种平台信息）。
-    pub async fn probe(path: impl Into<PathBuf>) -> Result<Self> {
-        let path = path.into();
-        let mut command = tokio::process::Command::new(&path);
-        command
-            .arg("-XshowSettings:properties")
-            .arg("-version")
-            .kill_on_drop(true);
-        let output = tokio::time::timeout(Duration::from_secs(10), command.output())
-            .await
-            .map_err(|_| anyhow!("探测 {} 超时", path.display()))?
-            .with_context(|| {
-                format!(
-                    "无法执行 {} -XshowSettings:properties -version",
-                    path.display()
-                )
-            })?;
-
-        // 属性与版本横幅通常都打在 stderr，有的实现写在 stdout，两个都收着
-        let mut raw = String::from_utf8_lossy(&output.stderr).into_owned();
-        raw.push_str(&String::from_utf8_lossy(&output.stdout));
-
-        let property = |key: &str| {
-            raw.lines()
-                .find_map(|line| line.trim().strip_prefix(key))
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        };
-
-        let version_str = {
-            let property_version = property("java.version = ");
-            if property_version.is_empty() {
-                banner_version(&raw).unwrap_or_default()
-            } else {
-                property_version
-            }
-        };
-        let major_version = major_version_of(&version_str).unwrap_or(0);
-        let type_ = banner_type(&raw).unwrap_or("java").to_string();
-
-        // 架构必须能从 `os.arch` 认出来：认不出就报错，让调用者跳过这个 java，
-        // 而不是猜一个（natives 的 classifier 全押在它上面）
-        let os_arch = property("os.arch = ");
-        let arch = Arch::from_java_name(&os_arch).ok_or_else(|| {
-            anyhow!(
-                "无法确定 {} 的架构（os.arch = {os_arch:?}）",
-                path.display()
-            )
-        })?;
-        let os = Os::from_java_name(&property("os.name = ")).unwrap_or_else(Os::current);
-
-        Ok(Self {
-            path,
-            type_,
-            os,
-            arch,
-            major_version,
-            version_str,
-        })
-    }
-
-    /// 探测是否得到了可用的版本号。
-    pub fn is_usable(&self) -> bool {
-        self.major_version > 0
-    }
-
-    /// 探测结果对应的配置项名字。
-    ///
-    /// 格式为 `{type}-{os}-{arch}-{version}-{hash}`，`hash` 是规范化可执行文件路径的
-    /// SHA-1 前 4 字节，用来区分同版本、同平台但安装在不同路径的 Java。
-    pub fn config_name(&self) -> String {
-        format!(
-            "{}-{}-{}-{}-{}",
-            self.type_,
-            self.os.mc_name(),
-            self.arch.name(),
-            self.version_str,
-            path_hash(&self.path)
-        )
-    }
-}
-
-/// 规范化路径的 SHA-1 前 4 字节（8 位十六进制）。
-fn path_hash(path: &Path) -> String {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let digest = Sha1::digest(canonical.as_os_str().as_encoded_bytes());
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}",
-        digest[0], digest[1], digest[2], digest[3]
-    )
-}
-
 /// 版本横幅那一行：不缩进、且带着空格分隔的 `version`（属性行都缩进，
 /// 首行是 `Property settings:`；`Picked up ...` 行不会命中）。
 fn banner_line(raw: &str) -> Option<&str> {
@@ -356,10 +297,10 @@ fn leading_digits(text: &str) -> Option<u32> {
     }
 }
 
-/// 扫描目录里的 `java` 可执行文件。
+/// 扫描目录里的 `java` 可执行文件，返回探测成功的详细信息。
 ///
-/// **只返回结果，不写配置**；扫不到或全部探测失败时返回空表。
-pub async fn find_java(roots: &[impl AsRef<Path>]) -> JavaConfigs {
+/// **只返回结果，不写配置**；扫不到或全部探测失败时返回空列表。
+pub async fn find_java(roots: &[impl AsRef<Path>]) -> Vec<JavaDetails> {
     let mut roots_to_scan: BTreeMap<PathBuf, PathBuf> = BTreeMap::new();
     for root in roots {
         let root = root.as_ref();
@@ -389,134 +330,137 @@ pub async fn find_java(roots: &[impl AsRef<Path>]) -> JavaConfigs {
         }
     }
 
-    let mut configs = JavaConfigs::new();
+    let mut found = Vec::new();
     for path in candidates.values() {
         // 跳过探测失败或版本不可用的文件：一个野文件不该让整次搜索失败
-        let Ok(java) = JavaOption::probe(path.clone()).await else {
+        let Ok(java) = JavaDetails::probe(path.clone()).await else {
             continue;
         };
-        if !java.is_usable() {
-            continue;
+        if java.is_usable() {
+            found.push(java);
         }
-        let base = java.config_name();
-        let mut name = base.clone();
-        let mut suffix = 2;
-        // 短哈希理论上仍可能碰撞；真碰上就再补一个序号，保证配置键唯一。
-        while configs.contains_key(&name) {
-            name = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-        configs.insert(name, java.path);
     }
-    configs
+    found
 }
 
-/// 按调用者给的选择挑一个 java。
+/// 从候选里挑最合适的 Java。
 ///
-/// * [`JavaChoice::Named`]：直接用配置表里的那一项；
-/// * [`JavaChoice::Auto`]：找与 `required_major` 最接近的（优先完全相等）。
-///
-/// 配置表为空且是自动选择时，会现场扫一遍 [`default_java_roots`]（**不写回配置**）。
-pub async fn select_java(
-    required_major: u32,
-    choice: &JavaChoice,
-    configs: &JavaConfigs,
-) -> Result<JavaOption> {
-    let scanned = if choice.is_auto() && configs.is_empty() {
-        Some(find_java(&default_java_roots()).await)
-    } else {
-        None
-    };
-    let configs = scanned.as_ref().unwrap_or(configs);
-    if configs.is_empty() {
-        return Err(anyhow!(
-            "没有找到可用的 Java，请先安装 Java 或提供 Java 路径"
-        ));
-    }
-
-    let name = match choice {
-        JavaChoice::Named(name) => name.clone(),
-        JavaChoice::Auto => auto_select_java(required_major, configs).await?,
-    };
-
-    let path = configs
-        .get(&name)
+/// 只读缓存的 `major` / `arch`，不执行任何 Java。优先级：
+/// 1. 大版本完全相等；
+/// 2. 高于要求且最接近的；
+/// 3. 低于要求且最高的；
+///    同一档内优先当前平台架构，再按候选顺序。
+pub fn auto_select_java(required_major: u32, options: &[JavaOption]) -> Option<JavaOption> {
+    let host_arch = Arch::current();
+    options
+        .iter()
+        .min_by_key(|java| {
+            let (tier, distance) = match java.major.cmp(&required_major) {
+                std::cmp::Ordering::Equal => (0, 0),
+                std::cmp::Ordering::Greater => (1, java.major - required_major),
+                std::cmp::Ordering::Less => (2, required_major - java.major),
+            };
+            let arch_mismatch = host_arch.is_some_and(|host| java.arch != host);
+            (tier, distance, arch_mismatch)
+        })
         .cloned()
-        .ok_or_else(|| anyhow!("没有这个 java 配置: {name}"))?;
-    let java = JavaOption::probe(path).await?;
-    Ok(java)
-}
-
-/// `autoselect` 的搜索规则：完全相等优先，否则"至少满足要求里最接近的"，
-/// 再否则取第一个可用的。
-///
-/// 探测失败或版本不可用的配置项会被跳过，不会因为一条坏配置中断选择。
-async fn auto_select_java(required_major: u32, configs: &JavaConfigs) -> Result<String> {
-    let mut best: Option<String> = None;
-    let mut best_diff = u32::MAX;
-    let mut first_usable: Option<String> = None;
-    for (name, path) in configs {
-        let Ok(java) = JavaOption::probe(path.clone()).await else {
-            continue;
-        };
-        if !java.is_usable() {
-            continue;
-        }
-        first_usable.get_or_insert_with(|| name.clone());
-        if java.major_version == required_major {
-            return Ok(name.clone());
-        }
-        // `major_version` 是无符号数，这里不需要 `abs()`
-        let diff = java.major_version.saturating_sub(required_major);
-        if java.major_version >= required_major && diff < best_diff {
-            best_diff = diff;
-            best = Some(name.clone());
-        }
-    }
-    best.or(first_usable)
-        .ok_or_else(|| anyhow!("没有找到可用的 Java，请先安装 Java 或提供 Java 路径"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn java_choice_round_trips_as_a_plain_string() {
-        assert_eq!(
-            serde_json::to_string(&JavaChoice::Auto).unwrap(),
-            "\"autoselect\""
-        );
-        assert_eq!(
-            serde_json::to_string(&JavaChoice::Named("jdk17".to_string())).unwrap(),
-            "\"jdk17\""
-        );
-        assert_eq!(JavaChoice::from("autoselect"), JavaChoice::Auto);
-        assert_eq!(
-            JavaChoice::from("jdk17"),
-            JavaChoice::Named("jdk17".to_string())
-        );
-        assert_eq!(JavaChoice::Auto.as_str(), JAVA_AUTOSELECT);
-        assert!(JavaChoice::Auto.is_auto());
-        assert_eq!(JavaChoice::Named("x".into()).to_string(), "x");
+    fn java(path: &str, major: u32) -> JavaOption {
+        java_with_arch(path, major, Arch::X86_64)
+    }
+
+    fn java_with_arch(path: &str, major: u32, arch: Arch) -> JavaOption {
+        JavaOption {
+            path: PathBuf::from(path),
+            major,
+            arch,
+        }
+    }
+
+    fn other_arch(host: Arch) -> Arch {
+        match host {
+            Arch::X86_64 => Arch::Aarch64,
+            Arch::Aarch64 | Arch::X86 => Arch::X86_64,
+        }
     }
 
     #[test]
-    fn config_name_uses_os_arch_and_a_stable_path_hash() {
-        let java = JavaOption {
-            path: PathBuf::from("/opt/jdk/bin/java"),
-            type_: "openjdk".to_string(),
-            os: Os::Linux,
-            arch: Arch::Aarch64,
-            major_version: 17,
-            version_str: "17.0.2".to_string(),
+    fn auto_selection_uses_cached_versions_without_running_java() {
+        // 路径都不存在；能选中说明选择过程完全没有执行 java
+        let options = vec![java("/jdk8", 8), java("/jdk17", 17), java("/jdk21", 21)];
+        assert_eq!(auto_select_java(17, &options), Some(java("/jdk17", 17)));
+        assert_eq!(auto_select_java(11, &options), Some(java("/jdk17", 17)));
+        assert_eq!(auto_select_java(30, &options), Some(java("/jdk21", 21)));
+        assert_eq!(auto_select_java(17, &[]), None);
+
+        // 没有满足要求的版本时取最高的，不依赖配置顺序
+        let lower = [java("/jdk8", 8), java("/jdk11", 11)];
+        assert_eq!(auto_select_java(17, &lower), Some(java("/jdk11", 11)));
+        let lower = [java("/jdk11", 11), java("/jdk8", 8)];
+        assert_eq!(auto_select_java(17, &lower), Some(java("/jdk11", 11)));
+    }
+
+    #[test]
+    fn auto_selection_prefers_the_current_architecture_within_a_version_tier() {
+        let Some(host) = Arch::current() else {
+            return;
         };
-        let name = java.config_name();
-        assert!(name.starts_with("openjdk-linux-aarch64-17.0.2-"), "{name}");
-        let hash = name.rsplit_once('-').unwrap().1;
-        assert_eq!(hash.len(), 8);
-        assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit()));
-        assert_eq!(name, java.config_name());
+        let other = other_arch(host);
+        let options = [
+            java_with_arch("/other", 17, other),
+            java_with_arch("/host", 17, host),
+        ];
+        assert_eq!(
+            auto_select_java(17, &options),
+            Some(java_with_arch("/host", 17, host))
+        );
+        assert_eq!(
+            auto_select_java(11, &options),
+            Some(java_with_arch("/host", 17, host))
+        );
+        assert_eq!(
+            auto_select_java(21, &options),
+            Some(java_with_arch("/host", 17, host))
+        );
+    }
+
+    #[test]
+    fn auto_selection_prefers_the_version_tier_over_the_architecture() {
+        let Some(host) = Arch::current() else {
+            return;
+        };
+        let other = other_arch(host);
+
+        // 精确匹配的异架构版本优先于更高版本的当前架构版本
+        let exact_other = [
+            java_with_arch("/host-21", 21, host),
+            java_with_arch("/other-17", 17, other),
+        ];
+        assert_eq!(
+            auto_select_java(17, &exact_other),
+            Some(java_with_arch("/other-17", 17, other))
+        );
+
+        // 高的兜底版本优先于低的当前架构版本
+        let higher_other = [
+            java_with_arch("/host-8", 8, host),
+            java_with_arch("/other-11", 11, other),
+        ];
+        assert_eq!(
+            auto_select_java(17, &higher_other),
+            Some(java_with_arch("/other-11", 11, other))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_java_option_is_a_fixed_selector() {
+        let java = java("/jdk17", 17);
+        assert_eq!(java.select_java(8).await.unwrap(), java);
     }
 
     #[test]
@@ -555,7 +499,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn find_java_returns_an_empty_table_when_nothing_is_found() {
+    async fn find_java_returns_an_empty_list_when_nothing_is_found() {
         let dir = std::env::temp_dir().join(format!("dmcl-java-empty-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&dir).await;
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -597,18 +541,13 @@ mod tests {
         let found = find_java(&[root.as_path()]).await;
         assert_eq!(found.len(), 1);
         assert_eq!(
-            found.values().next().unwrap(),
-            &root.join("java"),
+            found[0].option.path,
+            root.join("java"),
             "符号链接本身应作为配置路径"
         );
-        assert!(
-            found
-                .keys()
-                .next()
-                .unwrap()
-                .starts_with("openjdk-linux-x86_64-17.0.8-"),
-            "{found:?}"
-        );
+        assert_eq!(found[0].type_, "openjdk");
+        assert_eq!(found[0].option.major, 17);
+        assert_eq!(found[0].option.arch, Arch::X86_64);
 
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }
@@ -626,54 +565,18 @@ mod tests {
             .any(|path| path.file_name().is_some_and(|name| name == "Java")));
     }
 
-    #[tokio::test]
-    async fn selecting_without_any_java_is_an_error() {
-        let configs = JavaConfigs::new();
-        let err = select_java(17, &JavaChoice::Named("nope".into()), &configs)
-            .await
-            .unwrap_err();
-        // 有配置表时不会去扫描，直接报"没有这一项"
-        assert!(format!("{err:#}").contains("没有找到可用的 Java"));
-    }
-
-    #[tokio::test]
-    async fn auto_selection_skips_broken_entries() {
-        let mut configs = JavaConfigs::new();
-        configs.insert("broken".to_string(), PathBuf::from("/nonexistent/java"));
-        let err = select_java(17, &JavaChoice::Auto, &configs)
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("没有找到可用的 Java"));
-    }
-
-    #[tokio::test]
-    async fn a_named_choice_must_exist() {
-        let mut configs = JavaConfigs::new();
-        configs.insert("jdk".to_string(), PathBuf::from("/nonexistent/java"));
-        let err = select_java(17, &JavaChoice::Named("other".into()), &configs)
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("没有这个 java 配置"));
-        // 存在的名字会真的去执行 → 报"无法执行"
-        let err = select_java(17, &JavaChoice::Named("jdk".into()), &configs)
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("无法执行"));
-    }
-
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_system_java_can_be_probed() {
-        let Ok(java) = JavaOption::probe("/usr/bin/java").await else {
+        let Ok(java) = JavaDetails::probe("/usr/bin/java").await else {
             return; // 这台机器没有 java 就跳过
         };
         if java.is_usable() {
             assert!(matches!(
-                java.arch,
+                java.option.arch,
                 Arch::X86 | Arch::X86_64 | Arch::Aarch64
             ));
-            assert!(matches!(java.os, Os::Windows | Os::Linux | Os::MacOs));
-            assert!(!java.config_name().is_empty());
+            assert!(!java.version_str.is_empty());
         }
     }
 }
