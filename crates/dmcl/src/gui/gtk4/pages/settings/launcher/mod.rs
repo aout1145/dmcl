@@ -1,10 +1,11 @@
 //! 首选项：GNOME 设置式的左右分栏。
 //!
 //! 左侧是分类列表，右侧显示当前分类；页面嵌在标签页里，没有自己的窗口标题栏，所以
-//! 分栏保持常驻、不做折叠。目前只有「Minecraft 目录」可用，其余分类置灰，等对应设置
-//! 实现后再启用。
+//! 分栏保持常驻、不做折叠。「Minecraft 目录」和「Java 管理」可用，其余分类置灰，等对应
+//! 设置实现后再启用。
 
 mod directory;
+mod java;
 
 use std::rc::Rc;
 
@@ -16,6 +17,7 @@ use relm4::prelude::*;
 use crate::gui::gtk4::app::Shell;
 
 use directory::{DirectoryMsg, DirectoryPage};
+use java::{JavaMsg, JavaPage};
 
 /// 首选项页收到的消息。
 #[derive(Debug)]
@@ -27,6 +29,8 @@ pub(crate) enum PreferencesMsg {
 pub(crate) struct PreferencesPage {
     /// 「Minecraft 目录」分类；控制器同时负责保活子组件。
     directory: Controller<DirectoryPage>,
+    /// 「Java 管理」分类。
+    java: Controller<JavaPage>,
 }
 
 #[relm4::component(pub(crate))]
@@ -74,9 +78,7 @@ impl SimpleComponent for PreferencesPage {
 
                         append = &adw::ActionRow {
                             set_title: "Java 管理",
-                            set_subtitle: "尚未实现",
-                            set_activatable: false,
-                            set_sensitive: false,
+                            set_activatable: true,
                             add_prefix = &gtk::Image {
                                 set_icon_name: Some("application-x-executable-symbolic"),
                             },
@@ -97,14 +99,14 @@ impl SimpleComponent for PreferencesPage {
 
             #[wrap(Some)]
             set_content = &adw::NavigationPage {
-                set_title: "Minecraft 目录",
+                set_title: "首选项",
 
                 #[wrap(Some)]
                 set_child = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
 
                     #[local_ref]
-                    directory_widget -> adw::PreferencesPage {},
+                    content_stack -> gtk::Stack {},
                 },
             },
         }
@@ -115,16 +117,38 @@ impl SimpleComponent for PreferencesPage {
         _root: Self::Root,
         _sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let directory = DirectoryPage::builder().launch(shell).detach();
-        let directory_widget = directory.widget();
+        let directory = DirectoryPage::builder().launch(shell.clone()).detach();
+        let java = JavaPage::builder().launch(shell).detach();
+
+        // 右栏按左侧分类切换；两个分类页都保活，切换只影响显示。
+        let content_stack = gtk::Stack::new();
+        content_stack.set_vexpand(true);
+        content_stack.add_named(directory.widget(), Some("directory"));
+        content_stack.add_named(java.widget(), Some("java"));
+
         let widgets = view_output!();
 
-        // 默认停在第一个分类；其余分类置灰，切换逻辑等它们实现后再接。
+        widgets.category_list.connect_row_selected({
+            let content_stack = content_stack.clone();
+            move |_, row| {
+                let Some(row) = row else {
+                    return;
+                };
+                let name = match row.index() {
+                    0 => "directory",
+                    2 => "java",
+                    _ => return,
+                };
+                content_stack.set_visible_child_name(name);
+            }
+        });
+
+        // 默认停在第一个分类。
         if let Some(row) = widgets.category_list.row_at_index(0) {
             widgets.category_list.select_row(Some(&row));
         }
 
-        let model = Self { directory };
+        let model = Self { directory, java };
         ComponentParts { model, widgets }
     }
 
@@ -132,6 +156,7 @@ impl SimpleComponent for PreferencesPage {
         match message {
             PreferencesMsg::ConfigChanged => {
                 let _ = self.directory.sender().send(DirectoryMsg::ConfigChanged);
+                let _ = self.java.sender().send(JavaMsg::ConfigChanged);
             }
         }
     }

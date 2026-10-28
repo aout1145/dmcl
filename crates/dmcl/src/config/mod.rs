@@ -45,7 +45,7 @@ mod root;
 
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
-pub(crate) use java::configs_from_details;
+pub(crate) use java::{configs_from_details, merge_javas, same_java_path, unique_java_name};
 pub use java::{JavaChoice, JavaConfig, JavaConfigs};
 pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
 

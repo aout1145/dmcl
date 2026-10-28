@@ -34,6 +34,10 @@ pub struct JavaDetails {
     pub type_: String,
     /// 完整版本字符串（`17.0.2`）。
     pub version_str: String,
+    /// `java.vendor` 属性（例如 `Microsoft`、`Eclipse Adoptium`）。
+    pub vendor: String,
+    /// 可执行文件旁边是否有 `javac`：有就是 JDK，没有就是 JRE。
+    pub is_jdk: bool,
 }
 
 impl JavaDetails {
@@ -91,10 +95,15 @@ impl JavaDetails {
             )
         })?;
 
+        let java_home = property("java.home = ");
+        let is_jdk = has_javac(&path, &java_home);
+
         Ok(Self {
             option: JavaOption { path, major, arch },
             type_,
             version_str,
+            vendor: property("java.vendor = "),
+            is_jdk,
         })
     }
 
@@ -264,6 +273,21 @@ fn banner_line(raw: &str) -> Option<&str> {
     raw.lines().find(|line| {
         !line.starts_with(' ') && !line.starts_with('\t') && line.contains(" version ")
     })
+}
+
+/// 可执行文件旁边（或 `java.home` 的 bin 里）是否有 `javac`。
+///
+/// JDK 8 的 `java.home` 指向 `<jdk>/jre`，所以要同时看上一级的 `bin`。
+fn has_javac(java: &Path, java_home: &str) -> bool {
+    let javac = if cfg!(windows) { "javac.exe" } else { "javac" };
+    if java.with_file_name(javac).is_file() {
+        return true;
+    }
+    if java_home.is_empty() {
+        return false;
+    }
+    let home = Path::new(java_home);
+    home.join("bin").join(javac).is_file() || home.join("..").join("bin").join(javac).is_file()
 }
 
 fn banner_type(raw: &str) -> Option<&str> {

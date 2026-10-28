@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use dmcl_install::JavaProvider;
 use dmcl_launch::{auto_select_java, JavaDetails, JavaOption, JavaSelector, ScanJava};
+use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::{Arch, Os};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha1::{Digest, Sha1};
 
-use super::{ConfigWarning, LaunchConfig};
+use super::{Config, ConfigWarning, LaunchConfig};
 
 /// 表示「自动选择」的哨兵字符串。
 pub const JAVA_AUTOSELECT: &str = "autoselect";
@@ -175,18 +176,121 @@ fn ensure_java_path(name: &str, java: &JavaConfig) -> Result<()> {
 pub(crate) fn configs_from_details(details: Vec<JavaDetails>) -> JavaConfigs {
     let mut configs = JavaConfigs::new();
     for details in details {
-        let base = config_name(&details);
-        let mut name = base.clone();
-        let mut suffix = 2;
-        // 短哈希理论上仍可能碰撞；真碰上就再补一个序号，保证配置键唯一。
-        while configs.contains_key(&name) {
-            name = format!("{base}-{suffix}");
-            suffix += 1;
-        }
+        let name = unique_java_name(&configs, &details);
         let JavaOption { path, major, arch } = details.option;
         configs.insert(name, JavaConfig { path, major, arch });
     }
     configs
+}
+
+/// 按探测结果生成一个当前表里唯一的键。
+pub(crate) fn unique_java_name(javas: &JavaConfigs, details: &JavaDetails) -> String {
+    let base = config_name(details);
+    let mut name = base.clone();
+    let mut suffix = 2;
+    // 短哈希理论上仍可能碰撞；真碰上就再补一个序号，保证配置键唯一。
+    while javas.contains_key(&name) {
+        name = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    name
+}
+
+/// 把扫描结果合并进 `javas`，返回按路径新增了几个。
+///
+/// 已有名字（手工条目、旧配置里的非哈希名字）全部保留；同一路径不会以不同名字
+/// 重复加入。同名条目更新整项，同一路径的其它名字只刷新缓存的版本 / 架构。
+pub(crate) fn merge_javas(javas: &mut JavaConfigs, found: &JavaConfigs) -> usize {
+    let mut added = 0;
+    for (name, java) in found {
+        let existing_name = javas
+            .iter()
+            .find(|(_, existing)| same_java_path(&existing.path, &java.path))
+            .map(|(existing_name, _)| existing_name.clone());
+        if let Some(existing_name) = existing_name {
+            if existing_name == *name {
+                javas.insert(name.clone(), java.clone());
+            } else if let Some(existing) = javas.get_mut(&existing_name) {
+                existing.major = java.major;
+                existing.arch = java.arch;
+            }
+            continue;
+        }
+        if javas.insert(name.clone(), java.clone()).is_none() {
+            added += 1;
+        }
+    }
+    added
+}
+
+pub(crate) fn same_java_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => absolute(left) == absolute(right),
+    }
+}
+
+impl Config {
+    /// 新增 Java；名字非空、不重名，路径也不能为空。
+    pub fn add_java(&mut self, name: &str, java: JavaConfig) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(anyhow!("Java 名称不能为空"));
+        }
+        if self.javas.contains_key(name) {
+            return Err(anyhow!("已存在同名 Java：{name}"));
+        }
+        if java.path.as_os_str().is_empty() {
+            return Err(anyhow!("Java 路径不能为空"));
+        }
+        self.javas.insert(name.to_string(), java);
+        Ok(())
+    }
+
+    /// 替换某个 Java 的路径与缓存的版本 / 架构；名字必须已经存在。
+    pub fn set_java(&mut self, name: &str, java: JavaConfig) -> Result<()> {
+        let Some(slot) = self.javas.get_mut(name) else {
+            return Err(anyhow!("Java 不存在：{name}"));
+        };
+        if java.path.as_os_str().is_empty() {
+            return Err(anyhow!("Java 路径不能为空"));
+        }
+        *slot = java;
+        Ok(())
+    }
+
+    /// 把 Java 移动到 `to`（移动后的下标）；默认 Java 不变。
+    pub fn move_java(&mut self, name: &str, to: usize) -> Result<()> {
+        let from = self
+            .javas
+            .get_index_of(name)
+            .ok_or_else(|| anyhow!("Java 不存在：{name}"))?;
+        if to >= self.javas.len() {
+            return Err(anyhow!("目标位置超出范围：{to}"));
+        }
+        if from == to {
+            return Ok(());
+        }
+
+        let java = self
+            .javas
+            .shift_remove(name)
+            .expect("上面已经确认 Java 存在");
+        self.javas.shift_insert(to, name.to_string(), java);
+        Ok(())
+    }
+
+    /// 删除 Java；删掉的正好是默认项时改回自动选择。
+    pub fn remove_java(&mut self, name: &str) -> Result<()> {
+        if !self.javas.contains_key(name) {
+            return Err(anyhow!("Java 不存在：{name}"));
+        }
+        self.javas.shift_remove(name);
+        if self.launch.java == JavaChoice::Named(name.to_string()) {
+            self.launch.java = JavaChoice::Auto;
+        }
+        Ok(())
+    }
 }
 
 /// 配置项名字：`{type}-{os}-{arch}-{version}-{hash}`。
@@ -278,6 +382,8 @@ mod tests {
             },
             type_: "openjdk".to_string(),
             version_str: "17.0.2".to_string(),
+            vendor: "Test".to_string(),
+            is_jdk: true,
         }
     }
 
@@ -470,6 +576,79 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn adding_java_rejects_empty_or_duplicate_names() {
+        let mut config = Config::default();
+        config.add_java("jdk", entry("/jdk", 17)).unwrap();
+        assert_eq!(config.javas.get("jdk"), Some(&entry("/jdk", 17)));
+
+        assert!(config.add_java("  ", entry("/other", 17)).is_err());
+        assert!(config.add_java("jdk", entry("/other", 17)).is_err());
+        assert_eq!(config.javas.len(), 1);
+    }
+
+    #[test]
+    fn changing_java_path_requires_an_existing_name() {
+        let mut config = Config::default();
+        config.add_java("jdk", entry("/old", 17)).unwrap();
+        config.set_java("jdk", entry("/new", 21)).unwrap();
+        assert_eq!(config.javas.get("jdk"), Some(&entry("/new", 21)));
+
+        assert!(config.set_java("nope", entry("/new", 21)).is_err());
+    }
+
+    #[test]
+    fn moving_java_reorders_without_changing_the_default() {
+        let mut config = Config::default();
+        config.add_java("a", entry("/a", 17)).unwrap();
+        config.add_java("b", entry("/b", 21)).unwrap();
+        config.launch.java = JavaChoice::Named("b".to_string());
+
+        config.move_java("b", 0).unwrap();
+        assert_eq!(
+            config.javas.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        assert_eq!(config.launch.java, JavaChoice::Named("b".to_string()));
+
+        assert!(config.move_java("nope", 0).is_err());
+        assert!(config.move_java("a", 2).is_err());
+    }
+
+    #[test]
+    fn removing_the_default_java_falls_back_to_autoselect() {
+        let mut config = Config::default();
+        config.add_java("jdk", entry("/jdk", 17)).unwrap();
+        config.launch.java = JavaChoice::Named("jdk".to_string());
+        config.remove_java("jdk").unwrap();
+
+        assert!(config.javas.is_empty());
+        assert_eq!(config.launch.java, JavaChoice::Auto);
+        assert!(config.remove_java("jdk").is_err());
+    }
+
+    #[test]
+    fn merge_keeps_manual_names_and_deduplicates_by_path() {
+        let mut javas = JavaConfigs::from([
+            ("manual".to_string(), entry("/manual/java", 17)),
+            ("same".to_string(), entry("/old/java", 11)),
+        ]);
+
+        let found = JavaConfigs::from([
+            ("jdk17-hash".to_string(), entry("/jdk17/bin/java", 21)),
+            ("manual-hash".to_string(), entry("/manual/java", 21)),
+            ("manual".to_string(), entry("/manual/java", 21)),
+            ("same".to_string(), entry("/new/java", 17)),
+        ]);
+
+        assert_eq!(merge_javas(&mut javas, &found), 1);
+        assert_eq!(javas.len(), 3);
+        assert!(!javas.contains_key("manual-hash"));
+        assert_eq!(javas.get("manual"), Some(&entry("/manual/java", 21)));
+        assert_eq!(javas.get("same"), Some(&entry("/new/java", 17)));
+        assert_eq!(javas.get("jdk17-hash"), Some(&entry("/jdk17/bin/java", 21)));
     }
 
     #[test]

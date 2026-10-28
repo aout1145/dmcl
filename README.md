@@ -101,8 +101,8 @@ dmcl list-mc --type=release,snapshot
 与 Homebrew）以及 `JAVA_HOME` 并写入全局配置。账户、根目录和 Java 表也可以通过直接编辑
 全局 `dmcl.json` 维护。账号目前只有离线模式，联机登录还没实现。图形界面的账号、实例管理
 页面仍在开发中；主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、
-设默认、拖动排序），账号、Java 管理和全局游戏选项还是置灰的占位项。目录的名称和路径修改在
-重启 DMCL 后生效。
+设默认、拖动排序）和 Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE
+版本与供应商），账号和全局游戏选项还是置灰的占位项。目录的名称和路径修改在重启 DMCL 后生效。
 
 图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
 所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
@@ -190,7 +190,8 @@ macOS `~/Library/Application Support`）。
 - `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
 - `javas` 的每一项只接受 `{ "path", "major", "arch" }` 对象，记录可执行文件路径、大版本号与
   架构。已经有条目时，启动直接用这两个缓存字段选择 Java，不再执行 `java -version`；`javas`
-  为空且自动选择时仍会扫描常见目录。Java 换版本或换架构后重跑 `dmcl search-java` 刷新。
+  为空且自动选择时仍会扫描常见目录。Java 换版本或换架构后重跑 `dmcl search-java`，或在
+  首选项里点「搜索已安装的 Java」刷新。
 - `search-java` 自动生成的 `javas` 名字形如
   `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。

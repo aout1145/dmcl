@@ -401,17 +401,45 @@ fn show(
         })
     };
     refresh();
+    // 输入时就校验并显示原因；字段还空着时不提示，免得刚打开对话框就报错。
+    let validate_live: Rc<dyn Fn()> = {
+        let name_row = name_row.clone();
+        let path_row = path_row.clone();
+        let style_row = style_row.clone();
+        let notice_label = notice_label.clone();
+        let original = original.clone();
+        let roots = Rc::clone(&roots);
+        Rc::new(move || {
+            if name_row.text().trim().is_empty() || path_row.text().trim().is_empty() {
+                notice_label.set_visible(false);
+                return;
+            }
+            match validate(
+                original.as_deref(),
+                &name_row.text(),
+                &path_row.text(),
+                style_row.selected() == RELATIVE_INDEX,
+                &roots,
+            ) {
+                Ok(_) => notice_label.set_visible(false),
+                Err(message) => show_notice(&notice_label, &message, true),
+            }
+        })
+    };
     name_row.connect_changed({
         let refresh = Rc::clone(&refresh);
-        move |_| refresh()
+        let validate_live = Rc::clone(&validate_live);
+        move |_| {
+            refresh();
+            validate_live();
+        }
     });
     path_row.connect_changed({
         let refresh = Rc::clone(&refresh);
-        let notice_label = notice_label.clone();
+        let validate_live = Rc::clone(&validate_live);
         move |_| {
-            // 开始修改路径后，下方旧提示已经过时，先收起来。
-            notice_label.set_visible(false);
             refresh();
+            validate_live();
         }
     });
 
