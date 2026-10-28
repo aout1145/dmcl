@@ -233,12 +233,12 @@ mod tests {
     #[test]
     fn apply_update_only_touches_listed_fields() {
         let mut launch = LaunchConfig {
-            max_memory: 1024,
+            max_memory: Some(1024),
             ..LaunchConfig::default()
         };
 
         let mut changed = launch.clone();
-        changed.max_memory = 4096;
+        changed.max_memory = Some(4096);
         changed.window_width = 1280;
         let update = GameOptionsUpdate {
             launch: changed,
@@ -246,7 +246,7 @@ mod tests {
         };
         apply_update(&mut launch, &update);
 
-        assert_eq!(launch.max_memory, 4096);
+        assert_eq!(launch.max_memory, Some(4096));
         assert_eq!(launch.window_width, LaunchConfig::default().window_width);
     }
 

@@ -29,8 +29,9 @@ pub struct LaunchOption {
     /// 窗口尺寸（像素）与堆大小（MiB）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
-    pub min_memory: u32,
-    pub max_memory: u32,
+    /// 堆大小；`None` 表示自动分配。
+    pub min_memory: Option<u32>,
+    pub max_memory: Option<u32>,
     pub custom_info: String,
     pub additional_jvm: Vec<String>,
     pub additional_game: Vec<String>,
@@ -67,8 +68,8 @@ impl LaunchOption {
             version_name: version_name.into(),
             window_width: 854,
             window_height: 480,
-            min_memory: 512,
-            max_memory: 2048,
+            min_memory: None,
+            max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),
             additional_jvm: vec![
                 "-Dfml.ignoreInvalidMinecraftCertificates=True".to_string(),
@@ -113,8 +114,8 @@ mod tests {
         let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), "/mc", "1.20.1");
         assert_eq!(option.window_width, 854);
         assert_eq!(option.window_height, 480);
-        assert_eq!(option.min_memory, 512);
-        assert_eq!(option.max_memory, 2048);
+        assert_eq!(option.min_memory, None);
+        assert_eq!(option.max_memory, None);
         assert_eq!(option.custom_info, LAUNCHER_NAME);
         assert!(option
             .additional_jvm

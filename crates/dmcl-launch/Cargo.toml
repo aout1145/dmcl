@@ -19,4 +19,5 @@ sha1.workspace = true
 uuid.workspace = true
 walkdir.workspace = true
 version-compare.workspace = true
+sysinfo.workspace = true
 anyhow.workspace = true

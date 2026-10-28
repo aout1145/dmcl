@@ -6,7 +6,8 @@
 //!    文件完整性由 [`dmcl_install::check_integrity`] 负责，**是否修复交给调用者**。
 //!    想要「缺了就补」的一站式流程时，用 [`launch_chain`]。
 //! 2. **不读全局配置**。java 的选择由调用者通过 [`JavaSelector`] 注入，
-//!    窗口尺寸、内存上限等全部通过 [`LaunchOption`] 由调用者传入。
+//!    窗口尺寸、内存设置等全部通过 [`LaunchOption`] 由调用者传入；内存可以留空，
+//!    由 [`resolve_memory`] 按系统可用内存与所选 Java 的架构自动决定。
 //!
 //! 一站式启动把「检查并补全 → 生成参数 → 启动」串成一条任务链（见 [`crate::prepare`]）：
 //! [`launch_chain`] 返回 `TaskChain<(), GameMonitor>`，由调用者运行、订阅事件，
@@ -32,6 +33,7 @@
 pub mod account;
 pub mod java;
 pub mod launcher;
+pub mod memory;
 pub mod monitor;
 pub mod option;
 pub mod prepare;
@@ -42,6 +44,7 @@ pub use java::{
     ScanJava,
 };
 pub use launcher::GameLauncher;
+pub use memory::{auto_max_memory, resolve_memory, system_available_mib};
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 pub use prepare::{

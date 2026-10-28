@@ -19,6 +19,7 @@ use version_compare::{compare_to, Cmp};
 
 use crate::account::Account;
 use crate::java::JavaOption;
+use crate::memory::resolve_memory;
 use crate::monitor::GameMonitor;
 use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 
@@ -199,6 +200,18 @@ impl GameLauncher {
             .to_string_lossy()
             .into_owned();
 
+        // 内存要在 java 选定后才能定：自动分配依赖它的架构（32 位上限）。
+        let (min_memory, max_memory) = resolve_memory(
+            self.option.min_memory,
+            self.option.max_memory,
+            Some(java.arch),
+        );
+        if min_memory > max_memory {
+            ctx.log(format!(
+                "警告：Xms（{min_memory} MiB）大于 Xmx（{max_memory} MiB），游戏可能无法启动"
+            ));
+        }
+
         let mut args: Vec<String> = Vec::new();
         args.push(java.path.to_string_lossy().into_owned());
         self.java = Some(java);
@@ -217,8 +230,8 @@ impl GameLauncher {
         // 额外的 jvm 参数（调用者已经拆成独立参数）。
         args.extend(self.option.additional_jvm.iter().cloned());
         // 内存上限
-        args.push(format!("-Xmn{}m", self.option.min_memory));
-        args.push(format!("-Xmx{}m", self.option.max_memory));
+        args.push(format!("-Xmn{min_memory}m"));
+        args.push(format!("-Xmx{max_memory}m"));
         // 主类
         args.push(self.json.main_class.clone().unwrap_or_default());
 
@@ -531,6 +544,8 @@ mod tests {
         .unwrap();
 
         let mut launcher = launcher_with(json, root);
+        launcher.option.min_memory = Some(512);
+        launcher.option.max_memory = Some(2048);
         launcher
             .option
             .additional_jvm

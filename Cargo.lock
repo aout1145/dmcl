@@ -458,6 +458,7 @@ dependencies = [
  "dmcl-task",
  "serde_json",
  "sha1",
+ "sysinfo",
  "tokio",
  "uuid",
  "version-compare",

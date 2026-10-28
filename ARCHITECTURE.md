@@ -55,7 +55,7 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
 | `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
-| `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存、`JavaSelector`）                   |
+| `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存（可自动）、`JavaSelector`）         |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 这样每个业务 crate 都能被 GUI / TUI / 测试用自定义选项直接调用。
@@ -142,7 +142,9 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 
 账号、Java 探测 / 扫描 / 自动选择、命令行生成、启动与状态监控，见下文「启动与安装解耦」。
 这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
-调用者实现的 `JavaSelector` 决定。
+调用者实现的 `JavaSelector` 决定。内存可以留空：`resolve_memory` 在选好 Java 后按系统
+可用内存的 3/4（至少 1 GiB）决定 Xmx，32 位 Java 压到 1.5 GiB；读不到可用内存时固定
+1.5 GiB；Xms 留空时取 Xmx。
 
 ### `dmcl` —— 应用
 

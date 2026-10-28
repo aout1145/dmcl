@@ -28,7 +28,9 @@ async fn integrity_and_command_line_for_a_real_version() {
         .await
         .expect("download_vanilla");
 
-    let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, VERSION);
+    let mut option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, VERSION);
+    option.min_memory = Some(512);
+    option.max_memory = Some(2048);
     let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
 
     // 只装了版本 JSON：显然还不完整，而且能指出缺的是哪个 jar

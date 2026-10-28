@@ -155,8 +155,8 @@ macOS `~/Library/Application Support`）。
     "account": "player",
     "window_width": 854,
     "window_height": 480,
-    "min_memory": 512,
-    "max_memory": 2048,
+    "min_memory": null,
+    "max_memory": null,
     "custom_info": "dmcl",
     "additional_jvm": "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True",
     "additional_game": ""
@@ -196,6 +196,11 @@ macOS `~/Library/Application Support`）。
 - `search-java` 自动生成的 `javas` 名字形如
   `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
 - `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
+- `launch.min_memory` / `launch.max_memory` 是堆大小（MiB），默认都是 `null`，表示自动分配。
+  `max_memory` 为 `null` 时取「系统可用内存的 3/4」与 1 GiB 中较大的那个；选中的 Java 是
+  32 位时再压到 1.5 GiB；读不到系统可用内存时固定按 1.5 GiB 分配。`min_memory` 为 `null`
+  时取最终的 `max_memory`。显式写的 `min_memory` 大于最终上限时原样保留，并在启动日志里
+  给出警告。
 - `minecraft_roots` 是「名字 → 路径」的映射，键直接作为界面上的显示名；默认有两个：
   「当前目录」（`.minecraft`，相对当前工作目录）和「官方启动器」（Windows 为
   `%APPDATA%\.minecraft`、macOS 为 `~/Library/Application Support/minecraft`、

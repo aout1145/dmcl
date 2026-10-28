@@ -23,9 +23,9 @@ pub struct LaunchConfig {
     /// 窗口尺寸（像素）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
-    /// 堆大小（MiB）—— 不可能为负。
-    pub min_memory: u32,
-    pub max_memory: u32,
+    /// 堆大小（MiB）；`None` 表示自动分配。
+    pub min_memory: Option<u32>,
+    pub max_memory: Option<u32>,
     pub custom_info: String,
     pub additional_jvm: String,
     pub additional_game: String,
@@ -38,8 +38,8 @@ impl Default for LaunchConfig {
             account: Some("player".to_string()),
             window_width: 854,
             window_height: 480,
-            min_memory: 512,
-            max_memory: 2048,
+            min_memory: None,
+            max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),
             // 历史默认：这两个 `-D` 是给 FML/OptiFine 兼容用的，从旧实现继承下来。
             // 以后应改成空 / 更中性的默认，或交给用户配置。
@@ -258,12 +258,12 @@ mod tests {
             .minecraft_roots
             .insert("test".to_string(), dir.join("mc"));
         config.minecraft_root = "test".to_string();
-        config.launch.max_memory = 3000;
+        config.launch.max_memory = Some(3000);
 
         let root = dir.join("mc");
         let loaded = config.load_instance(&root, "1.20.1").await;
         assert!(loaded.error.is_none());
-        assert_eq!(loaded.launch.max_memory, 3000);
+        assert_eq!(loaded.launch.max_memory, Some(3000));
         assert!(!instance_config_path(&root, "1.20.1").exists());
     }
 
@@ -277,7 +277,7 @@ mod tests {
             .minecraft_roots
             .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
-        config.launch.max_memory = 3000;
+        config.launch.max_memory = Some(3000);
 
         let path = instance_config_path(&root, "1.20.1");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -286,13 +286,13 @@ mod tests {
 
         let loaded = config.load_instance(&root, "1.20.1").await;
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
-        assert_eq!(loaded.launch.max_memory, 4096);
+        assert_eq!(loaded.launch.max_memory, Some(4096));
         assert_eq!(loaded.launch.window_width, 854);
         assert_eq!(loaded.launch.account, None);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
         let sync = config.load_instance_sync(&root, "1.20.1");
-        assert_eq!(sync.launch.max_memory, 4096);
+        assert_eq!(sync.launch.max_memory, Some(4096));
         assert_eq!(sync.launch.account, None);
         assert!(sync.error.is_none());
 
@@ -309,7 +309,7 @@ mod tests {
             .minecraft_roots
             .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
-        config.launch.max_memory = 3000;
+        config.launch.max_memory = Some(3000);
         config.launch.window_width = 1000;
 
         let path = instance_config_path(&root, "1.20.1");
@@ -328,7 +328,7 @@ mod tests {
         .unwrap();
 
         let loaded = config.load_instance(&root, "1.20.1").await;
-        assert_eq!(loaded.launch.max_memory, 3000);
+        assert_eq!(loaded.launch.max_memory, Some(3000));
         assert_eq!(loaded.launch.window_width, 1200);
         let error = loaded.error.as_ref().expect("应当有警告");
         assert!(error
@@ -397,8 +397,8 @@ mod tests {
         );
         config.launch.account = Some("steve".to_string());
         config.launch.window_width = 1920;
-        config.launch.min_memory = 1024;
-        config.launch.max_memory = 4096;
+        config.launch.min_memory = Some(1024);
+        config.launch.max_memory = Some(4096);
         config.launch.custom_info = "test".to_string();
         config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
         config.launch.additional_game = "--foo bar".to_string();
@@ -417,8 +417,8 @@ mod tests {
             .unwrap();
         assert_eq!(option.root_path, root);
         assert_eq!(option.window_width, 1920);
-        assert_eq!(option.min_memory, 1024);
-        assert_eq!(option.max_memory, 4096);
+        assert_eq!(option.min_memory, Some(1024));
+        assert_eq!(option.max_memory, Some(4096));
         assert_eq!(option.custom_info, "test");
         assert!(option.skip_music);
         assert!(option.additional_jvm.contains(&"-Da=1".to_string()));

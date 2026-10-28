@@ -151,9 +151,9 @@ mod tests {
         let store = ConfigStore::new(Config::default());
         let config = store.config();
 
-        let before = config.read().launch.max_memory;
-        store.apply(|config| config.launch.max_memory = before + 1);
-        assert_eq!(config.read().launch.max_memory, before + 1);
+        let before = config.read().launch.max_memory.unwrap_or(0);
+        store.apply(|config| config.launch.max_memory = Some(before + 1));
+        assert_eq!(config.read().launch.max_memory, Some(before + 1));
     }
 
     #[test]

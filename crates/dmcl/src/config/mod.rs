@@ -505,8 +505,18 @@ mod tests {
         assert!(config.download.skip_music);
         // 缺键保留默认值
         assert_eq!(config.launch.window_height, 480);
-        assert_eq!(config.launch.min_memory, 512);
+        assert_eq!(config.launch.min_memory, None);
+        assert_eq!(config.launch.max_memory, None);
         assert_eq!(config.download.max_tasks, 64);
+    }
+
+    #[test]
+    fn memory_fields_accept_null_and_explicit_numbers() {
+        let (config, warnings) =
+            Config::parse(r#"{"launch": {"min_memory": null, "max_memory": 4096}}"#);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(config.launch.min_memory, None);
+        assert_eq!(config.launch.max_memory, Some(4096));
     }
 
     #[test]
@@ -518,7 +528,7 @@ mod tests {
             }"#,
         );
         assert_eq!(config.launch.window_width, 854);
-        assert_eq!(config.launch.max_memory, 2048);
+        assert_eq!(config.launch.max_memory, None);
         assert_eq!(config.launch.window_height, 720);
         assert_eq!(config.download.max_tasks, 8);
         assert_eq!(warnings.len(), 2);
