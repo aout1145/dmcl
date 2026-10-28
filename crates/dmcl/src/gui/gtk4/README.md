@@ -136,7 +136,14 @@ gtk4/
     │   ├── mod.rs
     │   ├── common/
     │   │   ├── mod.rs
-    │   │   └── drag_list.rs     # 可拖动排序的列表
+    │   │   ├── drag_list.rs     # 可拖动排序的列表
+    │   │   ├── java_cache.rs    # Java 探测结果缓存
+    │   │   └── java_display.rs  # Java 展示文案
+    │   ├── game/                # 可复用的游戏设置表单
+    │   │   ├── mod.rs           # 目标抽象、字段级改动与选择项映射
+    │   │   ├── page.rs          # GameOptionsPage 表单
+    │   │   ├── choice.rs        # 展开选择项行
+    │   │   └── global.rs        # 全局配置落点
     │   └── launcher/            # 首选项的分类
     │       ├── mod.rs           # 左右分栏、分类列表与右栏切换
     │       ├── directory.rs     # Minecraft 目录管理、对话框与校验
@@ -162,7 +169,7 @@ gtk4/
 | app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
 | 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
-| 设置页 | `PreferencesPage`、`DirectoryPage`、`JavaPage`、`RootRow`、`JavaRow`、`drag_list` | [pages/settings/README.md](pages/settings/README.md) |
+| 设置页 | `PreferencesPage`、`DirectoryPage`、`JavaPage`、`GameOptionsPage`、`RootRow`、`JavaRow`、`drag_list` | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 
@@ -218,6 +225,7 @@ GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway�
 - 版本适配（`pages/download/custom/versions.rs`）：MC 类型合并、Forge 展示 / 安装 id 的区别、
   Fabric 最新 / 推荐规则、NeoForge 置顶；标签标题在 `custom/mod.rs`；
 - 过滤（`pages/download/common/version_select.rs`）：类别、搜索、保持顺序、未列出类别；
+- 游戏设置（`pages/settings/game/mod.rs`）：选择项下标映射、缺失项回退、字段级写回；
 - 前端选择（`gui/mod.rs`）：有 / 无 `gtk4` feature 时的回退。
 
 写测试时优先覆盖**行为、边界和容易回归的逻辑**（例如 Fabric 没有 stable、Forge 的
@@ -227,7 +235,8 @@ GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway�
 ### 3. 界面验证：Broadway + Chromium
 
 GTK 控件的行为（展开、hover、布局、焦点、动画）单测覆盖不到，改动页面后要实际渲染检查。
-没有桌面时用 Broadway 把 GTK 画到浏览器里：
+没有桌面时用 Broadway 把 GTK 画到浏览器里；也可以请用户在自己的桌面环境里自行验证，
+真实 GTK 后端的观感以用户看到的结果为准：
 
 ```bash
 cargo build -p dmcl --features gtk4
@@ -272,7 +281,8 @@ Debian / Ubuntu 的 `gtk4-broadwayd` 在 `libgtk-4-bin` 包里。等应用窗口
 - Forge 版本下拉的类别 chips（稳定 / 推荐）。
 - 实例分类下拉的启用与持久化。
 - 任务按钮的「运行中数量」角标。
-- 账号功能；首选项里的账号和全局游戏选项分类。
+- 账号功能；首选项里的账号分类。
+- 实例设置页复用 `GameOptionsPage`，实现实例 target 与逐项覆盖。
 - 游戏异常退出的错误报告窗口（远期）。
 - 删除实例等破坏性操作。
 

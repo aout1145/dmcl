@@ -1,7 +1,6 @@
 //! 首选项里的「Java 管理」分类：列表、搜索、对话框与配置写入。
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,7 +17,9 @@ use crate::config::{
     configs_from_details, merge_javas, same_java_path, unique_java_name, Config, JavaConfig,
 };
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
-use crate::gui::gtk4::pages::settings::common::drag_list;
+use crate::gui::gtk4::pages::settings::common::{
+    details_arch_text, details_title, drag_list, java_summary, JavaProbeCache,
+};
 
 /// 搜索按钮的常态标题。
 const SEARCH_TITLE: &str = "搜索已安装的 Java";
@@ -73,15 +74,21 @@ pub(super) struct JavaPage {
     /// 固定在列表最前面的搜索行与最后面的添加行。
     search_row: adw::ButtonRow,
     add_row: adw::ButtonRow,
-    /// 本次运行里探测成功的 Java，按绝对路径缓存。
-    probed: HashMap<PathBuf, JavaDetails>,
+    /// 与游戏设置页共享的探测结果缓存。
+    cache: Rc<JavaProbeCache>,
     /// 页面是否可见；不可见时不发起探测。
     visible: bool,
 }
 
+/// 「Java 管理」分类的初始化参数。
+pub(crate) struct JavaPageInit {
+    pub shell: Rc<Shell>,
+    pub cache: Rc<JavaProbeCache>,
+}
+
 #[relm4::component(pub(super))]
 impl SimpleComponent for JavaPage {
-    type Init = Rc<Shell>;
+    type Init = JavaPageInit;
     type Input = JavaMsg;
     type Output = ();
 
@@ -93,10 +100,11 @@ impl SimpleComponent for JavaPage {
     }
 
     fn init(
-        shell: Self::Init,
+        init: Self::Init,
         root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let JavaPageInit { shell, cache } = init;
         let config = config_store::store().config();
         let group = adw::PreferencesGroup::builder()
             .title("Java 管理")
@@ -149,7 +157,7 @@ impl SimpleComponent for JavaPage {
             javas,
             search_row,
             add_row,
-            probed: HashMap::new(),
+            cache,
             visible: false,
         };
         let javas_group = model.javas.widget();
@@ -167,7 +175,7 @@ impl SimpleComponent for JavaPage {
             JavaMsg::Hidden => self.visible = false,
             JavaMsg::ConfigChanged => self.reload(),
             JavaMsg::Probed { path, details } => {
-                self.probed.insert(path, details);
+                self.cache.insert(path, details);
             }
             JavaMsg::Add => show_add(&self.java_entries(), &sender),
             JavaMsg::Edit(name) => {
@@ -175,7 +183,7 @@ impl SimpleComponent for JavaPage {
                 let Some(java) = java else {
                     return;
                 };
-                let details = self.probed.get(&absolute(&java.path)).cloned();
+                let details = self.cache.get(&java.path);
                 show_edit(&name, java, details, &self.java_entries(), &sender);
             }
             JavaMsg::Remove(name) => {
@@ -205,7 +213,7 @@ impl SimpleComponent for JavaPage {
                     }
                 });
                 if let Some((path, details)) = cached {
-                    self.probed.insert(path, details);
+                    self.cache.insert(path, details);
                 }
                 self.reload();
             }
@@ -232,7 +240,7 @@ impl JavaPage {
         };
 
         let paths: Vec<PathBuf> = javas.iter().map(|(_, java)| absolute(&java.path)).collect();
-        self.probed.retain(|path, _| paths.contains(path));
+        self.cache.retain(&paths);
 
         let group = self.javas.widget().clone();
         {
@@ -242,7 +250,7 @@ impl JavaPage {
             group.remove(&self.add_row);
             group.add(&self.search_row);
             for (name, java) in javas {
-                let details = self.probed.get(&absolute(&java.path)).cloned();
+                let details = self.cache.get(&java.path);
                 guard.push_back((name, java, details));
             }
         }
@@ -262,8 +270,8 @@ impl JavaPage {
         let Some(java) = config.javas.get(name) else {
             return name.to_string();
         };
-        match self.probed.get(&absolute(&java.path)) {
-            Some(details) => details_title(details),
+        match self.cache.get(&java.path) {
+            Some(details) => details_title(&details),
             None => format!("Java {}", java.major),
         }
     }
@@ -344,7 +352,7 @@ impl JavaPage {
 
         // 搜索已经执行过这些 Java，直接记进缓存，列表不用再探测一遍。
         for details in &found {
-            self.probed
+            self.cache
                 .insert(absolute(&details.option.path), details.clone());
         }
 
@@ -1008,30 +1016,6 @@ enum RowInfo {
     Failed,
 }
 
-/// 标题：JDK/JRE 与完整版本。
-fn details_title(details: &JavaDetails) -> String {
-    format!(
-        "{} {}",
-        if details.is_jdk { "JDK" } else { "JRE" },
-        details.version_str
-    )
-}
-
-/// 右侧小字：供应商与架构；没有供应商时只显示架构。
-fn details_arch_text(details: &JavaDetails) -> String {
-    let arch = details.option.arch.name();
-    if details.vendor.is_empty() {
-        arch.to_string()
-    } else {
-        format!("{}, {arch}", details.vendor)
-    }
-}
-
-/// 探测详情的一行摘要：标题、供应商、架构。
-fn java_summary(details: &JavaDetails) -> String {
-    format!("{}, {}", details_title(details), details_arch_text(details))
-}
-
 /// 一个 Java 行：标题显示 JDK/JRE 与完整版本，右侧供应商与架构，下方是路径。
 pub(super) struct JavaRow {
     name: String,
@@ -1251,30 +1235,15 @@ impl FactoryComponent for JavaRow {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dmcl_launch::{JavaDetails, JavaOption};
     use dmcl_mcmeta::os::Arch;
 
-    use super::{details_title, duplicate_java, entry_path, java_summary, validate, Detected};
+    use super::{duplicate_java, entry_path, validate, Detected};
 
     fn java(path: &str, major: u32) -> crate::config::JavaConfig {
         crate::config::JavaConfig {
             path: PathBuf::from(path),
             major,
             arch: Arch::X86_64,
-        }
-    }
-
-    fn details(version: &str, vendor: &str, is_jdk: bool) -> JavaDetails {
-        JavaDetails {
-            option: JavaOption {
-                path: PathBuf::from("java"),
-                major: 8,
-                arch: Arch::X86_64,
-            },
-            type_: "openjdk".to_string(),
-            version_str: version.to_string(),
-            vendor: vendor.to_string(),
-            is_jdk,
         }
     }
 
@@ -1285,17 +1254,6 @@ mod tests {
             arch: Arch::X86_64,
             details: None,
         }
-    }
-
-    #[test]
-    fn summaries_show_kind_version_vendor_and_arch() {
-        let jdk = details("1.8.0_83", "Microsoft", true);
-        assert_eq!(details_title(&jdk), "JDK 1.8.0_83");
-        assert_eq!(java_summary(&jdk), "JDK 1.8.0_83, Microsoft, x86_64");
-
-        let jre = details("1.8.0_83", "", false);
-        assert_eq!(details_title(&jre), "JRE 1.8.0_83");
-        assert_eq!(java_summary(&jre), "JRE 1.8.0_83, x86_64");
     }
 
     #[test]

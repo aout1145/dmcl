@@ -173,7 +173,7 @@ fn ensure_java_path(name: &str, java: &JavaConfig) -> Result<()> {
 }
 
 /// 把扫描结果转成配置表：名字按惯例生成，短哈希碰撞时补序号。
-pub(crate) fn configs_from_details(details: Vec<JavaDetails>) -> JavaConfigs {
+pub fn configs_from_details(details: Vec<JavaDetails>) -> JavaConfigs {
     let mut configs = JavaConfigs::new();
     for details in details {
         let name = unique_java_name(&configs, &details);
@@ -184,7 +184,7 @@ pub(crate) fn configs_from_details(details: Vec<JavaDetails>) -> JavaConfigs {
 }
 
 /// 按探测结果生成一个当前表里唯一的键。
-pub(crate) fn unique_java_name(javas: &JavaConfigs, details: &JavaDetails) -> String {
+pub fn unique_java_name(javas: &JavaConfigs, details: &JavaDetails) -> String {
     let base = config_name(details);
     let mut name = base.clone();
     let mut suffix = 2;
@@ -200,7 +200,7 @@ pub(crate) fn unique_java_name(javas: &JavaConfigs, details: &JavaDetails) -> St
 ///
 /// 已有名字（手工条目、旧配置里的非哈希名字）全部保留；同一路径不会以不同名字
 /// 重复加入。同名条目更新整项，同一路径的其它名字只刷新缓存的版本 / 架构。
-pub(crate) fn merge_javas(javas: &mut JavaConfigs, found: &JavaConfigs) -> usize {
+pub fn merge_javas(javas: &mut JavaConfigs, found: &JavaConfigs) -> usize {
     let mut added = 0;
     for (name, java) in found {
         let existing_name = javas
@@ -223,7 +223,7 @@ pub(crate) fn merge_javas(javas: &mut JavaConfigs, found: &JavaConfigs) -> usize
     added
 }
 
-pub(crate) fn same_java_path(left: &Path, right: &Path) -> bool {
+pub fn same_java_path(left: &Path, right: &Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
         _ => absolute(left) == absolute(right),
