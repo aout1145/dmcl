@@ -26,6 +26,8 @@ use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
 /// 启动一个版本。
 pub struct GameLauncher {
     pub option: LaunchOption,
+    /// 已经登录好的账户快照。
+    pub account: Account,
     /// `versions/<version_name>`。
     pub version_path: PathBuf,
     pub java: Option<JavaOption>,
@@ -33,12 +35,13 @@ pub struct GameLauncher {
 }
 
 impl GameLauncher {
-    /// `this(LaunchOption)`。
-    pub async fn new(option: LaunchOption) -> Result<Self> {
+    /// `this(LaunchOption, Account)`。
+    pub async fn new(option: LaunchOption, account: Account) -> Result<Self> {
         let version_path = version_dir(&option.root_path, &option.version_name);
         let json = read_version_json_safe(&option.root_path, &option.version_name).await?;
         Ok(Self {
             option,
+            account,
             version_path,
             java: None,
             json,
@@ -285,7 +288,7 @@ impl GameLauncher {
         .into_owned();
         let version_id = self.json.id.clone().unwrap_or_default();
         let version_path = self.version_path.to_string_lossy().into_owned();
-        let account: &dyn Account = self.option.account.as_ref();
+        let account = &self.account;
         let custom_info = self.option.custom_info.clone();
         let classpath_separator = classpath_separator().to_string();
 
@@ -296,16 +299,16 @@ impl GameLauncher {
                 .replace("${launcher_version}", LAUNCHER_VERSION)
                 .replace("${classpath}", &classpath)
                 .replace("${library_directory}", &library_directory)
-                .replace("${auth_player_name}", account.get_name())
-                .replace("${auth_uuid}", &account.get_uuid())
-                .replace("${uuid}", &account.get_uuid())
+                .replace("${auth_player_name}", &account.username)
+                .replace("${auth_uuid}", &account.uuid)
+                .replace("${uuid}", &account.uuid)
                 .replace("${version_name}", &version_id)
                 .replace("${game_directory}", &version_path)
                 .replace("${assets_root}", &assets_root)
                 .replace("${assets_index_name}", &asset_index_id)
-                .replace("${auth_access_token}", &account.get_access_token())
-                .replace("${auth_session}", &account.get_access_token())
-                .replace("${user_type}", account.get_type())
+                .replace("${auth_access_token}", &account.access_token)
+                .replace("${auth_session}", &account.access_token)
+                .replace("${user_type}", &account.user_type)
                 .replace("${version_type}", &custom_info)
                 .replace("${user_properties}", "{}")
                 .replace("${game_assets}", &game_assets)
@@ -438,7 +441,7 @@ pub(crate) fn spawn_game(version_path: &std::path::Path, args: &[String]) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::OfflineAccount;
+    use crate::account::{AccountSource, OfflineAccountSource};
     use dmcl_mcmeta::os::Arch;
     use std::sync::Arc;
 
@@ -458,11 +461,14 @@ mod tests {
         assert!(compare_to("1.0", "1.0.1", Cmp::Lt).unwrap());
     }
 
-    fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
-        let option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, "1.0");
+    async fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
+        let source = Arc::new(OfflineAccountSource::new("player"));
+        let account = source.login().await.unwrap();
+        let option = LaunchOption::new(source, &root, "1.0");
         let version_path = version_dir(&root, "1.0");
         GameLauncher {
             option,
+            account,
             version_path,
             java: Some(JavaOption {
                 path: PathBuf::from("/usr/bin/java"),
@@ -494,7 +500,7 @@ mod tests {
         )
         .unwrap();
 
-        let launcher = launcher_with(json, root.clone());
+        let launcher = launcher_with(json, root.clone()).await;
         let classpath = launcher
             .get_libraries(&TaskContext::detached("t"))
             .await
@@ -543,7 +549,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut launcher = launcher_with(json, root);
+        let mut launcher = launcher_with(json, root).await;
         launcher.option.min_memory = Some(512);
         launcher.option.max_memory = Some(2048);
         launcher

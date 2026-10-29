@@ -190,8 +190,8 @@ impl Config {
         version_name: &str,
         root: &Path,
     ) -> Result<LaunchOption> {
-        let account = self.selected_account(launch)?;
-        let mut option = LaunchOption::new(account, root.to_path_buf(), version_name)
+        let account_source = self.selected_account_source(launch)?;
+        let mut option = LaunchOption::new(account_source, root.to_path_buf(), version_name)
             .with_java(Arc::new(java::ConfigJava {
                 choice: launch.java.clone(),
                 configs: self.javas.clone(),
@@ -372,7 +372,7 @@ mod tests {
         let error = loaded.error.as_ref().expect("应当有警告");
         assert_eq!(error.warnings.len(), 2);
         assert!(config
-            .selected_account(&loaded.launch)
+            .selected_account_source(&loaded.launch)
             .err()
             .expect("应当报错")
             .to_string()
@@ -424,7 +424,7 @@ mod tests {
         assert!(option.additional_jvm.contains(&"-Da=1".to_string()));
         assert!(option.additional_jvm.contains(&"-Db=2".to_string()));
         assert_eq!(option.additional_game, vec!["--foo", "bar"]);
-        assert_eq!(option.account.get_name(), "Steve");
+        assert_eq!(option.account_source.name(), "Steve");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dmcl_install::InstallOptions;
-use dmcl_launch::{GameLauncher, LaunchOption, OfflineAccount};
+use dmcl_launch::{AccountSource, GameLauncher, LaunchOption, OfflineAccountSource};
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
 
 const VERSION: &str = "1.7.10";
@@ -28,10 +28,14 @@ async fn integrity_and_command_line_for_a_real_version() {
         .await
         .expect("download_vanilla");
 
-    let mut option = LaunchOption::new(Arc::new(OfflineAccount::new("player")), &root, VERSION);
+    let source = Arc::new(OfflineAccountSource::new("player"));
+    let account = source.login().await.expect("login");
+    let mut option = LaunchOption::new(source, &root, VERSION);
     option.min_memory = Some(512);
     option.max_memory = Some(2048);
-    let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
+    let mut launcher = GameLauncher::new(option, account)
+        .await
+        .expect("GameLauncher");
 
     // 只装了版本 JSON：显然还不完整，而且能指出缺的是哪个 jar
     let status = dmcl_install::check_integrity(&install_options.plan(), VERSION)

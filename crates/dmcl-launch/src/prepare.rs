@@ -1,19 +1,21 @@
-//! 启动流程：检查并补全 → 准备 natives → 生成参数 → 启动。
+//! 启动流程：登录 → 检查并补全 → 准备 natives → 生成参数 → 启动。
 //!
-//! * [`PrepareLaunchFilesTask`]（`Task<(), IntegrityStatus>`）——「检查文件完整性；
-//!   缺件时跑一次 `dmcl-install` 补全」，产出完整性检查结果；
-//! * [`PrepareNativesTask`]（`Task<IntegrityStatus, JavaOption>`）——先通过选择器选好 java，
-//!   再按当前平台的 os 与 java 的 arch 下载 + 解压 natives（natives 只有在选好 java 后才能确定）；
-//! * [`GenerateArgsTask`]（`Task<JavaOption, PreparedLaunch>`）——用已经选好的 java
-//!   生成启动参数，产出 [`PreparedLaunch`]；
+//! * [`LoginTask`]（`Task<(), Account>`）——让账户来源产出一个可用会话，失败即中止；
+//! * [`PrepareLaunchFilesTask`]（`Task<Account, (Account, IntegrityStatus)>`）——「检查文件
+//!   完整性；缺件时跑一次 `dmcl-install` 补全」，产出完整性检查结果；
+//! * [`PrepareNativesTask`]（`Task<(Account, IntegrityStatus), (Account, JavaOption)>`）——
+//!   先通过选择器选好 java，再按当前平台的 os 与 java 的 arch 下载 + 解压 natives
+//!   （natives 只有在选好 java 后才能确定）；
+//! * [`GenerateArgsTask`]（`Task<(Account, JavaOption), PreparedLaunch>`）——用已经选好的
+//!   java 生成启动参数，产出 [`PreparedLaunch`]；
 //! * [`LaunchTask`]（`Task<PreparedLaunch, GameMonitor>`）——用已生成的参数启动子进程，
 //!   产出**未 wait** 的 [`GameMonitor`]。
 //!
-//! [`launch_chain`] 把四者串成 `TaskChain<(), GameMonitor>`：由调用者运行、订阅事件，
+//! [`launch_chain`] 把五者串成 `TaskChain<(), GameMonitor>`：由调用者运行、订阅事件，
 //! 并在拿到未 wait 的 [`GameMonitor`] 后决定是等待退出还是中途停掉。
 //!
-//! 「先补全文件、再生成参数」是刻意的顺序：参数只在文件齐备后才拼，避免在缺件时
-//! 生成一份用不了（或需要重拼）的命令行。
+//! 「先登录、再补全文件、最后生成参数」是刻意的顺序：认证失败时立即中止，不会开始下载；
+//! 参数只在文件齐备后才拼，避免在缺件时生成一份用不了（或需要重拼）的命令行。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,10 +26,14 @@ use dmcl_mcmeta::layout::read_version_json_safe;
 use dmcl_mcmeta::os::Os;
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
+use crate::account::{Account, AccountSource};
 use crate::java::JavaOption;
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
+
+/// 登录之后沿链传下去的账户快照与上一步产物。
+type WithAccount<T> = (Account, T);
 
 /// 「补全文件 → 准备 natives → 生成参数」之后的产出。
 #[derive(Debug, Clone)]
@@ -38,6 +44,37 @@ pub struct PreparedLaunch {
     pub command: String,
     /// 游戏进程的工作目录（`versions/<name>`）。
     pub version_path: PathBuf,
+}
+
+/// 让账户来源产出一个可用会话。
+///
+/// 离线账户直接通过；在线实现以后可以在这里静默刷新或走完整登录。登录失败会中止
+/// 整条链，后面的下载 / 启动都不会开始。
+pub struct LoginTask {
+    account_source: Arc<dyn AccountSource>,
+}
+
+impl LoginTask {
+    pub fn new(account_source: Arc<dyn AccountSource>) -> Self {
+        Self { account_source }
+    }
+}
+
+impl Task<(), Account> for LoginTask {
+    fn name(&self) -> &str {
+        "登录"
+    }
+
+    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<Account>> {
+        Box::pin(async move {
+            let account = self.account_source.login().await?;
+            ctx.log(format!(
+                "账户：{}（{}）",
+                account.username, account.user_type
+            ));
+            Ok(account)
+        })
+    }
 }
 
 /// 检查文件完整性；缺件时跑一次 `dmcl-install` 补全。
@@ -57,12 +94,16 @@ impl PrepareLaunchFilesTask {
     }
 }
 
-impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
+impl Task<Account, WithAccount<IntegrityStatus>> for PrepareLaunchFilesTask {
     fn name(&self) -> &str {
         "检查并补全文件"
     }
 
-    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<IntegrityStatus>> {
+    fn run<'a>(
+        &'a self,
+        account: Account,
+        ctx: TaskContext,
+    ) -> BoxFuture<'a, Result<WithAccount<IntegrityStatus>>> {
         Box::pin(async move {
             let integrity =
                 dmcl_install::check_integrity(&self.install.plan(), &self.version_name).await?;
@@ -74,7 +115,7 @@ impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
                     dmcl_install::game_files_task(self.install.clone(), self.version_name.clone());
                 Task::<(), ()>::run(&chain, (), ctx).await?;
             }
-            Ok(integrity)
+            Ok((account, integrity))
         })
     }
 }
@@ -94,16 +135,16 @@ impl PrepareNativesTask {
     }
 }
 
-impl Task<IntegrityStatus, JavaOption> for PrepareNativesTask {
+impl Task<WithAccount<IntegrityStatus>, WithAccount<JavaOption>> for PrepareNativesTask {
     fn name(&self) -> &str {
         "准备 natives"
     }
 
     fn run<'a>(
         &'a self,
-        _integrity: IntegrityStatus,
+        (account, _integrity): WithAccount<IntegrityStatus>,
         ctx: TaskContext,
-    ) -> BoxFuture<'a, Result<JavaOption>> {
+    ) -> BoxFuture<'a, Result<WithAccount<JavaOption>>> {
         Box::pin(async move {
             let json =
                 read_version_json_safe(&self.option.root_path, &self.option.version_name).await?;
@@ -127,7 +168,7 @@ impl Task<IntegrityStatus, JavaOption> for PrepareNativesTask {
                 java.arch,
             );
             Task::<(), ()>::run(&chain, (), ctx).await?;
-            Ok(java)
+            Ok((account, java))
         })
     }
 }
@@ -143,18 +184,18 @@ impl GenerateArgsTask {
     }
 }
 
-impl Task<JavaOption, PreparedLaunch> for GenerateArgsTask {
+impl Task<WithAccount<JavaOption>, PreparedLaunch> for GenerateArgsTask {
     fn name(&self) -> &str {
         "生成启动参数"
     }
 
     fn run<'a>(
         &'a self,
-        java: JavaOption,
+        (account, java): WithAccount<JavaOption>,
         ctx: TaskContext,
     ) -> BoxFuture<'a, Result<PreparedLaunch>> {
         Box::pin(async move {
-            let mut launcher = GameLauncher::new(self.option.clone()).await?;
+            let mut launcher = GameLauncher::new(self.option.clone(), account).await?;
             // 复用上一步选好的 java，避免再选一次
             launcher.java = Some(java);
             let args = launcher.gen_args_in(&ctx).await?;
@@ -193,14 +234,16 @@ impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
     }
 }
 
-/// 组装「检查并补全 → 准备 natives → 生成参数 → 启动」四段链，返回
+/// 组装「登录 → 检查并补全 → 准备 natives → 生成参数 → 启动」五段链，返回
 /// `TaskChain<(), GameMonitor>`（不运行）。
 pub fn launch_chain(
     option: LaunchOption,
     install: Arc<InstallOptions>,
 ) -> TaskChain<(), GameMonitor> {
     let version_name = option.version_name.clone();
+    let account_source = option.account_source.clone();
     TaskChain::new("启动")
+        .then(LoginTask::new(account_source), "登录")
         .then(
             PrepareLaunchFilesTask::new(install.clone(), version_name),
             "检查并补全文件",
@@ -216,7 +259,7 @@ pub fn launch_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::OfflineAccount;
+    use crate::account::OfflineAccountSource;
     use crate::java::JavaDetails;
     use dmcl_mcmeta::source::DownloadSource;
     use std::sync::Arc;
@@ -225,10 +268,15 @@ mod tests {
         Arc::new(InstallOptions::new(root, DownloadSource::official()))
     }
 
+    fn offline_source() -> Arc<dyn AccountSource> {
+        Arc::new(OfflineAccountSource::new("p"))
+    }
+
     #[test]
     fn the_tasks_report_their_names() {
-        let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
+        let option = LaunchOption::new(offline_source(), "/mc", "1.0");
         let install = install_options(std::path::Path::new("/mc"));
+        assert_eq!(LoginTask::new(option.account_source.clone()).name(), "登录");
         assert_eq!(
             PrepareLaunchFilesTask::new(install.clone(), "1.0").name(),
             "检查并补全文件"
@@ -241,14 +289,20 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_chain_checks_fills_prepares_generates_then_launches() {
-        let option = LaunchOption::new(Arc::new(OfflineAccount::new("p")), "/mc", "1.0");
+    fn the_launch_chain_logs_in_checks_fills_prepares_generates_then_launches() {
+        let option = LaunchOption::new(offline_source(), "/mc", "1.0");
         let install = install_options(std::path::Path::new("/mc"));
         let chain = launch_chain(option, install);
         let names: Vec<_> = chain.step_names().collect();
         assert_eq!(
             names,
-            ["检查并补全文件", "准备 natives", "生成启动参数", "启动游戏"]
+            [
+                "登录",
+                "检查并补全文件",
+                "准备 natives",
+                "生成启动参数",
+                "启动游戏"
+            ]
         );
     }
 
@@ -269,9 +323,9 @@ mod tests {
         None
     }
 
-    /// 完整跑一遍：检查（空版本即完整）→ 准备 natives（选 java）→ 生成参数 → 拿到产出。
+    /// 完整跑一遍：登录 → 检查（空版本即完整）→ 准备 natives（选 java）→ 生成参数 → 拿到产出。
     #[tokio::test]
-    async fn checking_then_generating_produces_the_launch_args() {
+    async fn logging_in_then_checking_then_generating_produces_the_launch_args() {
         let Some(java) = any_java().await else {
             return; // 本机没有 java，跳过
         };
@@ -293,24 +347,33 @@ mod tests {
             .await
             .unwrap();
 
-        let option =
-            LaunchOption::new(Arc::new(OfflineAccount::new("player")), root.clone(), "1.0")
-                .with_java(Arc::new(java));
+        let option = LaunchOption::new(
+            Arc::new(OfflineAccountSource::new("player")),
+            root.clone(),
+            "1.0",
+        )
+        .with_java(Arc::new(java));
 
-        let integrity = PrepareLaunchFilesTask::new(install_options(&root), "1.0")
-            .run((), TaskContext::detached("检查并补全文件"))
+        let account = LoginTask::new(option.account_source.clone())
+            .run((), TaskContext::detached("登录"))
+            .await
+            .unwrap();
+        assert_eq!(account.username, "player");
+
+        let (account, integrity) = PrepareLaunchFilesTask::new(install_options(&root), "1.0")
+            .run(account, TaskContext::detached("检查并补全文件"))
             .await
             .unwrap();
         assert!(integrity.is_complete(), "{:?}", integrity.missing);
 
-        let java = PrepareNativesTask::new(option.clone(), install_options(&root))
-            .run(integrity, TaskContext::detached("准备 natives"))
+        let (account, java) = PrepareNativesTask::new(option.clone(), install_options(&root))
+            .run((account, integrity), TaskContext::detached("准备 natives"))
             .await
             .unwrap();
         assert!(java.major > 0);
 
         let prepared = GenerateArgsTask::new(option)
-            .run(java, TaskContext::detached("生成启动参数"))
+            .run((account, java), TaskContext::detached("生成启动参数"))
             .await
             .unwrap();
 

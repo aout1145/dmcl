@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::{Account, OfflineAccount};
+use dmcl_launch::{AccountSource, OfflineAccountSource};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +23,17 @@ impl Default for AccountConfig {
     fn default() -> Self {
         Self::Offline {
             username: "player".to_string(),
+        }
+    }
+}
+
+impl AccountConfig {
+    /// 把这个配置条目变成一个登录源。
+    ///
+    /// 在线账户以后在这里返回对应的 `AccountSource`，配置层不需要知道登录细节。
+    pub fn source(&self) -> Arc<dyn AccountSource> {
+        match self {
+            Self::Offline { username } => Arc::new(OfflineAccountSource::new(username.clone())),
         }
     }
 }
@@ -61,10 +72,10 @@ pub(super) fn validate_selection(
 }
 
 impl Config {
-    /// 按 `launch.account` 造一个账户。
+    /// 按 `launch.account` 取一个账户登录源。
     ///
     /// 没有选择账户（`null`）或指向不存在的账户时返回错误，不静默使用默认账户。
-    pub fn selected_account(&self, launch: &LaunchConfig) -> Result<Arc<dyn Account>> {
+    pub fn selected_account_source(&self, launch: &LaunchConfig) -> Result<Arc<dyn AccountSource>> {
         let name = launch
             .account
             .as_deref()
@@ -73,11 +84,7 @@ impl Config {
             .accounts
             .get(name)
             .ok_or_else(|| anyhow!("配置项「launch.account」指向的账号不存在：{name}"))?;
-        match account {
-            AccountConfig::Offline { username } => {
-                Ok(Arc::new(OfflineAccount::new(username.clone())))
-            }
-        }
+        Ok(account.source())
     }
 }
 
@@ -164,19 +171,22 @@ mod tests {
     }
 
     #[test]
-    fn selected_account_requires_an_explicit_valid_selection() {
+    fn selected_account_source_requires_an_explicit_valid_selection() {
         let config = Config::default();
         let mut launch = config.launch.clone();
         launch.account = None;
-        assert!(config.selected_account(&launch).is_err());
+        assert!(config.selected_account_source(&launch).is_err());
 
         launch.account = Some("nope".to_string());
-        let err = config.selected_account(&launch).err().expect("应当报错");
+        let err = config
+            .selected_account_source(&launch)
+            .err()
+            .expect("应当报错");
         assert!(err.to_string().contains("账号不存在：nope"));
 
         launch.account = Some("player".to_string());
         assert_eq!(
-            config.selected_account(&launch).unwrap().get_name(),
+            config.selected_account_source(&launch).unwrap().name(),
             "player"
         );
     }

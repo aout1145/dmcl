@@ -55,7 +55,7 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
 | `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
-| `dmcl-launch`   | `LaunchOption`（账号、根目录、版本名、窗口 / 内存（可自动）、`JavaSelector`）         |
+| `dmcl-launch`   | `LaunchOption`（账户登录源、根目录、版本名、窗口 / 内存（可自动）、`JavaSelector`）   |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 这样每个业务 crate 都能被 GUI / TUI / 测试用自定义选项直接调用。
@@ -141,7 +141,10 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 ### `dmcl-launch` —— 启动
 
 账号、Java 探测 / 扫描 / 自动选择、命令行生成、启动与状态监控，见下文「启动与安装解耦」。
-这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
+账户分成两层：`Account` 是登录完成后用来拼命令行的只读快照（名字 / uuid / token / 类型），
+`AccountSource` 负责 `login` / `refresh` 并产出快照。账户层不依赖启动链或任务系统；
+`LaunchOption` 只持有登录源，启动链的 `LoginTask` 只是它的调用方之一，账号管理页以后也
+可以直接复用。这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
 调用者实现的 `JavaSelector` 决定。内存可以留空：`resolve_memory` 在选好 Java 后按系统
 可用内存的 3/4（至少 1 GiB）决定 Xmx，32 位 Java 压到 1.5 GiB；读不到可用内存时固定
 1.5 GiB；Xms 留空时取 Xmx。
@@ -291,8 +294,9 @@ if !status.is_complete() {
         .await?;
 }
 
-// dmcl-launch 只负责拼参数、起进程
-let mut launcher = GameLauncher::new(option).await?;
+// dmcl-launch 只负责拼参数、起进程；账户由登录源产出
+let account = option.account_source.login().await?;
+let mut launcher = GameLauncher::new(option, account).await?;
 let mut monitor = launcher.launch_game().await?;
 monitor.wait().await?;
 ```
@@ -305,8 +309,9 @@ monitor.wait().await?;
   &options)` 只按缓存的 `major` / `arch` 选择（版本相等优先，其次最接近的更高版本，再其次
   最高的更低版本；同一档内优先当前平台架构）、不执行 Java；`LaunchOption` 通过
   `Arc<dyn JavaSelector>` 取 Java，配置层把 `JavaConfig` 转成 `JavaOption` 后实现选择器；
-- 一站式流程 `launch_chain(option, install)` 把「检查并补全 → 准备 natives → 生成参数 →
-  启动」串成一条 `TaskChain<(), GameMonitor>`：**准备 natives** 先选好 java，再按当前平台的
+- 一站式流程 `launch_chain(option, install)` 把「登录 → 检查并补全 → 准备 natives → 生成参数 →
+  启动」串成一条 `TaskChain<(), GameMonitor>`：**登录**先让 `AccountSource` 产出可用会话，
+  失败就中止、不开始下载；**准备 natives** 先选好 java，再按当前平台的
   os 与这个 java 的 arch 跑 `natives_task`（下载 + 解压到 `natives_dir`，目录名带 os / arch）；
   参数只在文件齐备、java 选好后才生成，且生成参数复用同一个 java，不再选第二次。
 

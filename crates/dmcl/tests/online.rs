@@ -62,8 +62,11 @@ async fn the_whole_chain_runs_from_a_config_document() {
     let option = config
         .launch_option(&config.launch, VERSION, &root)
         .expect("launch_option");
-    assert_eq!(option.account.get_name(), "player");
-    let mut launcher = GameLauncher::new(option).await.expect("GameLauncher");
+    assert_eq!(option.account_source.name(), "player");
+    let account = option.account_source.login().await.expect("login");
+    let mut launcher = GameLauncher::new(option, account)
+        .await
+        .expect("GameLauncher");
 
     // 只装了元数据，完整性检查必须报告缺件，并且给出可用来修复的模板地址
     let status = dmcl_install::check_integrity(&install.plan(), VERSION)

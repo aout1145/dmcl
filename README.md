@@ -117,7 +117,7 @@ dmcl list-mc --type=release,snapshot
 
 | 命令                                                                        | 说明                                                  |
 | --------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `launch <version-name>`                                                     | 检查并补全文件 → 生成参数 → 启动                      |
+| `launch <version-name>`                                                     | 登录 → 检查并补全文件 → 生成参数 → 启动               |
 | `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                        |
 | `install … [--fabric] [--forge] [--neoforge]`                               | 安装模组加载器                                        |
 | `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本                                        |
@@ -215,7 +215,8 @@ macOS `~/Library/Application Support`）。
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
   失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
 - 账户条目目前只支持离线账户，格式为
-  `{ "type": "offline", "username": "..." }`。
+  `{ "type": "offline", "username": "..." }`。启动链第一步会调用账户的登录源；
+  离线账户直接通过，在线登录以后接在这里。
 
 ### 实例覆盖
 
