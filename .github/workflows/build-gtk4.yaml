@@ -1,5 +1,12 @@
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 # GTK4 + libadwaita 图形前端：单独验证 `--features gtk4`。
 # 需要 GTK ≥4.22 / libadwaita ≥1.9（用到 AdwWrapBox / AdwWindow 等较新的 Adw 控件）。
 jobs:
@@ -9,7 +16,7 @@ jobs:
     # `ubuntu-26.04`。
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,7 +58,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -94,7 +101,7 @@ jobs:
     name: GUI (GTK4, macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:

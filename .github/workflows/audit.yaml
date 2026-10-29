@@ -1,0 +1,29 @@
+on:
+  push:
+  pull_request:
+  # 依赖库可能在最后一次提交之后才披露漏洞，所以每周再扫一次。
+  schedule:
+    - cron: "0 0 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 依赖漏洞扫描只跑一个平台：Cargo.lock 与平台无关，没必要在三个系统上重复。
+# 有漏洞时 job 失败；unmaintained / yanked 之类的 warning 默认不阻塞。
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        run: cargo audit

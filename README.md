@@ -263,8 +263,9 @@ cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
 cargo test -p dmcl --features gtk4
 ```
 
-CI 分两个 workflow：`build.yaml` 跑 Linux / Windows / macOS 的默认构建；`build-gtk4.yaml`
-装 GTK 后跑三个平台的 GTK4 检查、测试、构建，并上传自包含包。
+CI 分三个 workflow：`build.yaml` 跑 Linux / Windows / macOS 的默认构建；`build-gtk4.yaml`
+装 GTK 后跑三个平台的 GTK4 检查、测试、构建，并上传自包含包；`audit.yaml` 在每次提交、
+PR 和每周一定时跑 `cargo audit` 扫描依赖漏洞。
 
 ## 架构
 
