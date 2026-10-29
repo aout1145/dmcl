@@ -119,6 +119,13 @@ impl TaskState {
         (self.done_steps, self.total_steps)
     }
 
+    /// 当前正在执行的顶层步骤序号（1 起，按总步骤数封顶）。
+    ///
+    /// 事件里的 `step` 是 0 起；界面显示「第几步」时用这个值。
+    pub fn current_step_number(&self) -> usize {
+        (self.done_steps + 1).min(self.total_steps)
+    }
+
     /// 当前最内层步骤名。
     pub fn current_step(&self) -> Option<&str> {
         self.stack.last().map(String::as_str)
@@ -200,21 +207,25 @@ mod tests {
     fn counts_only_top_level_steps() {
         let mut state = TaskState::new("t");
         state.apply(&started(2));
+        assert_eq!(state.current_step_number(), 1);
 
         state.apply(&step_started("A"));
         // A 内部又是一个链：子步骤开始 / 结束
         state.apply(&step_started("child"));
         state.apply(&step_finished("child"));
         assert_eq!(state.overall(), (0, 2), "子步骤结束不该计入总进度");
+        assert_eq!(state.current_step_number(), 1);
 
         state.apply(&step_finished("A"));
         assert_eq!(state.overall(), (1, 2), "顶层步骤 A 结束才 +1");
-        assert_eq!(state.current_step(), None);
 
+        // 下一步开始时，界面应当显示「第 2 步」，而不是已完成的 1。
         state.apply(&step_started("B"));
+        assert_eq!(state.current_step_number(), 2);
         assert_eq!(state.current_step(), Some("B"));
         state.apply(&step_finished("B"));
         assert_eq!(state.overall(), (2, 2));
+        assert_eq!(state.current_step_number(), 2);
     }
 
     /// 分项进度取最近一条；当前步骤变了要清掉旧的进度。

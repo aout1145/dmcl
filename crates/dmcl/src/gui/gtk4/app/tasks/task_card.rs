@@ -309,20 +309,21 @@ impl TaskCard {
     }
 
     fn overall_text(&self) -> String {
-        let (done, total) = self.state.overall();
+        let (_, total) = self.state.overall();
+        let current = self.state.current_step_number();
         match self.state.status {
             TaskStatus::Canceling => {
                 if total == 0 {
                     "取消中…".to_string()
                 } else {
-                    format!("取消中…（步骤 {done}/{total}）")
+                    format!("取消中…（步骤 {current}/{total}）")
                 }
             }
             TaskStatus::Done => "已完成".to_string(),
             TaskStatus::Cancelled => "已取消".to_string(),
             TaskStatus::Failed => String::new(),
             TaskStatus::Running if total == 0 => "准备中…".to_string(),
-            TaskStatus::Running => format!("步骤 {done}/{total}"),
+            TaskStatus::Running => format!("步骤 {current}/{total}"),
         }
     }
 
