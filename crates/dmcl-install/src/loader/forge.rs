@@ -169,7 +169,7 @@ pub fn install_forge_task(
 ) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 Forge：{version_name}"))
         .then(
-            task_fn_io("下载 Forge 安装器", {
+            task_fn_io({
                 let options = options.clone();
                 move |_: (), ctx: TaskContext| {
                     let options = options.clone();
@@ -183,7 +183,7 @@ pub fn install_forge_task(
             "下载 Forge 安装器",
         )
         .then(
-            task_fn_io("解出安装器内的库", {
+            task_fn_io({
                 let options = options.clone();
                 move |installer: Installer, ctx: TaskContext| {
                     let options = options.clone();
@@ -202,7 +202,7 @@ pub fn install_forge_task(
             "解出安装器内的库",
         )
         .then(
-            task_fn_io("运行安装器", {
+            task_fn_io({
                 let options = options.clone();
                 let version_name = version_name.clone();
                 move |installer: Installer, ctx: TaskContext| {
@@ -224,7 +224,7 @@ pub fn install_forge_task(
             "运行安装器",
         )
         .then(
-            task_fn_io("写入版本元数据", {
+            task_fn_io({
                 let options = options.clone();
                 let version_name = version_name.clone();
                 move |installer: Installer, _ctx: TaskContext| {

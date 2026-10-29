@@ -30,7 +30,6 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// 见 crate 文档了解并发 / 分块 / `.part` 策略。
 #[derive(Debug)]
 pub struct DownloadTask {
-    name: String,
     items: Vec<DownloadItem>,
     options: DownloadOptions,
     client: reqwest::Client,
@@ -46,17 +45,10 @@ impl DownloadTask {
             .build()
             .unwrap_or_default();
         Self {
-            name: "下载".to_string(),
             items: Vec::new(),
             options,
             client,
         }
-    }
-
-    /// 任务名（进度事件里的名字）。
-    pub fn named(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        self
     }
 
     /// 用外部提供的 http 客户端（例如复用一个连接池）。
@@ -200,10 +192,6 @@ impl DownloadTask {
 }
 
 impl Task<(), DownloadReport> for DownloadTask {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<DownloadReport>> {
         Box::pin(async move {
             let report = self.execute(&ctx).await?;
@@ -964,19 +952,16 @@ mod tests {
 
     #[test]
     fn the_task_reports_its_items() {
-        let mut task = DownloadTask::new(DownloadOptions::default())
-            .named("下载游戏")
-            .with_item(
-                DownloadItem::new(["https://example.com/a.jar".to_string()], "/tmp/a.jar")
-                    .with_size(Some(10)),
-            );
+        let mut task = DownloadTask::new(DownloadOptions::default()).with_item(
+            DownloadItem::new(["https://example.com/a.jar".to_string()], "/tmp/a.jar")
+                .with_size(Some(10)),
+        );
         task.push(DownloadItem::new(
             ["https://example.com/b.jar".to_string()],
             "/tmp/b.jar",
         ));
         assert_eq!(task.len(), 2);
         assert!(!task.is_empty());
-        assert_eq!(task.name(), "下载游戏");
         // 只有知道大小的文件计入分母
         assert_eq!(task.known_total_bytes(), 10);
         assert_eq!(task.items()[0].name, "a.jar");

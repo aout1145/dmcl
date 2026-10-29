@@ -28,7 +28,7 @@ pub fn install_fabric_task(
     loader_version: String,
 ) -> TaskChain<(), ()> {
     TaskChain::new(format!("安装 Fabric：{version_name}")).then(
-        task_fn_io("获取并写入版本元数据", {
+        task_fn_io({
             let options = options.clone();
             let version_name = version_name.clone();
             let mc_version = mc_version.clone();

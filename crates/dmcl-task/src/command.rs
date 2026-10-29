@@ -32,11 +32,10 @@ pub enum OutputMode {
 /// ```no_run
 /// # use dmcl_task::CommandTask;
 /// // java -version，并把输出逐行上报成进度
-/// let task = CommandTask::new("java").arg("-version").named("检查 Java");
+/// let task = CommandTask::new("java").arg("-version");
 /// # let _ = task;
 /// ```
 pub struct CommandTask {
-    name: String,
     program: OsString,
     args: Vec<OsString>,
     envs: Vec<(OsString, OsString)>,
@@ -45,24 +44,15 @@ pub struct CommandTask {
 }
 
 impl CommandTask {
-    /// 用可执行文件路径构造；默认任务名即该路径。
+    /// 用可执行文件路径构造。
     pub fn new(program: impl Into<OsString>) -> Self {
-        let program = program.into();
-        let name = program.to_string_lossy().into_owned();
         Self {
-            name,
-            program,
+            program: program.into(),
             args: Vec::new(),
             envs: Vec::new(),
             current_dir: None,
             mode: OutputMode::default(),
         }
-    }
-
-    /// 指定任务名（进度里显示的名字）。
-    pub fn named(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        self
     }
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
@@ -129,10 +119,6 @@ impl CommandTask {
 }
 
 impl Task<(), ()> for CommandTask {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             ctx.check_cancelled()?;
@@ -253,13 +239,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error() {
-        let chain = TaskChain::new("run").then(
-            CommandTask::new("sh")
-                .arg("-c")
-                .arg("exit 3")
-                .named("失败命令"),
-            "失败命令",
-        );
+        let chain =
+            TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("exit 3"), "失败命令");
         let err = chain.run(()).await.unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("失败命令"), "{text}");

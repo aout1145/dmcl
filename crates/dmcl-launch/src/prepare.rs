@@ -61,10 +61,6 @@ impl LoginTask {
 }
 
 impl Task<(), Account> for LoginTask {
-    fn name(&self) -> &str {
-        "登录"
-    }
-
     fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
             let account = self.account_source.login().await?;
@@ -95,10 +91,6 @@ impl PrepareLaunchFilesTask {
 }
 
 impl Task<Account, WithAccount<IntegrityStatus>> for PrepareLaunchFilesTask {
-    fn name(&self) -> &str {
-        "检查并补全文件"
-    }
-
     fn run<'a>(
         &'a self,
         account: Account,
@@ -136,10 +128,6 @@ impl PrepareNativesTask {
 }
 
 impl Task<WithAccount<IntegrityStatus>, WithAccount<JavaOption>> for PrepareNativesTask {
-    fn name(&self) -> &str {
-        "准备 natives"
-    }
-
     fn run<'a>(
         &'a self,
         (account, _integrity): WithAccount<IntegrityStatus>,
@@ -185,10 +173,6 @@ impl GenerateArgsTask {
 }
 
 impl Task<WithAccount<JavaOption>, PreparedLaunch> for GenerateArgsTask {
-    fn name(&self) -> &str {
-        "生成启动参数"
-    }
-
     fn run<'a>(
         &'a self,
         (account, java): WithAccount<JavaOption>,
@@ -214,10 +198,6 @@ impl Task<WithAccount<JavaOption>, PreparedLaunch> for GenerateArgsTask {
 pub struct LaunchTask;
 
 impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
-    fn name(&self) -> &str {
-        "启动游戏"
-    }
-
     fn run<'a>(
         &'a self,
         input: PreparedLaunch,
@@ -270,22 +250,6 @@ mod tests {
 
     fn offline_source() -> Arc<dyn AccountSource> {
         Arc::new(OfflineAccountSource::new("p"))
-    }
-
-    #[test]
-    fn the_tasks_report_their_names() {
-        let option = LaunchOption::new(offline_source(), "/mc", "1.0");
-        let install = install_options(std::path::Path::new("/mc"));
-        assert_eq!(LoginTask::new(option.account_source.clone()).name(), "登录");
-        assert_eq!(
-            PrepareLaunchFilesTask::new(install.clone(), "1.0").name(),
-            "检查并补全文件"
-        );
-        assert_eq!(
-            PrepareNativesTask::new(option.clone(), install).name(),
-            "准备 natives"
-        );
-        assert_eq!(GenerateArgsTask::new(option).name(), "生成启动参数");
     }
 
     #[test]

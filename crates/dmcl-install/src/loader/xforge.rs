@@ -228,7 +228,6 @@ pub(crate) async fn run_installer_processors(
         }
 
         let task = CommandTask::new(java.as_os_str().to_os_string())
-            .named(jar_coord.to_string())
             .arg("-cp")
             .arg(&classpath)
             .arg(&main_class)

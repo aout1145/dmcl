@@ -139,7 +139,7 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
 /// 删除清理由安装链在**这一步成功之后**通过 `set_cleanup` 登记；因此版本已存在时
 /// 清理不会生效，也就不会误删用户已有的版本。
 fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(), ()> + 'static {
-    task_fn("检查版本是否已存在", move |_ctx| {
+    task_fn(move |_ctx| {
         let root_path = root_path.clone();
         let version_name = version_name.clone();
         async move {
@@ -260,9 +260,7 @@ mod tests {
             )
             .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
             .then(
-                dmcl_task::task_fn("boom", |_ctx| async move {
-                    Err::<(), _>(anyhow::anyhow!("故意失败"))
-                }),
+                dmcl_task::task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
             );
         chain.run(()).await.unwrap_err();
@@ -284,7 +282,7 @@ mod tests {
             )
             .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
             .then(
-                dmcl_task::task_fn("ok", |_ctx| async move { Ok(()) }),
+                dmcl_task::task_fn(|_ctx| async move { Ok(()) }),
                 "成功的一步",
             );
         chain.run(()).await.unwrap();

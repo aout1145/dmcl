@@ -111,10 +111,9 @@ impl InstallOptions {
     }
 
     /// 造一个下载任务：复用下载源的 http 客户端（同一连接池）。
-    pub fn download_task(&self, name: impl Into<String>, items: Vec<DownloadItem>) -> DownloadTask {
-        let mut task = DownloadTask::new(self.download.clone())
-            .named(name)
-            .with_client(self.source.client().clone());
+    pub fn download_task(&self, items: Vec<DownloadItem>) -> DownloadTask {
+        let mut task =
+            DownloadTask::new(self.download.clone()).with_client(self.source.client().clone());
         task.extend(items);
         task
     }

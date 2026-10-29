@@ -134,30 +134,6 @@ where
         }
     }
 
-    /// 追加一个已经装箱的步骤（用于运行时才能确定的步骤）。
-    pub fn then_boxed<O2>(
-        mut self,
-        task: Box<dyn Task<O, O2>>,
-        name: impl Into<String>,
-    ) -> TaskChain<I, O2>
-    where
-        O2: Send + 'static,
-    {
-        self.steps.push(Box::new(Erased::<O, O2, _> {
-            task,
-            name: name.into(),
-            marker: PhantomData,
-        }));
-        TaskChain {
-            name: self.name,
-            steps: self.steps,
-            abort_points: self.abort_points,
-            events: self.events,
-            cancel: self.cancel,
-            marker: PhantomData,
-        }
-    }
-
     /// 在链的**当前位置**登记一个中止清理动作。
     ///
     /// 只有它前面的步骤都成功、运行真正到达这里时，清理才会被加进中止栈；前面的
@@ -360,10 +336,6 @@ where
     I: Send + 'static,
     O: Send + 'static,
 {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     /// 把整条子链当成一个步骤来跑。
     ///
     /// 子链有自己的事件通道，这里会把它的事件**原样转发**到父上下文（链级的
@@ -408,7 +380,7 @@ mod tests {
         let order: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let push = |value: &'static str| {
             let order = order.clone();
-            task_fn(value, move |ctx: TaskContext| {
+            task_fn(move |ctx: TaskContext| {
                 let order = order.clone();
                 async move {
                     order.lock().unwrap().push(value.to_string());
@@ -431,11 +403,8 @@ mod tests {
     #[tokio::test]
     async fn values_flow_through_the_chain_to_the_caller() {
         let chain = TaskChain::new("流水线")
-            .then(task_fn("起点", |_ctx| async move { Ok(1i32) }), "起点")
-            .then(
-                task_fn_io("加十", |n: i32, _ctx| async move { Ok(n + 10) }),
-                "加十",
-            );
+            .then(task_fn(|_ctx| async move { Ok(1i32) }), "起点")
+            .then(task_fn_io(|n: i32, _ctx| async move { Ok(n + 10) }), "加十");
         assert_eq!(chain.run(()).await.unwrap(), 11);
     }
 
@@ -446,13 +415,13 @@ mod tests {
 
         let chain = TaskChain::new("chain")
             .then(
-                task_fn("boom", |_ctx| async move {
+                task_fn(|_ctx| async move {
                     anyhow::bail!("故意失败");
                 }),
                 "会失败的一步",
             )
             .then(
-                task_fn("later", move |_ctx| {
+                task_fn(move |_ctx| {
                     let flag = flag.clone();
                     async move {
                         flag.store(true, Ordering::SeqCst);
@@ -486,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn events_describe_the_progress_of_each_step() {
         let chain = TaskChain::new("下载游戏").then(
-            task_fn("download", |ctx| async move {
+            task_fn(|ctx| async move {
                 ctx.progress(50, Some(100), "a.jar", Some(50.0));
                 ctx.progress(100, Some(100), "a.jar", Some(100.0));
                 Ok(())
@@ -518,8 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelling_before_run_stops_the_chain() {
-        let chain =
-            TaskChain::new("chain").then(task_fn("step", |_ctx| async move { Ok(()) }), "第一步");
+        let chain = TaskChain::new("chain").then(task_fn(|_ctx| async move { Ok(()) }), "第一步");
         chain.cancel_handle().cancel();
         let err = chain.run(()).await.unwrap_err();
         assert!(err.downcast_ref::<crate::context::Cancelled>().is_some());
@@ -528,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn nested_chains_forward_their_progress_to_the_parent() {
         let inner = TaskChain::new("子链").then(
-            task_fn("下载", |ctx| async move {
+            task_fn(|ctx| async move {
                 ctx.progress(1, Some(2), "a.jar", Some(50.0));
                 Ok(())
             }),
@@ -591,7 +559,7 @@ mod tests {
     #[tokio::test]
     async fn nested_chains_forward_their_logs_to_the_parent() {
         let inner = TaskChain::new("子链").then(
-            task_fn("解压", |ctx| async move {
+            task_fn(|ctx| async move {
                 ctx.log("正在解压 a.jar");
                 Ok(())
             }),
@@ -621,7 +589,7 @@ mod tests {
     #[tokio::test]
     async fn nested_chains_forward_their_warnings_to_the_parent() {
         let inner = TaskChain::new("子链").then(
-            task_fn("检查", |ctx| async move {
+            task_fn(|ctx| async move {
                 ctx.confirm("继续吗？").await?;
                 Ok(())
             }),
@@ -661,9 +629,7 @@ mod tests {
             .set_cleanup(cleanup("先注册"))
             .set_cleanup(cleanup("后注册"))
             .then(
-                task_fn("boom", |_ctx| async move {
-                    Err::<(), _>(anyhow::anyhow!("故意失败"))
-                }),
+                task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
             );
 
@@ -678,9 +644,7 @@ mod tests {
         let flag = cleaned.clone();
         let chain = TaskChain::new("chain")
             .then(
-                task_fn("boom", |_ctx| async move {
-                    Err::<(), _>(anyhow::anyhow!("故意失败"))
-                }),
+                task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
             )
             .set_cleanup(move || {
@@ -689,10 +653,7 @@ mod tests {
                     flag.store(true, Ordering::SeqCst);
                 }
             })
-            .then(
-                task_fn("later", |_ctx| async move { Ok(()) }),
-                "不会跑的一步",
-            );
+            .then(task_fn(|_ctx| async move { Ok(()) }), "不会跑的一步");
 
         chain.run(()).await.unwrap_err();
         assert!(!cleaned.load(Ordering::SeqCst));
@@ -704,7 +665,7 @@ mod tests {
         let cleaned = Arc::new(AtomicBool::new(false));
         let flag = cleaned.clone();
         let chain = TaskChain::new("chain")
-            .then(task_fn("ok", |_ctx| async move { Ok(()) }), "成功的一步")
+            .then(task_fn(|_ctx| async move { Ok(()) }), "成功的一步")
             .set_cleanup(move || {
                 let flag = flag.clone();
                 async move {
@@ -712,9 +673,7 @@ mod tests {
                 }
             })
             .then(
-                task_fn("boom", |_ctx| async move {
-                    Err::<(), _>(anyhow::anyhow!("故意失败"))
-                }),
+                task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
             );
 
@@ -733,7 +692,7 @@ mod tests {
                     flag.store(true, Ordering::SeqCst);
                 }
             })
-            .then(task_fn("step", |_ctx| async move { Ok(()) }), "第一步");
+            .then(task_fn(|_ctx| async move { Ok(()) }), "第一步");
         chain.cancel_handle().cancel();
 
         let err = chain.run(()).await.unwrap_err();
@@ -754,7 +713,7 @@ mod tests {
                 }
             })
             .then(
-                task_fn("等待取消", |ctx| async move {
+                task_fn(|ctx| async move {
                     ctx.cancel_handle().cancelled().await;
                     ctx.check_cancelled()
                 }),
@@ -787,7 +746,7 @@ mod tests {
                     flag.store(true, Ordering::SeqCst);
                 }
             })
-            .then(task_fn("step", |_ctx| async move { Ok(()) }), "第一步");
+            .then(task_fn(|_ctx| async move { Ok(()) }), "第一步");
 
         chain.run(()).await.unwrap();
         assert!(!cleaned.load(Ordering::SeqCst));
@@ -796,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn a_chain_can_be_subscribed_from_two_front_ends() {
         let chain = TaskChain::new("chain").then(
-            task_fn("step", |ctx| async move {
+            task_fn(|ctx| async move {
                 ctx.log("hello");
                 Ok(())
             }),

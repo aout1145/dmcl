@@ -22,8 +22,8 @@
 //! use dmcl_task::{CommandTask, TaskChain};
 //!
 //! # async fn run() -> anyhow::Result<()> {
-//! let java = CommandTask::new("java").arg("-version").named("检查 Java");
-//! let chain = TaskChain::new("启动游戏").then(java, "执行程序任务");
+//! let java = CommandTask::new("java").arg("-version");
+//! let chain = TaskChain::new("启动游戏").then(java, "检查 Java");
 //!
 //! // 事件流：一边跑一边打印（`()` 是这条链的初始输入）
 //! chain

@@ -32,7 +32,7 @@ pub async fn download_planned(
         .into_iter()
         .map(|file| file.into_item(options))
         .collect();
-    let task = options.download_task(name, items);
+    let task = options.download_task(items);
     let report = task.execute(ctx).await?;
     if !report.is_success() {
         anyhow::bail!(
@@ -123,7 +123,7 @@ pub fn client_jar_task(
     options: Arc<InstallOptions>,
     version_name: String,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("下载客户端 jar", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
@@ -179,7 +179,7 @@ fn index_step(
     options: Arc<InstallOptions>,
     version_name: String,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("获取资源索引", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
@@ -194,7 +194,7 @@ fn libraries_step(
     options: Arc<InstallOptions>,
     version_name: String,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("下载库文件", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
@@ -214,7 +214,7 @@ fn assets_step(
     options: Arc<InstallOptions>,
     version_name: String,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("下载资源", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
@@ -236,7 +236,7 @@ fn natives_download_step(
     os: Os,
     arch: Arch,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("下载 natives", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {
@@ -254,7 +254,7 @@ fn natives_extract_step(
     os: Os,
     arch: Arch,
 ) -> impl dmcl_task::Task<(), ()> + 'static {
-    task_fn("解压 natives", move |ctx| {
+    task_fn(move |ctx| {
         let options = options.clone();
         let version_name = version_name.clone();
         async move {

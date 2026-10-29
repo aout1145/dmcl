@@ -98,7 +98,7 @@ pub fn vanilla_metadata_task(
     version_name: String,
 ) -> TaskChain<(), ()> {
     TaskChain::new(format!("获取 {version_id} 的版本元数据")).then(
-        task_fn("获取版本元数据", move |ctx| {
+        task_fn(move |ctx| {
             let options = options.clone();
             let version_id = version_id.clone();
             let version_name = version_name.clone();
