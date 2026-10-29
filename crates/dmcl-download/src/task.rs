@@ -38,12 +38,14 @@ pub struct DownloadTask {
 impl DownloadTask {
     pub fn new(options: DownloadOptions) -> Self {
         let options = options.normalized();
+        // 配置里只有 UA 和超时，构建失败只可能是 TLS 后端无法初始化 —— 那种情况下
+        // 任何下载都做不了，直接在这里暴露出来，不要静默退化成没有超时的默认客户端。
         let client = reqwest::Client::builder()
             .user_agent(options.user_agent.clone())
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
             .build()
-            .unwrap_or_default();
+            .expect("无法初始化 HTTP 客户端");
         Self {
             items: Vec::new(),
             options,

@@ -30,7 +30,12 @@ fn extract_zip_blocking(filename: &Path, extract_to: &Path) -> Result<()> {
         if name.is_empty() {
             continue;
         }
-        let out = extract_to.join(&name);
+        // 只接受归档内的相对路径：`..`、绝对路径和盘符都会让 `enclosed_name` 返回 `None`。
+        // natives jar 来自网络（含镜像），不能信任其中的条目名。
+        let Some(relative) = entry.enclosed_name() else {
+            anyhow::bail!("归档条目路径不安全：{name}");
+        };
+        let out = extract_to.join(relative);
         if name.ends_with('/') {
             std::fs::create_dir_all(&out)?;
         } else {
@@ -131,5 +136,30 @@ mod tests {
             "com.example.Processor"
         );
         assert!(zip_read_entry(&mut archive, "nope").is_err());
+    }
+
+    /// 归档里的 `..` 不能把文件写到解压目录之外。
+    #[test]
+    fn extraction_rejects_entries_that_escape_the_target_directory() {
+        let dir = std::env::temp_dir().join(format!("dmcl-zip-slip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        let archive = dir.join("evil.jar");
+
+        let mut buffer = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
+            writer.start_file("../escaped.txt", options).unwrap();
+            std::io::Write::write_all(&mut writer, b"x").unwrap();
+            writer.finish().unwrap();
+        }
+        std::fs::write(&archive, buffer).unwrap();
+
+        let err = extract_zip_blocking(&archive, &dir.join("out")).unwrap_err();
+        assert!(format!("{err:#}").contains("路径不安全"));
+        assert!(!dir.join("escaped.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -648,12 +648,14 @@ fn candidate_index(len: usize, attempt: u32) -> usize {
 }
 
 fn build_client(user_agent: &str) -> reqwest::Client {
+    // 配置里只有 UA 和超时，构建失败只可能是 TLS 后端无法初始化 —— 那种情况下
+    // 任何取数都做不了，直接暴露出来，不要静默退化成没有超时的默认客户端。
     reqwest::Client::builder()
         .user_agent(user_agent)
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("无法初始化 HTTP 客户端")
 }
 
 #[cfg(test)]
