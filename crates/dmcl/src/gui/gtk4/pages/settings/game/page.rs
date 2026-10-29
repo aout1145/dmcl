@@ -243,14 +243,17 @@ impl SimpleComponent for GameOptionsPage {
             .show_enable_switch(false)
             .build();
 
-        let memory_total = system_memory_mib();
         let auto_memory = auto_memory_mib(&launch, &javas);
         let (initial_min, initial_max) = manual_memory_values(&launch, &javas);
-        let memory_limit = memory_total
-            .max(initial_min)
-            .max(initial_max)
-            .max(auto_memory)
-            .max(1);
+        let memory_limit = match system_memory_mib() {
+            Some(total) => total
+                .max(initial_min)
+                .max(initial_max)
+                .max(auto_memory)
+                .max(1),
+            // 读不到系统总内存时不限制输入上限。
+            None => u32::MAX,
+        };
 
         let min_memory_spin = spin_button_with_upper(initial_min, memory_limit);
         let max_memory_spin = spin_button_with_upper(initial_max, memory_limit);
@@ -985,18 +988,12 @@ fn manual_memory_values(launch: &LaunchConfig, javas: &[JavaEntry]) -> (u32, u32
     (min, max)
 }
 
-/// 系统总内存（MiB）；读不到时退回 8 GiB。
-fn system_memory_mib() -> u32 {
-    let mut system = match sysinfo::System::new() {
-        Ok(system) => system,
-        Err(_) => return 8192,
-    };
+/// 系统总内存（MiB）；读不到时返回 `None`。
+fn system_memory_mib() -> Option<u32> {
+    let mut system = sysinfo::System::new().ok()?;
     system.refresh_memory();
     let mib = system.total_memory() / 1024 / 1024;
-    u32::try_from(mib)
-        .ok()
-        .filter(|mib| *mib > 0)
-        .unwrap_or(8192)
+    u32::try_from(mib).ok().filter(|mib| *mib > 0)
 }
 
 /// Java 可执行文件的绝对路径，显示在选择项下方。
