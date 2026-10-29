@@ -143,7 +143,7 @@ fn whole_default_warning(detail: String) -> ConfigWarning {
 }
 
 impl Config {
-    /// 配置文件路径：`<平台配置目录>/dmcl.json`。
+    /// 配置文件路径：`<平台配置目录>/dmcl/dmcl.json`。
     ///
     /// 基准目录来自 [`dirs`]：
     ///
@@ -152,9 +152,9 @@ impl Config {
     /// * macOS —— `~/Library/Application Support`
     pub fn path() -> PathBuf {
         match dirs::config_dir() {
-            Some(base) => absolute(base.join("dmcl.json")),
-            // 极端环境下拿不到平台配置目录时，回落到当前目录下的 dmcl.json
-            None => absolute("dmcl.json"),
+            Some(base) => absolute(base.join("dmcl").join("dmcl.json")),
+            // 极端环境下拿不到平台配置目录时，回落到当前目录下的 dmcl/dmcl.json
+            None => absolute(Path::new("dmcl").join("dmcl.json")),
         }
     }
 
@@ -301,6 +301,8 @@ impl Config {
     }
 
     /// 持久化整份配置。
+    ///
+    /// 先写同目录的临时文件，再 rename 覆盖，读者不会看到半截 JSON。
     pub async fn save(&self) -> Result<()> {
         self.save_to(&Self::path()).await
     }
@@ -318,17 +320,34 @@ impl Config {
             tokio::fs::create_dir_all(parent)
                 .await
                 .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
+            restrict_dir(parent)
+                .await
+                .with_context(|| format!("无法设置配置目录权限 {}", parent.display()))?;
         }
-        tokio::fs::write(path, text)
-            .await
-            .with_context(|| format!("无法写入配置文件 {}", path.display()))?;
+
+        // 先写同目录的临时文件，再 rename 覆盖：读者只会看到旧文件或完整的新文件。
+        let temp = temp_path(path);
+        let result = async {
+            tokio::fs::write(&temp, text).await?;
+            restrict_file(&temp).await?;
+            tokio::fs::rename(&temp, path).await
+        }
+        .await;
+        if let Err(err) = result {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(err).with_context(|| format!("无法写入配置文件 {}", path.display()));
+        }
         Ok(())
     }
 
     async fn save_with_backup_to(&self, path: &Path) -> Result<()> {
         let backup = path.with_file_name("dmcl.old.json");
         match tokio::fs::copy(path, &backup).await {
-            Ok(_) => {}
+            Ok(_) => {
+                restrict_file(&backup)
+                    .await
+                    .with_context(|| format!("无法设置配置备份权限 {}", backup.display()))?;
+            }
             // 原文件不存在时没有可备份的内容。
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
@@ -359,6 +378,46 @@ impl Config {
                 configs: self.javas.clone(),
             })))
     }
+}
+
+/// 原子写用的临时文件：目标同目录的 `<stem>.<pid>.<ext>`。
+///
+/// 例：`dmcl.json` → `dmcl.<pid>.json`。不同进程的 PID 不同，不会争用同一个临时文件。
+fn temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_stem().map_or_else(
+        || std::ffi::OsString::from("dmcl"),
+        |stem| stem.to_os_string(),
+    );
+    name.push(format!(".{}", std::process::id()));
+    if let Some(extension) = path.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    path.with_file_name(name)
+}
+
+/// 收紧目录权限；Unix 下仅当前用户可读写执行。
+async fn restrict_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// 收紧文件权限；Unix 下仅当前用户可读写。
+async fn restrict_file(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// 按字段逐项覆盖一个配置段；坏字段回退到传入的默认段。
@@ -457,6 +516,40 @@ mod tests {
     use super::root::CURRENT_ROOT_NAME;
     use super::*;
     use dmcl_mcmeta::source::MirrorPolicy;
+
+    #[test]
+    fn the_global_config_lives_in_a_dmcl_directory() {
+        assert!(Config::path().ends_with(Path::new("dmcl").join("dmcl.json")));
+    }
+
+    #[tokio::test]
+    async fn save_is_atomic_and_leaves_no_temporary_file() {
+        let dir = temp_dir("atomic");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dmcl.json");
+
+        Config::default().save_to(&path).await.unwrap();
+
+        let temp = dir.join(format!("dmcl.{}.json", std::process::id()));
+        assert_eq!(temp_path(&path), temp);
+        assert!(!temp.exists());
+        let saved: Config = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved.launch.window_width,
+            Config::default().launch.window_width
+        );
+
+        // 让临时文件路径先被目录占住，写入必然失败；旧文件必须保持完整。
+        std::fs::write(&path, r#"{"launch":{"window_width":1024}}"#).unwrap();
+        std::fs::create_dir_all(&temp).unwrap();
+        assert!(Config::default().save_to(&path).await.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"launch":{"window_width":1024}}"#
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn reads_the_global_layout() {
@@ -737,5 +830,35 @@ mod tests {
         assert_eq!(install.download.max_connections, 8);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_permissions {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[tokio::test]
+    async fn save_restricts_the_directory_and_files_to_the_current_user() {
+        let dir = temp_dir("permissions");
+        let _ = std::fs::remove_dir_all(&dir);
+        let config_dir = dir.join("dmcl");
+        let path = config_dir.join("dmcl.json");
+        let config = Config::default();
+
+        config.save_to(&path).await.unwrap();
+        assert_eq!(mode(&config_dir), 0o700);
+        assert_eq!(mode(&path), 0o600);
+
+        config.save_with_backup_to(&path).await.unwrap();
+        let backup = config_dir.join("dmcl.old.json");
+        assert_eq!(mode(&backup), 0o600);
+        assert_eq!(mode(&path), 0o600);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

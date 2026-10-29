@@ -151,9 +151,13 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 
 ### `dmcl` —— 应用
 
-唯一知道配置文件的一层：把全局 `dmcl.json` 和实例覆盖读成 `Config` / `LaunchConfig`，
-翻译成各业务 crate 的 `*Options`，再分发命令。它同时是库（`dmcl`）与可执行文件
-（`bin/dmcl`），方便将来复用到 GUI / 守护进程。
+唯一知道配置文件的一层：把全局 `<平台配置目录>/dmcl/dmcl.json` 和实例覆盖读成
+`Config` / `LaunchConfig`，翻译成各业务 crate 的 `*Options`，再分发命令。它同时是库
+（`dmcl`）与可执行文件（`bin/dmcl`），方便将来复用到 GUI / 守护进程。
+
+保存全局配置时先写同目录的 `dmcl.<pid>.json`，再 rename 覆盖目标，读者不会看到半截 JSON。
+Unix 下配置目录收紧为 `0700`、配置文件与 `dmcl.old.json` 备份为 `0600`；Windows 依赖
+`%APPDATA%` 用户目录自带的 ACL。
 
 全局配置包含 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
 `download`。`minecraft_roots` 是「名字 → 路径」映射，默认「当前目录」（`.minecraft`，
