@@ -17,6 +17,9 @@ path = "src/lib.rs"
 name = "dmcl"
 path = "src/main.rs"
 
+[build-dependencies]
+built.workspace = true
+
 [features]
 default = []
 # GTK4 + libadwaita 图形前端（relm4）。默认关，用 `--features gtk4` 开启；

@@ -12,7 +12,7 @@ pub(crate) async fn run() -> Result<()> {
         ""
     };
     println!("{LAUNCHER_NAME} 版本 {LAUNCHER_VERSION}{suffix}");
-    println!("构建时间：{}", env!("DMCL_BUILD_TIME"));
+    println!("构建时间：{}", crate::build_info::BUILT_TIME_UTC);
     println!();
     println!("感谢：bmclapi");
     Ok(())

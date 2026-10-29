@@ -51,6 +51,8 @@ walkdir = "2"
 uuid = "1"
 dirs = "7"
 anyhow = "1"
+# 构建脚本用它生成编译期信息（构建时间等）。
+built = { version = "0.8", features = ["chrono"] }
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.12"
 version-compare = "0.2"
