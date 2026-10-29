@@ -5,13 +5,13 @@
 //!
 //! 「哪些文件应该有」用 [`crate::plan`] 的纯函数（与下载同一批），
 //! 「本地这个文件好不好」用 [`dmcl_download::file_ok`]（与下载的跳过同一判定），
-//! 因此这里不会和下载流程对不上。
+//! 并发调度交给 [`dmcl_download::files_ok`]，因此这里不会和下载流程对不上。
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use dmcl_download::file_ok;
+use dmcl_download::{files_ok, FileCheck};
 use dmcl_mcmeta::layout::{assets_index_path, read_version_json_safe};
 use dmcl_mcmeta::vanilla::AssetIndexFile;
 
@@ -117,9 +117,17 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
         None
     };
 
-    for file in plan_game_files(plan, &json, version_name, index.as_ref()) {
+    let files = plan_game_files(plan, &json, version_name, index.as_ref());
+    let oks = files_ok(files.iter().map(|file| FileCheck {
+        path: file.save_to.clone(),
+        checksum: file.checksum.clone(),
+        size: file.size,
+    }))
+    .await?;
+
+    for (file, ok) in files.into_iter().zip(oks) {
         status.checked += 1;
-        if file_ok(&file.save_to, file.checksum.as_ref(), file.size).await {
+        if ok {
             continue;
         }
         // 只区分"不存在"和"在但不完整"

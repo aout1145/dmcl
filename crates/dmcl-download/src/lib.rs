@@ -25,6 +25,8 @@
 //!
 //! * **并发靠 tokio**：整个启动器跑在多线程运行时上，因此这些并发任务是真的并行执行；
 //!   同时进行的连接数由 [`DownloadOptions::max_connections`] 通过信号量限制。
+//! * **本地判断也并发**：下载前的「已存在」检查与完整性检查都走 [`files_ok`]，
+//!   按 CPU 线程数并发哈希，不会串行扫几千个资源文件。
 //! * **分块**：已知大小且超过 [`DownloadOptions::chunk_threshold`] 的文件按
 //!   `Range` 请求切成若干块并发下载，单文件并发块数由
 //!   [`DownloadOptions::max_chunks_per_file`] 限制。
@@ -40,7 +42,7 @@ mod options;
 mod report;
 mod task;
 
-pub use hash::{file_ok, hash_bytes, hash_file, Checksum, HashAlgorithm};
+pub use hash::{file_ok, files_ok, hash_bytes, hash_file, Checksum, FileCheck, HashAlgorithm};
 pub use item::DownloadItem;
 pub use options::{DownloadOptions, DEFAULT_USER_AGENT};
 pub use report::{DownloadFailure, DownloadReport};

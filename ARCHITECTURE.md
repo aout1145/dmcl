@@ -126,7 +126,8 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 - `plan`：**纯函数**的「这个版本需要哪些文件」规划（库、资源、客户端 jar；natives
   由 `plan_native_jars` 按 java 架构单独规划）；
 - `files`：按规划构造 `DownloadTask` 并落盘；
-- `integrity`：完整性检查（「完整吗？缺什么？」），缺失判定与下载共用同一个 `file_ok`；
+- `integrity`：完整性检查（「完整吗？缺什么？」），缺失判定与下载共用同一个 `file_ok`，
+  并通过 `files_ok` 按 CPU 线程数并发检查；
 - `vanilla`：原版元数据落盘、`launcher_profiles.json`；
 - `loader/{fabric,forge,neoforge,common}`：各加载器自己的安装步骤（Fabric 直接合并
   profile；Forge / NeoForge 解出 `install_profile.json`、跑 processor）；

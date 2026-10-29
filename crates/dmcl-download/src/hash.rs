@@ -16,11 +16,14 @@
 //! ```
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 // 三个 RustCrypto 实现共用同一个 `digest` trait，导入一次即可
 use sha1::Digest;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 /// 支持的摘要算法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -276,6 +279,53 @@ pub async fn file_ok(
     }
 }
 
+/// 一个待检查的本地文件。
+#[derive(Debug, Clone)]
+pub struct FileCheck {
+    pub path: PathBuf,
+    /// 给了就比摘要；没给就只比大小 / 只判断存在。
+    pub checksum: Option<Checksum>,
+    pub size: Option<u64>,
+}
+
+/// 并发检查多个本地文件是否「已存在且完整」。
+///
+/// 每个文件的判定与 [`file_ok`] 完全一致；返回值的长度、顺序与输入一一对应，
+/// `true` 表示该文件合格。同时进行的检查数等于 CPU 逻辑线程数，避免几千个资源
+/// 文件逐个串行哈希，也避免把 tokio 的阻塞线程池一次打满。
+///
+/// 某个检查任务异常终止（panic）时返回错误，不会把该文件悄悄当成缺失。
+pub async fn files_ok(files: impl IntoIterator<Item = FileCheck>) -> Result<Vec<bool>> {
+    let files: Vec<FileCheck> = files.into_iter().collect();
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let concurrency = std::thread::available_parallelism()
+        .map(|threads| threads.get())
+        .unwrap_or(1)
+        .min(files.len());
+    let limit = Arc::new(Semaphore::new(concurrency));
+    let mut results = vec![false; files.len()];
+    let mut set = JoinSet::new();
+
+    for (index, file) in files.into_iter().enumerate() {
+        let permit = limit.clone().acquire_owned().await.expect("信号量不会关闭");
+        set.spawn(async move {
+            let _permit = permit;
+            let ok = file_ok(&file.path, file.checksum.as_ref(), file.size).await;
+            (index, ok)
+        });
+    }
+
+    while let Some(joined) = set.join_next().await {
+        let (index, ok) = joined.context("检查本地文件的任务异常终止")?;
+        results[index] = ok;
+    }
+
+    Ok(results)
+}
+
 // ---------------------------------------------------------------------------
 // 内部：把四种算法收进一个枚举
 // ---------------------------------------------------------------------------
@@ -446,6 +496,48 @@ mod tests {
         assert!(file_ok(&path, None, Some(3)).await);
         assert!(!file_ok(&path, None, Some(4)).await);
         assert!(!file_ok(dir.join("missing"), None, None).await);
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    /// 结果必须与输入同序；摘要、大小、缺失三种判定都要在并发路径上成立。
+    #[tokio::test]
+    async fn files_are_checked_in_input_order() {
+        let dir = std::env::temp_dir().join(format!("dmcl-files-ok-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let mut checks = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..64u8 {
+            let path = dir.join(format!("{index}.txt"));
+            let content = format!("content-{index}");
+            tokio::fs::write(&path, &content).await.unwrap();
+
+            let correct = Checksum::sha1(hash_bytes(HashAlgorithm::Sha1, content.as_bytes()));
+            let wrong = Checksum::sha1("00".repeat(20));
+            let (checksum, size, ok) = match index % 4 {
+                0 => (Some(correct), None, true),
+                1 => (Some(wrong), None, false),
+                2 => (None, Some(content.len() as u64), true),
+                _ => (None, Some(content.len() as u64 + 1), false),
+            };
+            checks.push(FileCheck {
+                path,
+                checksum,
+                size,
+            });
+            expected.push(ok);
+        }
+        checks.push(FileCheck {
+            path: dir.join("missing.txt"),
+            checksum: None,
+            size: None,
+        });
+        expected.push(false);
+
+        assert_eq!(files_ok(checks).await.unwrap(), expected);
+        assert!(files_ok(std::iter::empty()).await.unwrap().is_empty());
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

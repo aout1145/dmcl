@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 
 use dmcl_task::{human_bytes, BoxFuture, Cancelled, Progress, Task, TaskContext};
 
-use crate::hash::{file_ok, hash_file};
+use crate::hash::{files_ok, hash_file, FileCheck};
 use crate::item::DownloadItem;
 use crate::options::DownloadOptions;
 use crate::report::{DownloadFailure, DownloadReport};
@@ -111,11 +111,18 @@ impl DownloadTask {
             }
         }
 
-        // 先做本地判断：已经是最新（校验值 / 大小一致）的文件不占用连接
+        // 先做本地判断：已经是最新（校验值 / 大小一致）的文件不占用连接。
+        // 哈希按 CPU 线程数并发，避免几千个文件串行扫一遍。
+        let oks = files_ok(self.items.iter().map(|item| FileCheck {
+            path: absolute(&item.save_to),
+            checksum: item.checksum.clone(),
+            size: item.size,
+        }))
+        .await?;
+
         let mut pending: Vec<DownloadItem> = Vec::new();
-        for item in &self.items {
-            let save_to = absolute(&item.save_to);
-            if file_ok(&save_to, item.checksum.as_ref(), item.size).await {
+        for (item, ok) in self.items.iter().zip(oks) {
+            if ok {
                 report.lock().unwrap().skipped += 1;
             } else {
                 pending.push(item.clone());
