@@ -24,7 +24,7 @@ built.workspace = true
 default = []
 # GTK4 + libadwaita 图形前端（relm4）。默认关，用 `--features gtk4` 开启；
 # 需要系统装有 GTK4 / libadwaita 开发库。
-gtk4 = ["dep:relm4", "dep:sysinfo"]
+gtk4 = ["dep:relm4", "dep:sysinfo", "dep:notify"]
 
 [dependencies]
 dmcl-task.workspace = true
@@ -42,8 +42,8 @@ dirs.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 dialoguer.workspace = true
-notify.workspace = true
 
 # 图形前端：可选依赖，只有开启 `gtk4` feature 才编译。
 relm4 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
+notify = { workspace = true, optional = true }
