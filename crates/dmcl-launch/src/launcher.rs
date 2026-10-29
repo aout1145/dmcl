@@ -1,5 +1,6 @@
-//! 生成启动命令行，并启动游戏。
+//! 生成启动命令行。
 //!
+//! 真正起进程由 [`crate::LaunchTask`] 负责；这个模块只负责拼参数。
 //! 两条设计要点：
 //!
 //! * **这里不解压 natives** —— 那是"把文件铺好"，由 [`dmcl_install`] 负责，
@@ -321,28 +322,6 @@ impl GameLauncher {
     pub async fn generate_command(&mut self) -> Result<String> {
         let args = self.gen_args().await?;
         Ok(command_preview(&self.version_path, &args))
-    }
-
-    /// 启动游戏进程。
-    ///
-    /// 子进程继承 stdio，因此玩家能看到游戏自己的日志；
-    /// 返回的 [`GameMonitor`] 可以等待退出，也可以被停掉。
-    pub async fn launch_game(&mut self) -> Result<GameMonitor> {
-        let args = self.gen_args().await?;
-        self.launch_with_args(&args)
-    }
-
-    /// 用**已经生成好的参数**启动游戏（参数可由 [`crate::GenerateArgsTask`] 产出，
-    /// 省得再选一次 java、重拼一遍命令行）。
-    ///
-    /// 命令行会先打印出来。放进任务链时改用 [`crate::LaunchTask`]：它走进度事件流
-    /// 展示命令行，避免与进度行抢同一个终端行。
-    pub fn launch_with_args(&self, args: &[String]) -> Result<GameMonitor> {
-        if args.is_empty() {
-            return Err(anyhow!("命令为空"));
-        }
-        println!("命令：{}", command_preview(&self.version_path, args));
-        spawn_game(&self.version_path, args)
     }
 }
 

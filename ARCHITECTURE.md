@@ -76,9 +76,9 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
   （含 `StepStarted` / `StepFinished`，只有链级的 `Started` / `Finished` 丢弃），前端据此
   用**栈**还原嵌套层级：进入 `StepStarted` push、`StepFinished` pop；
 - `CancelHandle`：可从任意线程取消；
-- `TaskChain::set_cleanup`：在链的当前位置登记**中止清理**动作；只有它前面的步骤都成功、
+- `TaskChain::on_rollback`：在链的当前位置登记**中止回滚**动作；只有它前面的步骤都成功、
   运行真正到达这里时才生效，链随后因取消或某一步失败而中止时按登记逆序执行（成功结束不执行）；
-  清理是异步、尽力而为的，用于删掉写了一半的安装目录；
+  回滚是异步、尽力而为的，用于删掉写了一半的安装目录；
 - `CommandTask`：跑外部程序，默认把它的输出**逐行变成日志事件**（Forge 的安装器
   processor 就是这么跑的）；取消时子进程被 `kill_on_drop` 杀掉。
 - `WarningDecision`：任务可以发出「警告」事件，让前端决定继续还是中止。
@@ -134,7 +134,7 @@ Fabric / NeoForge 比版本字符串，Forge 比 `build` 号；因此「最新�
 - `zip` / `io`：jar / zip 处理与安全写盘。
 
 `install_task` 是**版本级原子**的：第一步先占用 `versions/<version_name>`，目录已存在
-就直接报错（不会碰已有版本）；只有这一步成功后才走到 `set_cleanup` 登记删除动作，
+就直接报错（不会碰已有版本）；只有这一步成功后才走到 `on_rollback` 登记删除动作，
 之后任何一步失败或被取消，都会删掉本次新建的版本目录，不让半装版本出现在版本列表里。
 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚（下次安装会跳过已有文件）。
 
@@ -298,10 +298,12 @@ if !status.is_complete() {
         .await?;
 }
 
-// dmcl-launch 只负责拼参数、起进程；账户由登录源产出
+// dmcl-launch 只负责拼参数，起进程走任务链；账户由登录源产出
 let account = option.account_source.login().await?;
-let mut launcher = GameLauncher::new(option, account).await?;
-let mut monitor = launcher.launch_game().await?;
+let mut launcher = GameLauncher::new(option.clone(), account).await?;
+let _command = launcher.generate_command().await?; // 展示 / 复制用
+
+let mut monitor = launch_chain(option, install).run(()).await?;
 monitor.wait().await?;
 ```
 

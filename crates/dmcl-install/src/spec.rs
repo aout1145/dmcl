@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use dmcl_mcmeta::layout::version_dir;
-use dmcl_task::{task_fn, BoxFuture, Task, TaskChain};
+use dmcl_task::{task_fn, BoxFuture, Task, TaskChain, TaskContext};
 
 use crate::fabric::install_fabric_task;
 use crate::files::{client_jar_task, game_files_task};
@@ -136,8 +136,8 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
 
 /// 占用版本目录：已存在就直接报错，不存在则创建它。
 ///
-/// 删除清理由安装链在**这一步成功之后**通过 `set_cleanup` 登记；因此版本已存在时
-/// 清理不会生效，也就不会误删用户已有的版本。
+/// 删除动作由安装链在**这一步成功之后**通过 `on_rollback` 登记；因此版本已存在时
+/// 回滚不会生效，也就不会误删用户已有的版本。
 fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(), ()> + 'static {
     task_fn(move |_ctx| {
         let root_path = root_path.clone();
@@ -164,18 +164,21 @@ fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(),
 ///
 /// 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚；只要版本目录不在，
 /// 这个版本就不会被当成已安装，下次安装会重新补齐。
-fn remove_version_dir_cleanup(
+fn remove_version_dir_rollback(
     root_path: PathBuf,
     version_name: String,
-) -> impl Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static {
-    move || {
+) -> impl Fn(TaskContext) -> BoxFuture<'static, ()> + Send + Sync + 'static {
+    move |ctx| {
         let path = version_dir(&root_path, &version_name);
         Box::pin(async move {
             match tokio::fs::remove_dir_all(&path).await {
                 Ok(()) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => {
-                    eprintln!("警告：无法删除未完成的安装 {}：{err}", path.display());
+                    ctx.log(format!(
+                        "警告：无法删除未完成的安装 {}：{err}",
+                        path.display()
+                    ));
                 }
             }
         })
@@ -188,7 +191,7 @@ fn remove_version_dir_cleanup(
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
 ///
 /// 安装是「版本级原子」的：第一步就占用 `versions/<version_name>`，目录已存在时直接
-/// 报错（不会碰已有版本）；只有这一步成功后才会走到 `set_cleanup` 登记删除动作，
+/// 报错（不会碰已有版本）；只有这一步成功后才会走到 `on_rollback` 登记删除动作，
 /// 之后任何一步失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
 pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
@@ -196,7 +199,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
             create_version_dir(options.root_path.clone(), spec.version_name.clone()),
             "创建版本目录",
         )
-        .set_cleanup(remove_version_dir_cleanup(
+        .on_rollback(remove_version_dir_rollback(
             options.root_path.clone(),
             spec.version_name.clone(),
         ))
@@ -258,7 +261,7 @@ mod tests {
                 create_version_dir(root.clone(), "1.0".into()),
                 "检查版本是否已存在",
             )
-            .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
+            .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
             .then(
                 dmcl_task::task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
@@ -280,7 +283,7 @@ mod tests {
                 create_version_dir(root.clone(), "1.0".into()),
                 "检查版本是否已存在",
             )
-            .set_cleanup(remove_version_dir_cleanup(root.clone(), "1.0".into()))
+            .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
             .then(
                 dmcl_task::task_fn(|_ctx| async move { Ok(()) }),
                 "成功的一步",
@@ -309,7 +312,7 @@ mod tests {
             .unwrap_err();
 
         assert!(format!("{err:#}").contains("已存在"), "{err:#}");
-        assert!(dir.exists(), "已存在的版本目录不能被删除清理误删");
+        assert!(dir.exists(), "已存在的版本目录不能被回滚误删");
         let _ = tokio::fs::remove_dir_all(&root).await;
     }
 

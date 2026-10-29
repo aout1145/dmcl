@@ -11,10 +11,10 @@ use crate::context::{CancelHandle, TaskContext};
 use crate::event::TaskEvent;
 use crate::task::{BoxFuture, Task};
 
-/// 链中止时执行的清理动作。
+/// 链中止时执行的回滚动作。
 ///
-/// 用 `Fn` 而不是 `FnOnce`：同一条链可以被运行多次，每次中止都应该清理。
-type Cleanup = Box<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+/// 用 `Fn` 而不是 `FnOnce`：同一条链可以被运行多次，每次中止都应该回滚。
+type Rollback = Box<dyn Fn(TaskContext) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// 把多个 [`Task`] 按顺序串起来的任务链。
 ///
@@ -24,7 +24,7 @@ type Cleanup = Box<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 /// * [`TaskChain::run`] 传入初始输入、返回最终输出；任一步失败即中止并返回错误；
 /// * [`TaskChain::run_with`] 是「一边跑一边把事件交给回调」的便捷写法，同样返回最终输出；
 /// * [`TaskChain::subscribe`] 拿到一条 [`TaskEvent`] 事件流；
-/// * [`TaskChain::set_cleanup`] 在链的当前位置登记取消 / 失败时的清理动作。
+/// * [`TaskChain::on_rollback`] 在链的当前位置登记取消 / 失败时的回滚动作。
 ///
 /// 内部用 `Box<dyn Any>` 擦除中间值的具体类型，因此 `then` 可以在循环里动态追加；
 /// 类型安全由 `then` / `run` 的泛型签名在编译期保证（擦除处的 `downcast` 必然成功）。
@@ -35,8 +35,8 @@ where
 {
     name: String,
     steps: Vec<Box<dyn AnyStep>>,
-    /// 清理动作及其登记位置：位置是「前面已经成功完成的步骤数」。
-    abort_points: Vec<(usize, Cleanup)>,
+    /// 回滚动作及其登记位置：位置是「前面已经成功完成的步骤数」。
+    abort_points: Vec<(usize, Rollback)>,
     events: broadcast::Sender<TaskEvent>,
     cancel: CancelHandle,
     marker: PhantomData<fn(I) -> O>,
@@ -134,30 +134,32 @@ where
         }
     }
 
-    /// 在链的**当前位置**登记一个中止清理动作。
+    /// 在链的**当前位置**登记一个回滚动作。
     ///
-    /// 只有它前面的步骤都成功、运行真正到达这里时，清理才会被加进中止栈；前面的
-    /// 步骤失败或被取消时，这个清理根本不会登记。典型写法：
+    /// 只有它前面的步骤都成功、运行真正到达这里时，回滚才会被加进中止栈；前面的
+    /// 步骤失败或被取消时，这个动作根本不会登记。典型写法：
     ///
     /// ```text
     /// TaskChain::new("安装")
     ///     .then(占用版本目录, "检查版本是否已存在")
-    ///     .set_cleanup(删除版本目录)
+    ///     .on_rollback(删除版本目录)
     ///     .then(下载游戏文件, "下载游戏文件")
     /// ```
     ///
     /// 这样「版本已存在」导致占用步骤失败时，不会登记删除动作，也就不会误删旧版本。
     ///
-    /// 多个动作按登记的**逆序**执行（后登记的先清理），符合“先获取的资源后释放”的直觉。
-    /// 动作是异步的，且不接收上下文：清理是尽力而为的收尾，失败不应掩盖原始错误，
-    /// 因此不要在里面 `?`。
-    pub fn set_cleanup<F, Fut>(mut self, cleanup: F) -> Self
+    /// 多个动作按登记的**逆序**执行（后登记的先回滚），符合“先获取的资源后释放”的直觉。
+    /// 动作是异步的，拿到的 [`TaskContext`] 指向刚失败 / 被取消的步骤；回滚是尽力而为的
+    /// 收尾，失败不应掩盖原始错误，因此用它打日志即可，不要在里面 `?`。
+    pub fn on_rollback<F, Fut>(mut self, rollback: F) -> Self
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.abort_points
-            .push((self.steps.len(), Box::new(move || Box::pin(cleanup()))));
+        self.abort_points.push((
+            self.steps.len(),
+            Box::new(move |ctx| Box::pin(rollback(ctx))),
+        ));
         self
     }
 
@@ -210,15 +212,16 @@ where
             steps,
         });
 
-        // 只保存 `set_cleanup` 已经真正经过的清理动作；每次运行都重新登记。
-        let mut active_cleanups: Vec<&Cleanup> = Vec::new();
+        // 只保存 `on_rollback` 已经真正经过的回滚动作；每次运行都重新登记。
+        let mut active_cleanups: Vec<&Rollback> = Vec::new();
         let mut next_abort = 0;
         register_aborts(&self.abort_points, &mut next_abort, &mut active_cleanups, 0);
         let mut value: Box<dyn Any + Send> = Box::new(input);
         for (index, step) in self.steps.iter().enumerate() {
             if let Err(err) = cancel.check_cancelled() {
                 self.report_failure(index, steps, step.name());
-                run_cleanups(&active_cleanups).await;
+                let ctx = self.step_context(cancel, index, steps, step.name());
+                run_cleanups(&active_cleanups, &ctx).await;
                 return Err(err);
             }
             let _ = self.events.send(TaskEvent::StepStarted {
@@ -252,7 +255,8 @@ where
                 Err(err) => {
                     let err = err.context(format!("步骤「{}」失败", step.name()));
                     self.report_failure(index, steps, step.name());
-                    run_cleanups(&active_cleanups).await;
+                    let ctx = self.step_context(cancel, index, steps, step.name());
+                    run_cleanups(&active_cleanups, &ctx).await;
                     return Err(err);
                 }
             }
@@ -260,7 +264,12 @@ where
 
         // 最后一步可能没有理会取消信号：收尾前再确认一次，避免「取消了却报告成功」。
         if let Err(err) = cancel.check_cancelled() {
-            run_cleanups(&active_cleanups).await;
+            let (index, name) = match self.steps.last() {
+                Some(step) => (steps.saturating_sub(1), step.name()),
+                None => (0, self.name.as_str()),
+            };
+            let ctx = self.step_context(cancel, index, steps, name);
+            run_cleanups(&active_cleanups, &ctx).await;
             return Err(err);
         }
 
@@ -309,13 +318,24 @@ where
             name: name.to_string(),
         });
     }
+
+    /// 回滚动作使用的上下文：指向刚失败 / 被取消的那一步，日志因此会落在正确的步骤下。
+    fn step_context(
+        &self,
+        cancel: &CancelHandle,
+        step: usize,
+        steps: usize,
+        name: &str,
+    ) -> TaskContext {
+        TaskContext::new(self.events.clone(), cancel.clone(), step, steps, name)
+    }
 }
 
-/// 把某个步骤位置上的清理动作加入本次运行的中止栈。
+/// 把某个步骤位置上的回滚动作加入本次运行的中止栈。
 fn register_aborts<'a>(
-    abort_points: &'a [(usize, Cleanup)],
+    abort_points: &'a [(usize, Rollback)],
     next: &mut usize,
-    active: &mut Vec<&'a Cleanup>,
+    active: &mut Vec<&'a Rollback>,
     position: usize,
 ) {
     while *next < abort_points.len() && abort_points[*next].0 == position {
@@ -324,10 +344,10 @@ fn register_aborts<'a>(
     }
 }
 
-/// 逆序执行本次运行已经登记的中止清理。清理动作的失败被忽略：原始错误更重要。
-async fn run_cleanups(cleanups: &[&Cleanup]) {
+/// 逆序执行本次运行已经登记的回滚。回滚的失败被忽略：原始错误更重要。
+async fn run_cleanups(cleanups: &[&Rollback], ctx: &TaskContext) {
     for cleanup in cleanups.iter().rev() {
-        cleanup().await;
+        cleanup(ctx.clone()).await;
     }
 }
 
@@ -617,7 +637,7 @@ mod tests {
         let order: Arc<Mutex<Vec<&'static str>>> = Arc::default();
         let cleanup = |name: &'static str| {
             let order = order.clone();
-            move || {
+            move |_ctx| {
                 let order = order.clone();
                 async move {
                     order.lock().unwrap().push(name);
@@ -626,8 +646,8 @@ mod tests {
         };
 
         let chain = TaskChain::new("chain")
-            .set_cleanup(cleanup("先注册"))
-            .set_cleanup(cleanup("后注册"))
+            .on_rollback(cleanup("先注册"))
+            .on_rollback(cleanup("后注册"))
             .then(
                 task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
@@ -637,7 +657,7 @@ mod tests {
         assert_eq!(*order.lock().unwrap(), vec!["后注册", "先注册"]);
     }
 
-    /// `set_cleanup` 前面的步骤失败时，清理还没登记，不能执行。
+    /// `on_rollback` 前面的步骤失败时，回滚还没登记，不能执行。
     #[tokio::test]
     async fn a_cleanup_is_skipped_when_an_earlier_step_fails() {
         let cleaned = Arc::new(AtomicBool::new(false));
@@ -647,7 +667,7 @@ mod tests {
                 task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
                 "会失败的一步",
             )
-            .set_cleanup(move || {
+            .on_rollback(move |_ctx| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -659,14 +679,14 @@ mod tests {
         assert!(!cleaned.load(Ordering::SeqCst));
     }
 
-    /// 前面的步骤成功后清理才登记；后面的步骤失败时执行它。
+    /// 前面的步骤成功后回滚才登记；后面的步骤失败时执行它。
     #[tokio::test]
     async fn a_cleanup_after_a_successful_step_runs_on_a_later_failure() {
         let cleaned = Arc::new(AtomicBool::new(false));
         let flag = cleaned.clone();
         let chain = TaskChain::new("chain")
             .then(task_fn(|_ctx| async move { Ok(()) }), "成功的一步")
-            .set_cleanup(move || {
+            .on_rollback(move |_ctx| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -686,7 +706,7 @@ mod tests {
         let cleaned = Arc::new(AtomicBool::new(false));
         let flag = cleaned.clone();
         let chain = TaskChain::new("chain")
-            .set_cleanup(move || {
+            .on_rollback(move |_ctx| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -700,13 +720,13 @@ mod tests {
         assert!(cleaned.load(Ordering::SeqCst));
     }
 
-    /// 父链取消必须立刻传到子链：否则嵌套的下长任务会继续跑，清理也要等到它结束。
+    /// 父链取消必须立刻传到子链：否则嵌套的下长任务会继续跑，回滚也要等到它结束。
     #[tokio::test]
     async fn cancelling_a_parent_chain_cancels_nested_chains() {
         let cleaned = Arc::new(AtomicBool::new(false));
         let flag = cleaned.clone();
         let inner = TaskChain::new("子链")
-            .set_cleanup(move || {
+            .on_rollback(move |_ctx| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -732,7 +752,7 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(err.downcast_ref::<crate::context::Cancelled>().is_some());
-        assert!(cleaned.load(Ordering::SeqCst), "子链的中止清理应当执行");
+        assert!(cleaned.load(Ordering::SeqCst), "子链的中止回滚应当执行");
     }
 
     #[tokio::test]
@@ -740,7 +760,7 @@ mod tests {
         let cleaned = Arc::new(AtomicBool::new(false));
         let flag = cleaned.clone();
         let chain = TaskChain::new("chain")
-            .set_cleanup(move || {
+            .on_rollback(move |_ctx| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);

@@ -52,7 +52,7 @@
 //! * natives 的解压归这里做 —— 它本质上就是「把文件铺好」，这样 `dmcl-launch`
 //!   就不需要 zip 代码；
 //! * [`install_task`] 是**版本级原子**的：版本目录已存在就直接报错；只有占用成功后才走到
-//!   `set_cleanup` 登记中止清理，失败或被取消时删掉本次新建的 `versions/<名称>`，共享的
+//!   `on_rollback` 登记中止回滚，失败或被取消时删掉本次新建的 `versions/<名称>`，共享的
 //!   `libraries/` / `assets/` 作为校验缓存保留；
 //! * Forge / NeoForge 的 processor 用 [`dmcl_task::CommandTask`] 跑，
 //!   因此安装器的输出会作为日志事件流出来。
