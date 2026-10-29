@@ -26,7 +26,7 @@ fn extract_zip_blocking(filename: &Path, extract_to: &Path) -> Result<()> {
     std::fs::create_dir_all(extract_to)?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if name.is_empty() {
             continue;
         }
@@ -113,7 +113,7 @@ mod tests {
         let mut buffer = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            let options: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
             writer.start_file("META-INF/MANIFEST.MF", options).unwrap();
             std::io::Write::write_all(
                 &mut writer,

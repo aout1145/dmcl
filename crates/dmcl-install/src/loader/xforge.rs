@@ -75,7 +75,7 @@ pub(crate) async fn extract_maven_entries(
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for index in 0..count {
         let mut entry = zip.by_index(index)?;
-        let name = entry.name().to_string();
+        let name = entry.name()?.to_string();
         if !name.ends_with('/') && name.starts_with("maven/") {
             use std::io::Read;
             let mut buffer = Vec::new();

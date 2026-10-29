@@ -17,7 +17,7 @@ const UNKNOWN_AVAILABLE_MIB: u32 = 1536;
 
 /// 当前系统可分配给新进程的内存（MiB）；读不到时返回 `None`。
 pub fn system_available_mib() -> Option<u32> {
-    let mut system = sysinfo::System::new();
+    let mut system = sysinfo::System::new().ok()?;
     system.refresh_memory();
     let mib = system.available_memory() / 1024 / 1024;
     (mib > 0).then(|| mib.min(u64::from(u32::MAX)) as u32)

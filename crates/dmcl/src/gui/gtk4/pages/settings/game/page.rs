@@ -987,7 +987,10 @@ fn manual_memory_values(launch: &LaunchConfig, javas: &[JavaEntry]) -> (u32, u32
 
 /// 系统总内存（MiB）；读不到时退回 8 GiB。
 fn system_memory_mib() -> u32 {
-    let mut system = sysinfo::System::new();
+    let mut system = match sysinfo::System::new() {
+        Ok(system) => system,
+        Err(_) => return 8192,
+    };
     system.refresh_memory();
     let mib = system.total_memory() / 1024 / 1024;
     u32::try_from(mib)

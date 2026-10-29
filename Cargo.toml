@@ -23,7 +23,7 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.93"
+rust-version = "1.95"
 license = "GPL-3.0-or-later"
 authors = ["a_out_"]
 
@@ -40,23 +40,23 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }
-reqwest = "0.12"
-sha1 = "0.10"
-sha2 = "0.10"
-md-5 = "0.10"
+reqwest = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+md-5 = "0.11"
 hex = "0.4"
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 path-clean = "1"
 walkdir = "2"
 uuid = "1"
-dirs = "6"
+dirs = "7"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-dialoguer = "0.11"
+dialoguer = "0.12"
 version-compare = "0.2"
 regex = "1"
 os_info = "3"
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 notify = "8.2"
 relm4 = { version = "0.11", features = ["libadwaita", "gnome_50"] }
 

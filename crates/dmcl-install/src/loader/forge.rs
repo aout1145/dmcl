@@ -257,7 +257,8 @@ mod tests {
         {
             let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
             for (name, data) in files {
-                let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+                let options: zip::write::FileOptions<'_, '_, ()> =
+                    zip::write::FileOptions::default();
                 writer.start_file(*name, options).unwrap();
                 std::io::Write::write_all(&mut writer, data).unwrap();
             }
