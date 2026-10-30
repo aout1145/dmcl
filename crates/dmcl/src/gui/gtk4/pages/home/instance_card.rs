@@ -10,11 +10,11 @@ use relm4::prelude::*;
 
 use super::InstanceState;
 
-/// 磁贴发给主页的消息。
+/// 磁贴发给主页的消息。直接带实例名，分组重建后索引变化也不会指错。
 #[derive(Debug)]
 pub(crate) enum CardOut {
-    Select(DynamicIndex),
-    Launch(DynamicIndex),
+    Select(String),
+    Launch(String),
 }
 
 /// 一个实例磁贴的模型。
@@ -37,7 +37,7 @@ impl InstanceCard {
 
 #[relm4::factory(pub(crate))]
 impl FactoryComponent for InstanceCard {
-    type Init = (String, InstanceState);
+    type Init = (String, InstanceState, bool);
     type Input = ();
     type Output = CardOut;
     type CommandOutput = ();
@@ -52,19 +52,6 @@ impl FactoryComponent for InstanceCard {
             set_tooltip_text: Some(&self.name),
             #[watch]
             set_css_classes: &self.css_classes(),
-
-            // 单击选中；双击启动（捕获阶段，避免被按钮自己的点击吞掉）。
-            connect_clicked[sender, index] => move |_| {
-                let _ = sender.output(CardOut::Select(index.clone()));
-            },
-            add_controller = gtk::GestureClick {
-                set_propagation_phase: gtk::PropagationPhase::Capture,
-                connect_pressed[sender, index] => move |_, n_press, _, _| {
-                    if n_press >= 2 {
-                        let _ = sender.output(CardOut::Launch(index.clone()));
-                    }
-                },
-            },
 
             gtk::Overlay {
                 gtk::Box {
@@ -115,14 +102,49 @@ impl FactoryComponent for InstanceCard {
     }
 
     fn init_model(
-        (name, state): Self::Init,
+        (name, state, selected): Self::Init,
         _index: &DynamicIndex,
         _sender: FactorySender<Self>,
     ) -> Self {
         Self {
             name,
             state,
-            selected: false,
+            selected,
         }
+    }
+
+    fn init_widgets(
+        &mut self,
+        _index: &DynamicIndex,
+        root: Self::Root,
+        _returned_widget: &gtk::Widget,
+        sender: FactorySender<Self>,
+    ) -> Self::Widgets {
+        let button = root.clone();
+        let widgets = view_output!();
+        let name = self.name.clone();
+
+        button.connect_clicked({
+            let sender = sender.clone();
+            let name = name.clone();
+            move |_| {
+                let _ = sender.output(CardOut::Select(name.clone()));
+            }
+        });
+
+        // 双击启动：捕获阶段处理，避免被按钮自己的 clicked 吞掉。
+        let double_click = gtk::GestureClick::new();
+        double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        double_click.connect_pressed({
+            let sender = sender.clone();
+            move |_, n_press, _, _| {
+                if n_press >= 2 {
+                    let _ = sender.output(CardOut::Launch(name.clone()));
+                }
+            }
+        });
+        button.add_controller(double_click);
+
+        widgets
     }
 }

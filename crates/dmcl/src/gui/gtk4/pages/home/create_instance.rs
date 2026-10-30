@@ -10,7 +10,11 @@ use relm4::prelude::*;
 use super::{HomeOut, HomePage};
 
 /// 弹出创建实例的方式列表。
-pub(crate) fn show(parent: &impl IsA<gtk::Widget>, sender: &ComponentSender<HomePage>) {
+pub(crate) fn show(
+    parent: &impl IsA<gtk::Widget>,
+    sender: &ComponentSender<HomePage>,
+    categories: Vec<String>,
+) {
     let dialog = adw::Dialog::new();
     dialog.set_title("创建实例");
     dialog.set_content_width(420);
@@ -60,7 +64,9 @@ pub(crate) fn show(parent: &impl IsA<gtk::Widget>, sender: &ComponentSender<Home
         let sender = sender.clone();
         list.connect_row_activated(move |_, _| {
             dialog.close();
-            let _ = sender.output(HomeOut::CreateCustom);
+            let _ = sender.output(HomeOut::CreateCustom {
+                categories: categories.clone(),
+            });
         });
     }
     dialog.present(Some(parent));

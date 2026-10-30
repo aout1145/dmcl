@@ -151,7 +151,7 @@ impl CustomPage {
     }
 
     /// 安装当前装配：把任务交给任务窗口，然后立即关页并打开任务列表。
-    fn install(&mut self, name: String) {
+    fn install(&mut self, name: String, category: String) {
         let Some(mc) = self.mc_version.clone() else {
             self.shell
                 .page_toast(&self.page_toast, "请先选择 Minecraft 版本");
@@ -180,12 +180,27 @@ impl CustomPage {
                 return;
             }
         };
-        // 结果句柄故意丢掉：任务已经在 Shell / 任务窗口那边独立跑，本页马上关闭。
-        let _ = self.shell.run(
+        // 结果句柄用来在安装成功后写入分类；任务本身已经在 Shell / 任务窗口那边独立跑。
+        let handle = self.shell.run(
             format!("安装 {name}"),
             dmcl_install::install_task(options, spec),
             (),
         );
+        let category = category.trim().to_string();
+        let shell = Rc::clone(&self.shell);
+        let root = self.root_path.clone();
+        let instance_name = name.clone();
+        relm4::spawn_local(async move {
+            // 安装是版本级原子的：失败 / 取消会回滚整个版本目录，分类也不留下。
+            if handle.finished().await.is_err() || category.is_empty() {
+                return;
+            }
+            if let Err(err) =
+                crate::config::write_instance_category(&root, &instance_name, &category).await
+            {
+                shell.global_toast(&format!("写入实例分类失败：{err:#}"));
+            }
+        });
         // 先弹任务窗口，再在下一轮 idle 关页：任务窗口已经在，关页不会把它压到主窗口下面。
         // 关页会丢掉页面本体，所以先用克隆拿住 `TabTitle`，idle 里不再碰 `self`。
         self.shell.open_tasks();
@@ -196,7 +211,7 @@ impl CustomPage {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for CustomPage {
-    type Init = PageInit<(Rc<Shell>, PathBuf)>;
+    type Init = PageInit<(Rc<Shell>, PathBuf, Vec<String>)>;
     type Input = CustomMsg;
     type Output = ();
 
@@ -226,18 +241,19 @@ impl SimpleComponent for CustomPage {
     ) -> ComponentParts<Self> {
         let PageInit {
             tab,
-            args: (shell, root_path),
+            args: (shell, root_path, categories),
         } = init;
         let page_toast = PageToast::new(&root_widget);
         let config = config_store::store().config();
         let source = config.read().download_source();
 
-        let summary = InstanceSummary::builder()
-            .launch(())
-            .forward(sender.input_sender(), |out| match out {
-                SummaryOut::Install { name } => CustomMsg::Install { name },
-                SummaryOut::NameChanged(name) => CustomMsg::NameChanged(name),
-            });
+        let summary =
+            InstanceSummary::builder()
+                .launch(categories)
+                .forward(sender.input_sender(), |out| match out {
+                    SummaryOut::Install { name, category } => CustomMsg::Install { name, category },
+                    SummaryOut::NameChanged(name) => CustomMsg::NameChanged(name),
+                });
 
         let mc = VersionSelect::builder()
             .launch(VersionSelectInit {
@@ -338,13 +354,13 @@ impl SimpleComponent for CustomPage {
                     self.refresh_auto();
                 }
             }
-            CustomMsg::Install { name } => self.install(name),
+            CustomMsg::Install { name, category } => self.install(name, category),
         }
     }
 }
 
 impl Page for CustomPage {
-    type Args = (Rc<Shell>, PathBuf);
+    type Args = (Rc<Shell>, PathBuf, Vec<String>);
 }
 
 /// 从组件输出里取选择（`Changed` 是唯一输出）。

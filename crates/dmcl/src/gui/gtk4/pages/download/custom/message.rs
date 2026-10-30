@@ -15,5 +15,5 @@ pub(crate) enum CustomMsg {
     /// 实例名称显示值变化（自动命名 / 用户编辑都会发）。
     NameChanged(String),
     /// 用户点了安装按钮。
-    Install { name: String },
+    Install { name: String, category: String },
 }

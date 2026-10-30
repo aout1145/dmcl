@@ -15,6 +15,8 @@
 - **多账户 / 多根目录 / 多 Java** —— 在全局配置里维护账户、Minecraft 根目录与 Java 表。
 - **多主页** —— 每个 `minecraft_roots` 条目对应一个常驻主页；标签可以随时关闭，
   关闭只影响显示，游戏进程和主页运行状态继续保留。
+- **实例分类** —— 在实例的 `dmcl.json` 里用 `instance.category` 标分类，主页按分类分组
+  显示；新建实例页可以直接填，也可以从已有分类里选。
 - **全局默认 + 实例覆盖** —— 全局 `launch` 是所有实例的默认启动配置；每个实例可以
   在 `versions/<version_name>/dmcl.json` 里只写要覆盖的字段。
 - **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
@@ -222,9 +224,10 @@ macOS `~/Library/Application Support`）。
   `{ "type": "offline", "username": "..." }`。启动链第一步会调用账户的登录源；
   离线账户直接通过，在线登录以后接在这里。
 
-### 实例覆盖
+### 实例覆盖与元数据
 
-每个实例可以在自己的版本目录里写一份只包含 `launch` 的配置：
+每个实例可以在自己的版本目录里写一份 `dmcl.json`，包含启动覆盖 `launch` 和实例元数据
+`instance`：
 
 ```text
 <minecraft_root>/versions/<version_name>/dmcl.json
@@ -232,6 +235,9 @@ macOS `~/Library/Application Support`）。
 
 ```json
 {
+  "instance": {
+    "category": "整合包"
+  },
   "launch": {
     "account": "steve",
     "max_memory": 4096
@@ -239,10 +245,14 @@ macOS `~/Library/Application Support`）。
 }
 ```
 
+- `instance.category` 就是实例分类名；缺省或空白表示「未分类」。主页按分类分组显示，
+  修改文件后会自动刷新。
 - 文件不存在：完全使用全局 `launch`，不会自动创建文件。
 - 文件存在：以全局 `launch` 为底，实例里出现的字段逐项覆盖，没写的字段继续继承全局。
-- 实例配置只读：不会自动创建，也不会自动写回；坏字段的修复只在内存里生效。
-- 实例配置里有警告时，GUI 会在启动链开始前弹出确认框；点「取消」不启动，点
+- 启动配置只读：不会自动写回；坏字段的修复只在内存里生效。
+- GUI 新建实例时填了分类，会在安装成功后把 `instance.category` 写进该实例的
+  `dmcl.json`；分类留空则不创建文件。安装失败或取消会回滚版本目录，不会留下实例配置。
+- 实例配置里有启动相关的警告时，GUI 会在启动链开始前弹出确认框；点「取消」不启动，点
   「继续启动」才使用修复后的配置继续。
 - 安装阶段还没有实例目录，使用全局 `launch`，不读取、不创建实例 `dmcl.json`。
 

@@ -266,8 +266,8 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::Home {
                 root,
-                out: HomeOut::CreateCustom,
-            } => self.open_custom(&root),
+                out: HomeOut::CreateCustom { categories },
+            } => self.open_custom(&root, categories),
             AppMsg::Tasks(TaskCenterOut::RunningCount(count)) => {
                 let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
             }
@@ -311,8 +311,8 @@ impl AppModel {
         self.preferences.open(&self.tab_view, "首选项");
     }
 
-    /// 新建实例页绑定到发出请求的主页 root。
-    fn open_custom(&mut self, root_name: &str) {
+    /// 新建实例页绑定到发出请求的主页 root，并带上主页已有分类的拷贝。
+    fn open_custom(&mut self, root_name: &str, categories: Vec<String>) {
         let root_path = match self.config.read().root_path(root_name) {
             Ok(path) => path,
             Err(err) => {
@@ -322,7 +322,7 @@ impl AppModel {
             }
         };
         self.page_host
-            .open_page::<CustomPage>((self.shell.clone(), root_path));
+            .open_page::<CustomPage>((self.shell.clone(), root_path, categories));
     }
 
     /// 配置里的 root 有增减：给新 root 补建主页，再把菜单交给标题栏。

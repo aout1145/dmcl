@@ -11,7 +11,7 @@
 - 启动 `Header`、`TaskCenter`；按配置里的全部 `minecraft_roots` 创建常驻 `HomePage`，
   启动时只给默认 root 建标签页；
 - 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页和任务；主页的
-  `HomeOut::CreateCustom` 打开新建实例页；`ConfigChanged` 给配置里新增的 root 补建主页
+  `HomeOut::CreateCustom { categories }` 打开新建实例页；`ConfigChanged` 给配置里新增的 root 补建主页
   并刷新标题栏菜单；`TabClosed` 清理对应页面的标签句柄并同步根目录勾选；主菜单和快捷键
   共用 `app.*` action，分别发 `OpenPreferences` / `About`；
   `TaskCenterOut` 负责任务角标与退出；

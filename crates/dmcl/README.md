@@ -17,6 +17,7 @@ main.rs        可执行文件入口：先同步读配置，再决定走 GUI 还
 build_info.rs  编译期信息（构建时间等）
 config/        mod.rs 整份文档读写与逐项容错
                account.rs / java.rs / root.rs / launch.rs / download.rs 各配置段
+               instance.rs 实例 dmcl.json 的 instance 段（分类）
 cli/           mod.rs 命令定义、本地化与分发；progress.rs 终端进度
                commands/ install / launch / list / search_java / version
 gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 README）
@@ -58,16 +59,17 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`），包含 `launch`
   `account.rs` / `java.rs` / `root.rs` / `launch.rs` / `download.rs`；`mod.rs` 只负责整份
   文档的读写、逐项容错与跨段编排。
 
-### 实例覆盖
+### 实例覆盖与元数据
 
-实例配置位于 `<minecraft_root>/versions/<version_name>/dmcl.json`，只写 `launch`，以全局
-`launch` 为底逐字段覆盖；文件不存在时完全使用全局 `launch`。实例配置只读：不自动创建、
-不自动写回。加载时账户 / Java 选择项失效会回退并警告，其中 `launch.account` 失效时回退为
-`null`，启动时报错。GUI 在启动实例前若读到实例配置警告，会先弹确认框；确认后使用内存里
-修复过的配置继续，取消则不启动。
+实例配置位于 `<minecraft_root>/versions/<version_name>/dmcl.json`，`launch` 以全局
+`launch` 为底逐字段覆盖；文件不存在时完全使用全局 `launch`。`instance.category` 是实例
+分类名，缺省或空白表示未分类，主页按它分组。实例配置由 GUI 在新建实例安装成功后写入
+分类（留空不创建文件），其它字段不会被自动改写。加载时账户 / Java 选择项失效会回退并警告，
+其中 `launch.account` 失效时回退为 `null`，启动时报错。GUI 在启动实例前若读到实例配置
+警告，会先弹确认框；确认后使用内存里修复过的配置继续，取消则不启动。
 
-安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取、也不创建实例
-`dmcl.json`。
+安装阶段使用全局 `LaunchConfig`，因为此时版本目录还不存在；安装不读取实例 `dmcl.json`，
+安装链本身也不写它。分类建议来自该根目录下已有的 `instance.category`。
 
 ### 根目录
 

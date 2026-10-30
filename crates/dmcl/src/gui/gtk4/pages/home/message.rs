@@ -1,10 +1,15 @@
 //! 主页的消息。
 
 use dmcl_launch::GameMonitor;
-use dmcl_mcmeta::layout::InstalledVersion;
-use relm4::factory::DynamicIndex;
 
 use crate::config::LaunchConfig;
+
+/// 一个已安装实例及其分类。
+#[derive(Debug, Clone)]
+pub(crate) struct InstanceEntry {
+    pub(crate) name: String,
+    pub(crate) category: Option<String>,
+}
 
 /// 主页组件收到的消息。
 #[derive(Debug)]
@@ -12,13 +17,13 @@ pub(crate) enum HomeMsg {
     /// 重新读取已安装的版本。
     Reload,
     /// 版本列表读取完成。
-    Loaded(Result<Vec<InstalledVersion>, String>),
+    Loaded(Result<Vec<InstanceEntry>, String>),
     /// 选中某个磁贴。
-    Select(DynamicIndex),
+    Select(String),
     /// 取消选中。
     Deselect,
     /// 双击启动某个磁贴。
-    Launch(DynamicIndex),
+    Launch(String),
     /// 按下操作栏的启动 / 取消 / 停止按钮。
     Toggle,
     /// 用户在实例配置警告框里点了「继续启动」。

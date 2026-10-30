@@ -20,6 +20,9 @@ pub(crate) const CSS: &str = "\
 .dmcl-version-select list.nested > row.dmcl-version-panel-row:active { background: none; }
 /* chips 用 caption 字号，但 `.pill` 的默认 padding 太大，收紧成紧凑药丸。 */
 button.dmcl-version-chip { min-height: 0; padding: 3px 14px; }
+/* 分类选择器里的可选项比默认 ActionRow 矮一点，避免列表占太高。 */
+.dmcl-category-choice > box.header { min-height: 36px; }
+.dmcl-category-choice > box.header > box.title { margin-top: 2px; margin-bottom: 2px; }
 .dmcl-version-selected,
 .dmcl-version-selected:hover,
 .dmcl-version-selected:active { background: color-mix(in srgb, currentColor 12%, transparent); }";

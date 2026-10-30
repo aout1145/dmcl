@@ -13,14 +13,15 @@
 
 ## 装配
 
-`CustomPage` 的 `Init = PageInit<(Rc<Shell>, PathBuf)>`。页面由
+`CustomPage` 的 `Init = PageInit<(Rc<Shell>, PathBuf, Vec<String>)>`。第三个参数是打开页面
+时从主页拷来的已有分类，用作输入建议。页面由
 `InstanceSummary` 与四个 `VersionSelect` 组成：
 
-- `InstanceSummary` 推名称 / 图标 / 安装按钮状态；
+- `InstanceSummary` 推名称 / 分类 / 图标 / 安装按钮状态；分类建议是主页已有分类的拷贝；
 - MC 一行 + Forge / Fabric / NeoForge 三个加载器行；
 - 打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单取数跑起来（MC 取数器忽略上下文）；
-- 主页右下角「新建实例」→「自定义」把 `Rc<Shell>` 和该主页的根目录路径传进来；安装目标、
-  实例是否已存在都只用这个 root；`download::common::CSS` 注册到全局样式。
+- 主页右下角「新建实例」→「自定义」把 `Rc<Shell>`、该主页的根目录路径和已有分类拷贝传进来；
+  安装目标、实例是否已存在都只用这个 root；`download::common::CSS` 注册到全局样式。
 - 下载源与安装参数从全局共享配置现读（`ConfigRef`），页面不持有 `Config` 副本。
 
 整页包在 `GtkScrolledWindow` 里；展开多个版本列表时页面可以滚。
@@ -78,18 +79,23 @@ MC 或任一加载器选择变化后，页面用
 
 ## 安装
 
-`SummaryOut::Install { name }` → 校验 MC 已选、名称非空 → 按装配态组 `InstallSpec`
-（加载器按 `LOADER_DEFS` 顺序）→ `Shell::run(dmcl_install::install_task(...))` →
-`Shell::open_tasks()` 主动弹出任务列表 → 下一轮 idle 里 `tab.close()` 立即关页。
+`SummaryOut::Install { name, category }` → 校验 MC 已选、名称非空 → 按装配态组
+`InstallSpec`（加载器按 `LOADER_DEFS` 顺序）→
+`Shell::run(dmcl_install::install_task(...))` → `Shell::open_tasks()` 主动弹出任务列表 →
+下一轮 idle 里 `tab.close()` 立即关页。
 
 任务本身由 `Shell` / 任务窗口独立跑，结果（完成 / 失败 / 取消）都在任务窗口里看，页面不再
 等结果。先弹任务窗口再关页，避免任务窗口被主窗口压到下面。
+
+安装成功且分类非空时，页面留下一个 `spawn_local` 在任务结果返回后把 `instance.category`
+写进该实例的 `dmcl.json`；安装失败 / 取消时版本目录已被安装链回滚，不写分类。写入失败走
+全局 toast（此时页面可能已经关闭）。
 
 ## 消息
 
 | 类型 | 说明 |
 | --- | --- |
-| `CustomMsg` | `McChanged` / `LoaderChanged { slot, item }` / `NameChanged` / `Install` |
+| `CustomMsg` | `McChanged` / `LoaderChanged { slot, item }` / `NameChanged` / `Install { name, category }` |
 
 ## 测试
 

@@ -9,7 +9,7 @@
 
 ```text
 CustomPage
-├── InstanceSummary       名称 / 图标 / 安装按钮
+├── InstanceSummary       名称 / 分类 / 图标 / 安装按钮
 └── VersionSelect × 4     MC / Forge / Fabric / NeoForge
         │
         │ SelectOut::Changed(Option<VersionItem>)
@@ -31,8 +31,8 @@ NeoForge 四个 `VersionSelect`。
 
 ## InstanceSummary
 
-`common/instance_summary.rs` —— 图标 + 名称 + 分类 + 安装按钮。`Init = ()`，由页面通过输入
-消息推状态。
+`common/instance_summary.rs` —— 图标 + 名称 + 分类 + 安装按钮。`Init = Vec<String>`（已有
+分类建议的拷贝），由页面通过输入消息推状态。
 
 - 名称与图标都有**当前值 + 用户是否改过**两个状态：外部推自动值
   （`SetAutoName` / `SetAutoIcon`）只在用户没改过时生效；用户一改过就**永不**覆盖。
@@ -40,7 +40,9 @@ NeoForge 四个 `VersionSelect`。
   恢复跟随自动值。
 - 自动命名规则（`dmcl_install::default_version_name`）由页面计算后推送，组件自身不知道版本与
   加载器怎么命名。
-- 分类下拉 v1 禁用（`set_sensitive(false)`）。
+- 分类是 `AdwExpanderRow`：收起时副标题显示当前分类；展开后先列已有分类，当前项带
+  对勾，最下面是「自定义分类」`AdwEntryRow`（可以输入任意新名字，留空表示未分类）。
+  选中已有项后自动收起；分类非空时行尾出现 ×，点击回到「未分类」。
 - 安装按钮可用性由页面通过 `SetInstallEnabled` 推。页面检查到 `versions/<名称>` 已存在时发
   `SetNameError(Some("实例已经存在"))`：输入框不变色，提示文案用 `.error` 标红，和安装按钮
   排在同一行（提示在按钮左侧）。
@@ -51,7 +53,8 @@ NeoForge 四个 `VersionSelect`。
   文本」的事件，中间态直接丢掉；用户真正清空时重置修改标记，自动命名重新接管。
 - 图标来源 `IconSource`：`Initials`（首字母彩色头像）/ `Loader(LoaderKind)`（按加载器取首字母，
   Forge → F）/ `File(PathBuf)`（用户自选本地图片，载入失败回落首字母）。
-- 输出 `Install { name }` 与 `NameChanged(String)`；后者用于页面同步标签标题。
+- 输出 `Install { name, category }` 与 `NameChanged(String)`；前者用于页面组安装请求，
+  后者用于页面同步标签标题。
 
 ## VersionSelect
 
@@ -138,7 +141,7 @@ type FetchVersions =
 
 | 类型 | 说明 |
 | --- | --- |
-| `SummaryIn` / `SummaryOut` | 概要：`SetAutoName` / `SetAutoIcon` / `SetInstallEnabled` / `SetNameError(Option<String>)` / 图标菜单与名称编辑；输出 `Install { name }` / `NameChanged` |
+| `SummaryIn` / `SummaryOut` | 概要：`SetAutoName` / `SetAutoIcon` / `SetInstallEnabled` / `SetNameError(Option<String>)` / 图标菜单 / 名称与分类编辑；输出 `Install { name, category }` / `NameChanged` |
 | `SelectIn` / `SelectOut` | 版本下拉：`SetContext` / `SetConflict` / `Reload` / `Deselect` / `SearchChanged` / `ToggleChip` / `RowClicked` / `Loaded`；输出 `Changed(Option<VersionItem>)` |
 
 ## CSS
@@ -148,7 +151,8 @@ type FetchVersions =
 - `.dmcl-version-selected`：选中行高亮；
 - `.dmcl-version-list`：清掉 `GtkListBox` 隐式行的 hover 背景；
 - `.dmcl-version-panel-row`：展开面板行不可激活；
-- `.dmcl-version-chip`：收紧 chip 的 padding。
+- `.dmcl-version-chip`：收紧 chip 的 padding；
+- `.dmcl-category-choice`：分类选择器里的可选项行高更紧凑。
 
 ## 测试
 

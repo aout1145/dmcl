@@ -9,7 +9,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    account, java, AccountConfig, Config, ConfigError, ConfigWarning, JavaChoice, JavaConfigs,
+    account, instance::instance_config_path, java, AccountConfig, Config, ConfigError,
+    ConfigWarning, JavaChoice, JavaConfigs,
 };
 
 /// 全局 `launch.*` 段，也是实例覆盖后的结果。
@@ -51,11 +52,6 @@ impl Default for LaunchConfig {
     }
 }
 
-/// 实例配置文件路径：`<root>/versions/<version_name>/dmcl.json`。
-pub fn instance_config_path(root: &Path, version_name: &str) -> PathBuf {
-    dmcl_mcmeta::layout::version_dir(root, version_name).join("dmcl.json")
-}
-
 /// 一次实例配置加载的结果。
 #[derive(Debug, Clone)]
 pub struct LoadedInstanceConfig {
@@ -68,7 +64,8 @@ pub struct LoadedInstanceConfig {
 impl Config {
     /// 读取某个实例的 `dmcl.json`，并逐字段覆盖全局 `launch`。
     ///
-    /// 文件不存在时直接使用全局 `launch`，**不创建文件**。
+    /// 文件不存在时直接使用全局 `launch`，**不创建文件**。`instance` 段属于实例元数据，
+    /// 不参与启动配置，由 [`super::instance`] 单独读取。
     pub async fn load_instance(&self, root: &Path, version_name: &str) -> LoadedInstanceConfig {
         let path = instance_config_path(root, version_name);
         match tokio::fs::read_to_string(&path).await {
@@ -130,12 +127,17 @@ impl Config {
         };
 
         for (section, body) in sections {
-            if section != "launch" {
-                warnings.push(ConfigWarning {
-                    message: format!("配置项「{section}」已忽略"),
-                    detail: "实例配置只支持 launch".to_string(),
-                });
-                continue;
+            match section.as_str() {
+                "launch" => {}
+                // 实例元数据（分类等）不参与启动配置，由 config::instance 读取。
+                "instance" => continue,
+                _ => {
+                    warnings.push(ConfigWarning {
+                        message: format!("配置项「{section}」已忽略"),
+                        detail: "实例配置只支持 launch / instance".to_string(),
+                    });
+                    continue;
+                }
             }
             let serde_json::Value::Object(entries) = body else {
                 warnings.push(ConfigWarning {
@@ -265,6 +267,36 @@ mod tests {
         assert!(loaded.error.is_none());
         assert_eq!(loaded.launch.max_memory, Some(3000));
         assert!(!instance_config_path(&root, "1.20.1").exists());
+    }
+
+    #[tokio::test]
+    async fn instance_section_does_not_become_a_launch_warning() {
+        let dir = temp_dir("instance-metadata-section");
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("mc");
+        let mut config = Config::default();
+        config
+            .minecraft_roots
+            .insert("test".to_string(), root.clone());
+        config.minecraft_root = "test".to_string();
+
+        let path = instance_config_path(&root, "1.20.1");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"instance":{"category":"整合包"},"launch":{"max_memory":4096}}"#,
+        )
+        .unwrap();
+
+        let loaded = config.load_instance(&root, "1.20.1").await;
+        assert!(loaded.error.is_none(), "{:?}", loaded.error);
+        assert_eq!(loaded.launch.max_memory, Some(4096));
+        assert_eq!(
+            crate::config::read_instance_category(&root, "1.20.1").await,
+            Some("整合包".to_string())
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

@@ -10,7 +10,8 @@
 //!
 //! 全局配置分为 `launch` / `accounts` / `javas` / `minecraft_roots` / `minecraft_root` /
 //! `download` 六部分；每个实例还可以在
-//! `<minecraft_root>/versions/<version_name>/dmcl.json` 里写一个只含 `launch` 的覆盖层。
+//! `<minecraft_root>/versions/<version_name>/dmcl.json` 里写 `launch` 覆盖层和 `instance`
+//! 元数据（目前是分类 `instance.category`）。
 //!
 //! ```json
 //! {
@@ -39,17 +40,19 @@
 
 mod account;
 mod download;
+mod instance;
 mod java;
 mod launch;
 mod root;
 
 pub use account::AccountConfig;
 pub use download::DownloadConfig;
+pub use instance::{instance_config_path, read_instance_category, write_instance_category};
 pub use java::{
     configs_from_details, merge_javas, same_java_path, unique_java_name, JavaChoice, JavaConfig,
     JavaConfigs,
 };
-pub use launch::{instance_config_path, LaunchConfig, LoadedInstanceConfig};
+pub use launch::{LaunchConfig, LoadedInstanceConfig};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

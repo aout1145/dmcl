@@ -280,7 +280,6 @@ Debian / Ubuntu 的 `gtk4-broadwayd` 在 `libgtk-4-bin` 包里。等应用窗口
 
 - 实例设置页（`Manage` 打开新标签）的 `Page` 组件。
 - Forge 版本下拉的类别 chips（稳定 / 推荐）。
-- 实例分类下拉的启用与持久化。
 - 任务按钮的「运行中数量」角标。
 - 账号功能；首选项里的账号分类。
 - 实例设置页复用 `GameOptionsPage`，实现实例 target 与逐项覆盖。
