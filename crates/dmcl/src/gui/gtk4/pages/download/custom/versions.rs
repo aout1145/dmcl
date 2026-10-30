@@ -155,12 +155,52 @@ pub(super) fn neoforge_items(
         .collect()
 }
 
+/// OptiFine 列表 → 条目：最新稳定版、最新预览版各给一个置顶徽标。
+pub(super) fn optifine_items(
+    entries: Vec<dmcl_mcmeta::optifine::OptiFineVersionEntry>,
+) -> Vec<VersionItem> {
+    let latest_stable = entries
+        .iter()
+        .find(|entry| !entry.is_preview())
+        .map(dmcl_mcmeta::optifine::OptiFineVersionEntry::version);
+    let latest_preview = entries
+        .iter()
+        .find(|entry| entry.is_preview())
+        .map(dmcl_mcmeta::optifine::OptiFineVersionEntry::version);
+
+    entries
+        .into_iter()
+        .map(|entry| {
+            let version = entry.version();
+            let mut badges = Vec::new();
+            if latest_stable.as_deref() == Some(version.as_str()) {
+                badges.push(badge("latest-stable", "最新稳定版"));
+            }
+            if latest_preview.as_deref() == Some(version.as_str()) {
+                badges.push(badge("latest-preview", "最新预览版"));
+            }
+            VersionItem {
+                id: version.clone(),
+                label: version,
+                kind: if entry.is_preview() {
+                    "preview".to_string()
+                } else {
+                    "stable".to_string()
+                },
+                badges,
+                detail: entry.forge,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use dmcl_mcmeta::fabric::{FabricLoader, FabricLoaderEntry};
     use dmcl_mcmeta::forge::ForgeVersionEntry;
     use dmcl_mcmeta::neoforge::NeoForgeListEntry;
+    use dmcl_mcmeta::optifine::OptiFineVersionEntry;
     use dmcl_mcmeta::vanilla::manifest::{LatestVersions, VersionManifest, VersionManifestEntry};
 
     fn labels(item: &VersionItem) -> Vec<&str> {
@@ -288,5 +328,35 @@ mod tests {
 
         assert_eq!(labels(&items[0]), vec!["最新版本"]);
         assert!(items[1].badges.is_empty());
+    }
+
+    fn optifine_entry(kind: &str, patch: &str, filename: &str) -> OptiFineVersionEntry {
+        OptiFineVersionEntry {
+            mcversion: "1.19".to_string(),
+            kind: kind.to_string(),
+            patch: patch.to_string(),
+            filename: filename.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn optifine_items_badge_latest_stable_and_preview() {
+        let items = optifine_items(vec![
+            optifine_entry("HD_U", "H9", "OptiFine_1.19_HD_U_H9.jar"),
+            optifine_entry("HD_U_H9", "pre2", "preview_OptiFine_1.19_HD_U_H9_pre2.jar"),
+            optifine_entry("HD_U", "H8", "OptiFine_1.19_HD_U_H8.jar"),
+        ]);
+
+        assert_eq!(items[0].id, "HD_U_H9");
+        assert_eq!(items[0].kind, "stable");
+        assert_eq!(labels(&items[0]), vec!["最新稳定版"]);
+
+        assert_eq!(items[1].id, "HD_U_H9_pre2");
+        assert_eq!(items[1].kind, "preview");
+        assert_eq!(labels(&items[1]), vec!["最新预览版"]);
+
+        // 旧稳定版不再带徽标。
+        assert!(items[2].badges.is_empty());
     }
 }

@@ -62,3 +62,32 @@ async fn fabric_loader_list_can_be_queried() {
     assert!(!loaders.is_empty());
     assert!(loaders.iter().any(|entry| entry.loader.is_stable()));
 }
+
+#[tokio::test]
+#[ignore = "requires network access"]
+async fn optifine_list_and_latest_can_be_queried() {
+    // 列表与下载都固定走 bmclapi，与构造 DownloadSource 时选的镜像无关。
+    let source = DownloadSource::official();
+    let versions = source
+        .fetch_optifine_versions("1.19")
+        .await
+        .expect("optifine");
+    assert!(versions.iter().any(|entry| !entry.is_preview()));
+    assert!(versions.iter().any(|entry| entry.is_preview()));
+    assert!(versions.iter().all(|entry| entry
+        .download_url()
+        .starts_with("https://bmclapi2.bangbang93.com/optifine/")));
+
+    let latest = source
+        .latest_optifine_version("1.19")
+        .await
+        .expect("latest optifine");
+    assert!(!latest.is_empty());
+    assert_eq!(
+        versions
+            .iter()
+            .find(|entry| entry.version() == latest)
+            .map(|entry| entry.is_preview()),
+        Some(false)
+    );
+}

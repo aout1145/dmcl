@@ -25,6 +25,8 @@ pub(crate) struct InstallArgs {
     pub forge_version: Option<String>,
     pub neoforge_version: Option<String>,
     pub fabric_version: Option<String>,
+    pub optifine: bool,
+    pub optifine_version: Option<String>,
 }
 
 impl InstallArgs {
@@ -39,6 +41,9 @@ impl InstallArgs {
         }
         if self.fabric {
             loaders.push((LoaderKind::Fabric, self.fabric_version.as_deref()));
+        }
+        if self.optifine {
+            loaders.push((LoaderKind::OptiFine, self.optifine_version.as_deref()));
         }
         loaders
     }
@@ -119,6 +124,7 @@ async fn latest_loader(
             .first()
             .map(|entry| entry.version.clone())
             .unwrap_or_default(),
+        LoaderKind::OptiFine => source.latest_optifine_version(mc_version).await?,
     };
     Ok(version)
 }
@@ -138,9 +144,12 @@ mod tests {
             forge_version: Some("47.2.0".into()),
             neoforge_version: None,
             fabric_version: None,
+            optifine: true,
+            optifine_version: Some("HD_U_H8".into()),
         };
         let loaders = args.requested_loaders();
         assert_eq!(loaders[0].0, LoaderKind::Forge);
         assert_eq!(loaders[1].0, LoaderKind::Fabric);
+        assert_eq!(loaders[2].0, LoaderKind::OptiFine);
     }
 }

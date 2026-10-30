@@ -17,7 +17,7 @@ dmcl-rs/
     ├── dmcl-task/             # 通用任务链 + 进度事件流（与 MC 无关）
     ├── dmcl-mcmeta/           # MC 元数据文档、下载源、URL 模板、本地目录布局
     ├── dmcl-download/         # 并发 / 分块下载（实现 dmcl-task 的 Task）
-    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge 安装、完整性检查
+    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge/OptiFine 安装、完整性检查
     ├── dmcl-launch/           # 账号、java、命令行生成、启动
     └── dmcl/                  # 应用：config + cli + gui（GTK4）
 ```
@@ -70,7 +70,7 @@ dmcl ─┬─► dmcl-install ─┬─► dmcl-mcmeta   （叶子）
 | `dmcl-task` | 通用任务链、进度 / 日志事件、取消与回滚 | [crates/dmcl-task/README.md](crates/dmcl-task/README.md) |
 | `dmcl-mcmeta` | 强类型元数据文档、URL 模板与下载源、目录布局 | [crates/dmcl-mcmeta/README.md](crates/dmcl-mcmeta/README.md) |
 | `dmcl-download` | 多文件并发 + 大文件分块的下载任务 | [crates/dmcl-download/README.md](crates/dmcl-download/README.md) |
-| `dmcl-install` | 版本规划、落盘、完整性检查、加载器安装 | [crates/dmcl-install/README.md](crates/dmcl-install/README.md) |
+| `dmcl-install` | 版本规划、落盘、完整性检查、加载器 / OptiFine 安装 | [crates/dmcl-install/README.md](crates/dmcl-install/README.md) |
 | `dmcl-launch` | 账户、Java 选择、命令行生成、启动与监控 | [crates/dmcl-launch/README.md](crates/dmcl-launch/README.md) |
 | `dmcl` | 配置、CLI 与 GTK4 前端 | [crates/dmcl/README.md](crates/dmcl/README.md) |
 

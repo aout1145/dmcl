@@ -4,12 +4,13 @@
 //!
 //! * [`InstanceSummary`]：图标 + 名称（自动命名 / 用户改过后不再覆盖）+ 分类（v1 禁用）
 //!   + 安装按钮；
-//! * 四个 [`VersionSelect`]：Minecraft、Forge、Fabric、NeoForge。加载器列表随所选 MC
-//!   版本动态取；「最新 / 推荐」的判定与徽标在 `versions` 子模块里做，组件本身只展示。
+//! * 五个 [`VersionSelect`]：Minecraft、Forge、Fabric、NeoForge、OptiFine。加载器列表随
+//!   所选 MC 版本动态取；「最新 / 推荐」的判定与徽标在 `versions` 子模块里做，组件本身只展示。
 //!
-//! 加载器互斥按**组**配置（`LoaderDef::mutex_group`），现阶段 Forge / Fabric /
-//! NeoForge 同属 `"loader"` 组：选中一个后，同组其它行会被禁用并提示「与 xx 冲突」，
-//! 取消选择后恢复。以后要允许叠加（如双加载器整合包）只需改表里的组。
+//! 加载器互斥按**组**配置（`LoaderDef::mutex_groups`）：Forge / Fabric / NeoForge 共享
+//! `"loader"`，Fabric / NeoForge / OptiFine 共享 `"optifine"`。因此 Forge 可以和 OptiFine
+//! 叠加，而 Fabric / NeoForge 与两者都冲突；选中后冲突行会被禁用并提示「与 xx 冲突」，
+//! 取消选择后恢复。
 //!
 //! 用户点安装后立即关闭本页并主动打开任务列表（[`Shell::open_tasks`]）；任务结果由
 //! 任务窗口展示。标签的移除由 `AdwTabView` 的 `page-detached` 清理。
@@ -77,20 +78,22 @@ impl CustomPage {
         !name.trim().is_empty() && version_dir(&self.root_path, name).exists()
     }
 
-    /// 按同组选择刷新加载器冲突：已选中的行让其它同组行禁用并显示「与 xx 冲突」。
+    /// 按冲突组刷新加载器冲突：共享任意一个组的已选行会让本行禁用并显示「与 xx 冲突」。
     fn refresh_loader_conflicts(&self) {
         for (index, slot) in self.loaders.iter().enumerate() {
-            let conflict = slot.mutex_group.and_then(|group| {
-                self.loaders
-                    .iter()
-                    .enumerate()
-                    .find_map(|(other_index, other)| {
-                        (other_index != index
-                            && other.mutex_group == Some(group)
-                            && other.selection.is_some())
-                        .then(|| other.kind.display_name().to_string())
-                    })
-            });
+            let conflict = self
+                .loaders
+                .iter()
+                .enumerate()
+                .find_map(|(other_index, other)| {
+                    (other_index != index
+                        && other.selection.is_some()
+                        && slot
+                            .mutex_groups
+                            .iter()
+                            .any(|group| other.mutex_groups.contains(group)))
+                    .then(|| other.kind.display_name().to_string())
+                });
             let _ = slot.select.sender().send(SelectIn::SetConflict(conflict));
         }
     }
@@ -283,7 +286,7 @@ impl SimpleComponent for CustomPage {
                 });
             loaders.push(LoaderSlot {
                 kind: def.kind,
-                mutex_group: def.mutex_group,
+                mutex_groups: def.mutex_groups,
                 select,
                 selection: None,
             });

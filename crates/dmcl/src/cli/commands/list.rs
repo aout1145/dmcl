@@ -68,3 +68,21 @@ pub(crate) async fn fabric(config: &Config, verid: &str) -> Result<()> {
     }
     Ok(())
 }
+
+/// `list-optifine`。
+pub(crate) async fn optifine(config: &Config, verid: &str) -> Result<()> {
+    let source = config.download_source();
+    // fetch 已按稳定版 / 预览版与版本号从新到旧排序
+    for entry in source.fetch_optifine_versions(verid).await? {
+        println!(
+            "{}{}",
+            entry.version(),
+            if entry.is_preview() {
+                " (预览版)"
+            } else {
+                ""
+            }
+        );
+    }
+    Ok(())
+}

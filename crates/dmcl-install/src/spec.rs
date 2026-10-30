@@ -11,15 +11,17 @@ use crate::fabric::install_fabric_task;
 use crate::files::{client_jar_task, game_files_task};
 use crate::forge::install_forge_task;
 use crate::neoforge::install_neoforge_task;
+use crate::optifine::install_optifine_task;
 use crate::options::InstallOptions;
 use crate::vanilla::vanilla_metadata_task;
 
-/// 一种模组加载器。
+/// 一种模组加载器，或叠加在原版 / Forge 上的 OptiFine。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoaderKind {
     Fabric,
     Forge,
     NeoForge,
+    OptiFine,
 }
 
 impl LoaderKind {
@@ -29,6 +31,7 @@ impl LoaderKind {
             LoaderKind::Fabric => "fabric",
             LoaderKind::Forge => "forge",
             LoaderKind::NeoForge => "neoforge",
+            LoaderKind::OptiFine => "optifine",
         }
     }
 
@@ -38,6 +41,7 @@ impl LoaderKind {
             LoaderKind::Fabric => "Fabric",
             LoaderKind::Forge => "Forge",
             LoaderKind::NeoForge => "NeoForge",
+            LoaderKind::OptiFine => "OptiFine",
         }
     }
 }
@@ -58,11 +62,14 @@ pub struct LoaderRequest {
 
 impl LoaderRequest {
     /// 变成对应加载器的安装任务链。
+    ///
+    /// `loaders` 是本次安装的完整请求列表：OptiFine 用它判断是否同时装了 Forge。
     pub fn task(
         &self,
         options: Arc<InstallOptions>,
         version_name: String,
         mc_version: String,
+        loaders: &[LoaderRequest],
     ) -> TaskChain<(), ()> {
         let name = version_name.clone();
         match self.kind {
@@ -71,6 +78,12 @@ impl LoaderRequest {
             }
             LoaderKind::Forge => install_forge_task(options, name, self.version.clone()),
             LoaderKind::NeoForge => install_neoforge_task(options, name, self.version.clone()),
+            LoaderKind::OptiFine => {
+                let has_forge = loaders
+                    .iter()
+                    .any(|request| request.kind == LoaderKind::Forge);
+                install_optifine_task(options, name, mc_version, self.version.clone(), has_forge)
+            }
         }
     }
 }
@@ -114,6 +127,10 @@ impl InstallSpec {
 
     pub fn with_neoforge(self, version: impl Into<String>) -> Self {
         self.with_loader(LoaderKind::NeoForge, version)
+    }
+
+    pub fn with_optifine(self, version: impl Into<String>) -> Self {
+        self.with_loader(LoaderKind::OptiFine, version)
     }
 }
 
@@ -190,10 +207,11 @@ fn remove_version_dir_rollback(
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
 ///
-/// 安装是「版本级原子」的：第一步就占用 `versions/<version_name>`，目录已存在时直接
-/// 报错（不会碰已有版本）；只有这一步成功后才会走到 `on_rollback` 登记删除动作，
-/// 之后任何一步失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
+/// 安装是「版本级原子」的：先占用 `versions/<version_name>`，目录已存在时直接报错
+/// （不会碰已有版本）；只有占用成功后才会走到 `on_rollback` 登记删除动作，之后任何一步
+/// 失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
 pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
+    // 加载器的先后顺序由调用方决定；这里不额外调整顺序或检查组合兼容性。
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
         .then(
             create_version_dir(options.root_path.clone(), spec.version_name.clone()),
@@ -222,6 +240,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
                 options.clone(),
                 spec.version_name.clone(),
                 spec.version_id.clone(),
+                &spec.loaders,
             ),
             format!("安装 {}", request.kind.display_name()),
         );
@@ -338,5 +357,31 @@ mod tests {
             ),
             "1.20.1-forge-47.2.0-fabric-0.15.0"
         );
+        assert_eq!(
+            default_version_name("1.19", &[(LoaderKind::OptiFine, Some("HD_U_H8"))]),
+            "1.19-optifine-HD_U_H8"
+        );
+    }
+
+    #[test]
+    fn loaders_keep_the_callers_order() {
+        let options = Arc::new(InstallOptions::new(
+            "/tmp/.minecraft",
+            DownloadSource::new(Mirror::Official),
+        ));
+        let spec = InstallSpec::new("1.19", "1.19")
+            .with_optifine("HD_U_H8")
+            .with_forge("1.19-47.3.0");
+        let chain = install_task(options, spec);
+        let names: Vec<_> = chain.step_names().collect();
+        let optifine = names
+            .iter()
+            .position(|name| *name == "安装 OptiFine")
+            .expect("缺少 OptiFine 步骤");
+        let forge = names
+            .iter()
+            .position(|name| *name == "安装 Forge")
+            .expect("缺少 Forge 步骤");
+        assert!(optifine < forge, "{names:?}");
     }
 }

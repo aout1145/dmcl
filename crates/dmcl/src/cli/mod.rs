@@ -194,6 +194,12 @@ pub enum Commands {
         /// Fabric loader 版本
         #[arg(long, value_name = "version")]
         fabric_version: Option<String>,
+        /// 安装 OptiFine
+        #[arg(long)]
+        optifine: bool,
+        /// OptiFine 版本（如 HD_U_H8）
+        #[arg(long, value_name = "version")]
+        optifine_version: Option<String>,
         /// 本地版本名
         #[arg(value_name = "version-name")]
         version_name: Option<String>,
@@ -232,6 +238,14 @@ pub enum Commands {
 
     /// 列出 Fabric 版本
     ListFabric {
+        /// Minecraft 版本号
+        #[arg(value_name = "mc-version-id")]
+        verid: String,
+    },
+
+    /// 列出 OptiFine 版本
+    #[command(name = "list-optifine")]
+    ListOptifine {
         /// Minecraft 版本号
         #[arg(value_name = "mc-version-id")]
         verid: String,
@@ -284,6 +298,8 @@ pub async fn dispatch(
             forge_version,
             neoforge_version,
             fabric_version,
+            optifine,
+            optifine_version,
         } => {
             let args = commands::install::InstallArgs {
                 version_id,
@@ -294,6 +310,8 @@ pub async fn dispatch(
                 forge_version,
                 neoforge_version,
                 fabric_version,
+                optifine,
+                optifine_version,
             };
             commands::install::run(args, config, root_path).await
         }
@@ -302,6 +320,7 @@ pub async fn dispatch(
         Commands::ListForge { verid } => commands::list::forge(config, &verid).await,
         Commands::ListNeoforge { verid } => commands::list::neoforge(config, &verid).await,
         Commands::ListFabric { verid } => commands::list::fabric(config, &verid).await,
+        Commands::ListOptifine { verid } => commands::list::optifine(config, &verid).await,
 
         Commands::List => commands::list::installed(root_path).await,
 
@@ -327,6 +346,7 @@ mod tests {
             "list-forge",
             "list-neoforge",
             "list-fabric",
+            "list-optifine",
             "list",
             "search-java",
             "gui",
@@ -398,6 +418,33 @@ mod tests {
                 assert!(forge);
                 assert!(!neoforge);
                 assert_eq!(forge_version.as_deref(), Some("47.2.0"));
+            }
+            other => panic!("解析结果不对: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_optifine_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "dmcl",
+            "install",
+            "1.19",
+            "--forge",
+            "--optifine",
+            "--optifine-version",
+            "HD_U_H8",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Install {
+                forge,
+                optifine,
+                optifine_version,
+                ..
+            }) => {
+                assert!(forge);
+                assert!(optifine);
+                assert_eq!(optifine_version.as_deref(), Some("HD_U_H8"));
             }
             other => panic!("解析结果不对: {other:?}"),
         }

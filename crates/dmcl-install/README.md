@@ -1,7 +1,7 @@
 # dmcl-install
 
-在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge，以及版本完整性
-检查。它只做「把文件铺好」的事（写入 + 校验），不做任何决策。
+在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge、OptiFine，以及
+版本完整性检查。它只做「把文件铺好」的事（写入 + 校验），不做任何决策。
 
 在 workspace 内依赖 `dmcl-mcmeta`（元数据与下载源）、`dmcl-download`（并发下载）和
 `dmcl-task`（任务链与进度）。配置（根目录、镜像、下载策略、是否跳过音乐、java 提供者）
@@ -14,7 +14,7 @@ plan.rs       纯函数规划：这个版本需要哪些文件
 files.rs      按规划构造下载任务并落盘；natives 下载 + 解压
 integrity.rs  完整性检查：完整吗？缺什么？
 vanilla.rs    原版元数据落盘、launcher_profiles.json
-loader/       fabric / forge / neoforge / common / xforge（共用工具）
+loader/       fabric / forge / neoforge / optifine / common / xforge（共用工具）
 spec.rs       顶层任务链 install_task、InstallSpec / LoaderKind
 options.rs    InstallOptions、JavaProvider
 zip.rs        jar / zip 读取与解压
@@ -93,6 +93,24 @@ if !status.is_complete() {
 
 加载器版本由调用者给定（`LoaderRequest.version`），`dmcl-install` 不查最新；查询版本
 列表在 `dmcl-mcmeta`。
+
+### OptiFine
+
+OptiFine 不是独立加载器，而是叠加在原版或 Forge 上的 tweaker（`loader/optifine.rs`）：
+
+1. 按调用者给的 OptiFine 版本，从 bmclapi 的列表里找到 `type` / `patch` 并下载 jar；
+2. 把 jar 放到 `libraries/optifine/OptiFine/<mc>_<type>_<patch>/`；
+3. **没有 Forge** 时，从 jar 的 `launchwrapper-of.txt`（或 `launchwrapper-of-*.jar` 条目名）
+   读出版本，把内嵌的 launchwrapper 解到 `libraries/net/minecraft/launchwrapper/of-<version>/`；
+4. 版本 JSON 里加 `optifine:OptiFine:…`（以及没有 Forge 时的 `net.minecraft:launchwrapper:of-…`）；
+5. **没有 Forge** 时把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch` 并追加
+   `--tweakClass optifine.OptiFineTweaker`；**有 Forge** 时保持 Forge 的 `mainClass` 与
+   launchwrapper 不动，只追加 `--tweakClass optifine.OptiFineForgeTweaker`。
+
+是否兼容由调用方决定，`dmcl-install` 不检查组合；它只按 `LoaderRequest` 的顺序安装，
+不调整顺序。CLI 与其它加载器一样不做校验（加载器顺序固定为 Forge → NeoForge → Fabric →
+OptiFine），GUI 用冲突组限制选择。参数追加到 `arguments.game`；老版本没有 `arguments`
+时追加到 `minecraftArguments` 字符串末尾。
 
 ### 安装参数
 

@@ -10,7 +10,7 @@
 ```text
 CustomPage
 ├── InstanceSummary       名称 / 分类 / 图标 / 安装按钮
-└── VersionSelect × 4     MC / Forge / Fabric / NeoForge
+└── VersionSelect × 5     MC / Forge / Fabric / NeoForge / OptiFine
         │
         │ SelectOut::Changed(Option<VersionItem>)
         ▼
@@ -27,7 +27,7 @@ CustomPage
 
 整页包在 `GtkScrolledWindow` 里（展开多个版本列表时页面可以滚），顶部 `InstanceSummary`
 （图标 + 名称 + 分类 + 安装按钮），下面一个 `.boxed-list` 里排 Minecraft / Forge / Fabric /
-NeoForge 四个 `VersionSelect`。
+NeoForge / OptiFine 五个 `VersionSelect`。
 
 ## InstanceSummary
 
@@ -96,7 +96,8 @@ type FetchVersions =
   失败时替代 ×。点击刷新发 `Reload`。
 - 加载器行已选时出现 ×（`Deselect`，发 `Changed(None)`）。选中版本后立即收起。
 - 同组已有别的加载器选中时，页面发 `SetConflict(Some("Forge"))`：该行禁用、副标题显示
-  「与 Forge 冲突」，清空选择后发 `None` 恢复。
+  「与 Forge 冲突」，清空选择后发 `None` 恢复。Forge 与 OptiFine 可以叠加；Fabric /
+  NeoForge 与 Forge、OptiFine 都冲突。
 
 ### 置顶与筛选
 

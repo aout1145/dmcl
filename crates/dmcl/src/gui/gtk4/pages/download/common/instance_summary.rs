@@ -277,6 +277,13 @@ impl SimpleComponent for InstanceSummary {
                             },
                             gtk::Button {
                                 add_css_class: "flat",
+                                set_label: LoaderKind::OptiFine.display_name(),
+                                connect_clicked[sender] => move |_| {
+                                    sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::OptiFine)));
+                                },
+                            },
+                            gtk::Button {
+                                add_css_class: "flat",
                                 set_label: LoaderKind::NeoForge.display_name(),
                                 connect_clicked[sender] => move |_| {
                                     sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::NeoForge)));

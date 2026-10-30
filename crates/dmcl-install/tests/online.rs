@@ -148,3 +148,67 @@ async fn the_fabric_loader_list_can_be_fetched_newest_first() {
     let latest = list.first().expect("fabric 列表非空");
     assert!(!latest.loader.version.is_empty());
 }
+
+#[tokio::test]
+#[ignore = "requires network access"]
+async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
+    let version_name = "optifine-test";
+    let root = work_dir("optifine");
+    let version_dir = root.join("versions").join(version_name);
+    tokio::fs::create_dir_all(&version_dir).await.unwrap();
+    tokio::fs::write(
+        version_dir.join(format!("{version_name}.json")),
+        r#"{
+            "id": "optifine-test",
+            "mainClass": "net.minecraft.client.main.Main",
+            "minecraftArguments": "--username ${auth_player_name}"
+        }"#,
+    )
+    .await
+    .unwrap();
+
+    let options = Arc::new(InstallOptions::new(
+        root.clone(),
+        DownloadSource::official(),
+    ));
+    dmcl_install::optifine::install_optifine_task(
+        options,
+        version_name.to_string(),
+        "1.12.2".to_string(),
+        "HD_U_G5".to_string(),
+        false,
+    )
+    .run(())
+    .await
+    .expect("安装 OptiFine");
+
+    // 1.12.2 G5 自带 launchwrapper 2.2
+    assert!(root
+        .join("libraries/optifine/OptiFine/1.12.2_HD_U_G5/OptiFine-1.12.2_HD_U_G5.jar")
+        .is_file());
+    assert!(root
+        .join("libraries/net/minecraft/launchwrapper/of-2.2/launchwrapper-of-2.2.jar")
+        .is_file());
+
+    let json: serde_json::Value = serde_json::from_str(
+        &tokio::fs::read_to_string(version_dir.join(format!("{version_name}.json")))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json["mainClass"], "net.minecraft.launchwrapper.Launch");
+    assert!(json["libraries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|library| library["name"] == "optifine:OptiFine:1.12.2_HD_U_G5"));
+    assert!(json["libraries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|library| library["name"] == "net.minecraft:launchwrapper:of-2.2"));
+    assert!(json["minecraftArguments"]
+        .as_str()
+        .unwrap()
+        .ends_with("--tweakClass optifine.OptiFineTweaker"));
+}

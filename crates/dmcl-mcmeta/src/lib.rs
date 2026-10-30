@@ -10,8 +10,8 @@
 //! 3. **本地目录布局** —— `versions/<name>/<name>.json` 之类的路径约定（[`layout`]），以及
 //!    读取版本 JSON（含 `inheritsFrom` 合并）。
 //!
-//! 模块按"域"划分：[`vanilla`]（原版）、[`fabric`]、[`forge`]、[`neoforge`]；
-//! [`source`] / [`os`] / [`maven`] / [`merge`] / [`layout`] / [`json`] 是四个域共用的底座。
+//! 模块按"域"划分：[`vanilla`]（原版）、[`fabric`]、[`forge`]、[`neoforge`]、[`optifine`]；
+//! [`source`] / [`os`] / [`maven`] / [`merge`] / [`layout`] / [`json`] 是各域共用的底座。
 //!
 //! 这个 crate **不读配置文件**：`root_path`、镜像、并发度等一律由调用者通过参数传入。
 
@@ -27,4 +27,5 @@ pub mod source;
 pub mod fabric;
 pub mod forge;
 pub mod neoforge;
+pub mod optifine;
 pub mod vanilla;

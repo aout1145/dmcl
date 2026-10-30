@@ -9,6 +9,8 @@
 - **安装原版** —— 按版本号下载版本 JSON、客户端 jar、库与资源文件，在
   `versions/<名字>/` 下装出一个可玩的版本。
 - **一键装模组加载器** —— Fabric / Forge / NeoForge，可指定加载器版本。
+- **一键装 OptiFine** —— 下载 OptiFine 并改写版本 JSON；单独安装时会解出它自带的
+  launchwrapper，叠加在 Forge 上时沿用 Forge 的。OptiFine 的版本列表与下载固定走 bmclapi。
 - **启动游戏** —— 自动挑选 Java、生成 JVM 与游戏参数、启动子进程并监控（可停止）。
 - **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
   需要自己决定时也可以直接调用库里的 `dmcl_install::check_integrity`。
@@ -21,6 +23,8 @@
   在 `versions/<version_name>/dmcl.json` 里只写要覆盖的字段。
 - **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
   `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
+  OptiFine 的版本列表与下载只有 bmclapi 提供，因此不受 `download.mirror` 影响，固定走
+  `https://bmclapi2.bangbang93.com/optifine/…`。
 - **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，校验通过才改名，
   失败自动重试。
 - **可配置** —— 镜像、并发度、分块阈值、内存、窗口尺寸、附加 JVM / 游戏参数、Java 选择……
@@ -90,6 +94,10 @@ dmcl install 1.20.1
 dmcl install 1.20.1 --fabric
 dmcl install 1.20.1 --forge --forge-version 47.3.0
 
+# 装 OptiFine（可单独装，也可和 Forge 一起装）
+dmcl install 1.19.2 --optifine
+dmcl install 1.19.2 --forge --forge-version 47.3.0 --optifine
+
 # 启动
 dmcl launch 1.20.1
 
@@ -97,6 +105,13 @@ dmcl launch 1.20.1
 dmcl list
 dmcl list-mc --type=release,snapshot
 ```
+
+`--optifine-version` 用 `HD_U_H8` 这种短版本号（不带 Minecraft 版本前缀）；省略时取最新
+稳定版。OptiFine 通常只适合原版或 Forge；CLI 与其它加载器一样不做组合校验，GUI 会用冲突组
+避免不兼容的选择。单独安装时会把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch`，
+加入 OptiFine 自带的 launchwrapper，并使用 `optifine.OptiFineTweaker`；与 Forge 一起安装时
+沿用 Forge 提供的 launchwrapper 与主类，只把 tweakClass 换成
+`optifine.OptiFineForgeTweaker`。
 
 首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描常见安装目录
 （Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
@@ -121,13 +136,14 @@ dmcl list-mc --type=release,snapshot
 | --------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `launch <version-name>`                                                     | 登录 → 检查并补全文件 → 生成参数 → 启动               |
 | `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                        |
-| `install … [--fabric] [--forge] [--neoforge]`                               | 安装模组加载器                                        |
-| `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…]` | 指定加载器版本                                        |
+| `install … [--fabric] [--forge] [--neoforge] [--optifine]`                   | 安装模组加载器 / OptiFine                             |
+| `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…] [--optifine-version=…]` | 指定加载器 / OptiFine 版本                            |
 | `list`                                                                      | 列出**已安装**的版本                                  |
 | `list-mc [--type=release,snapshot,…]`                                       | 列出 Minecraft 版本（默认 `release`）                 |
 | `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                               |
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                       |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                    |
+| `list-optifine <mc-version-id>`                                             | 列出 OptiFine 版本（稳定版 / 预览版）                 |
 | `search-java`                                                               | 搜索本机 Java（常见安装目录 / `JAVA_HOME`），合并进全局配置并保存 |
 | `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错） |
 | `version`                                                                   | 显示版本与构建时间                                    |

@@ -14,6 +14,7 @@ vanilla/     version.rs  manifest.rs  asset.rs  rules.rs  urls.rs
 fabric/      类型 + 地址 + fetch
 forge/       mod.rs + install_profile.rs
 neoforge/    mod.rs + install_profile.rs
+optifine/    版本列表、稳定 / 预览排序、bmclapi 下载地址
 source.rs    镜像、URL 模板、DownloadSource
 os.rs        Os / Arch 与平台约定
 maven.rs     maven 坐标 → 仓库相对路径
@@ -81,6 +82,11 @@ source.resolve("${MC_MAVEN}/a/b.jar");
 Fabric / Forge / NeoForge 的 `fetch_*` 统一按版本**从新到旧**返回：Fabric / NeoForge
 比版本字符串，Forge 比 `build` 号；因此「最新」就是列表第一条，调用方不再需要单独的
 `latest_*` 取数函数。
+
+OptiFine 的列表来自 bmclapi 的 `/optifine/<mcversion>`（**不可镜像**，直接写 bmclapi
+地址）。`fetch_optifine_versions` 把稳定版排在前面、同主版本的预览版按 `preN` 倒序，
+并用 `OptiFineVersionEntry::latest` 选最新稳定版（没有稳定版才回退最新预览版）。
+OptiFine 下载地址是 `/optifine/<mcversion>/<type>/<patch>`，同样固定走 bmclapi。
 
 ### 本地目录布局
 

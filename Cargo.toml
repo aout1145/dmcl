@@ -3,7 +3,7 @@
 #   dmcl-task      generic task chains + progress reporting (no MC knowledge)
 #   dmcl-mcmeta    Minecraft metadata documents, download sources, url templates
 #   dmcl-download  concurrent / chunked file downloads as a task
-#   dmcl-install   materialise a version on disk (vanilla + Fabric/Forge/NeoForge)
+#   dmcl-install   materialise a version on disk (vanilla + Fabric/Forge/NeoForge/OptiFine)
 #   dmcl-launch    accounts, java selection, command line generation, game monitor
 #   dmcl           the application: config + cli + gui (GTK4, feature-gated)
 #

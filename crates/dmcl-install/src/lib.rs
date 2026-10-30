@@ -1,4 +1,4 @@
-//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge。
+//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge，以及 OptiFine。
 //!
 //! 这个 crate 只做"把文件写下去"，不做任何决策：
 //!
@@ -73,7 +73,7 @@ pub use files::{
 };
 pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
 pub use io::{write_json_safe, write_safe};
-pub use loader::{fabric, forge, neoforge};
+pub use loader::{fabric, forge, neoforge, optifine};
 pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
 pub use plan::{
     native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_game_files,

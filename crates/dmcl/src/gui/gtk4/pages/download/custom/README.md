@@ -15,10 +15,10 @@
 
 `CustomPage` 的 `Init = PageInit<(Rc<Shell>, PathBuf, Vec<String>)>`。第三个参数是打开页面
 时从主页拷来的已有分类，用作输入建议。页面由
-`InstanceSummary` 与四个 `VersionSelect` 组成：
+`InstanceSummary` 与五个 `VersionSelect` 组成：
 
 - `InstanceSummary` 推名称 / 分类 / 图标 / 安装按钮状态；分类建议是主页已有分类的拷贝；
-- MC 一行 + Forge / Fabric / NeoForge 三个加载器行；
+- MC 一行 + Forge / Fabric / NeoForge / OptiFine 四个加载器行；
 - 打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单取数跑起来（MC 取数器忽略上下文）；
 - 主页右下角「新建实例」→「自定义」把 `Rc<Shell>`、该主页的根目录路径和已有分类拷贝传进来；
   安装目标、实例是否已存在都只用这个 root；`download::common::CSS` 注册到全局样式。
@@ -54,12 +54,13 @@ MC 或任一加载器选择变化后，页面用
 
 ## 加载器互斥
 
-`LOADER_DEFS` 是 `LoaderDef { kind, mutex_group }` 常量表，页面持 `Vec<LoaderSlot>`
+`LOADER_DEFS` 是 `LoaderDef { kind, mutex_groups }` 常量表，页面持 `Vec<LoaderSlot>`
 （定义 + 控制器 + 当前选择）。
 
-同组里选中一个就对其它项发 `SetConflict(Some(选中项名字))`，组件禁用该行并显示
-「与 xx 冲突」；取消选择后发 `None` 恢复。现阶段 Forge / Fabric / NeoForge 同属 `"loader"`；
-将来允许叠加（双加载器整合包）或加新加载器只改表，`mutex_group: None` 即不参与互斥。
+两行只要共享任意一个组就冲突：选中一个就对其它冲突项发 `SetConflict(Some(选中项名字))`，
+组件禁用该行并显示「与 xx 冲突」；取消选择后发 `None` 恢复。Forge / Fabric / NeoForge
+共享 `"loader"`，Fabric / NeoForge / OptiFine 共享 `"optifine"`，因此 Forge 可以和 OptiFine
+叠加，而 Fabric / NeoForge 与两者都冲突。加新加载器或调整组合只改表。
 
 ## 版本适配层
 
@@ -74,13 +75,15 @@ MC 或任一加载器选择变化后，页面用
 - **Fabric**：不区分版本类型（和 Forge / NeoForge 一样没有 chips）；第一条 → 「最新版本」，
   第一条 `stable` → 「推荐版本」。两者可以不是同一条。
 - **NeoForge**：第一条 → 「最新版本」，没有 recommended / stable，也没有 chips。
+- **OptiFine**：分「稳定版 / 预览版」两类 chips（默认都开）；最新稳定版与最新预览版各
+  带一个置顶徽标，其余条目只按顺序展示。详情列显示该版本推荐的 Forge 版本（如果有）。
 - 空列表是常态（Forge 对不少 MC 版本没有构建、NeoForge 只覆盖 1.20.1+），走 `Empty`
   而不是错误。
 
 ## 安装
 
 `SummaryOut::Install { name, category }` → 校验 MC 已选、名称非空 → 按装配态组
-`InstallSpec`（加载器按 `LOADER_DEFS` 顺序）→
+`InstallSpec`（加载器按 `LOADER_DEFS` 顺序，Forge 在 OptiFine 之前）→
 `Shell::run(dmcl_install::install_task(...))` → `Shell::open_tasks()` 主动弹出任务列表 →
 下一轮 idle 里 `tab.close()` 立即关页。
 

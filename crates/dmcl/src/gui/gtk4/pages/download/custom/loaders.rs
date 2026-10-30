@@ -8,41 +8,45 @@ use dmcl_install::LoaderKind;
 use dmcl_mcmeta::source::DownloadSource;
 
 use crate::gui::gtk4::pages::download::common::version_select::{
-    VersionItem, VersionSelect, VersionSelectInit,
+    KindChip, VersionItem, VersionSelect, VersionSelectInit,
 };
 
-use super::versions::{fabric_items, forge_items, neoforge_items};
+use super::versions::{fabric_items, forge_items, neoforge_items, optifine_items};
 
 /// 一个加载器下拉的静态定义。
 pub(super) struct LoaderDef {
     pub(super) kind: LoaderKind,
-    /// 冲突组：同组里只能选一个；选中一个后其它同组行会被禁用（`None` = 不参与冲突）。
+    /// 冲突组：只要两个选中的行共享任意一个组就冲突；空切片 = 不参与冲突。
     ///
-    /// 现在三个加载器同属 `"loader"`；将来若要允许叠加（比如双加载器整合包），改这里
-    /// 的组名即可，页面逻辑不用动。
-    pub(super) mutex_group: Option<&'static str>,
+    /// Forge / Fabric / NeoForge 同属 `"loader"`；Fabric / NeoForge / OptiFine 同属
+    /// `"optifine"`。因此 Forge 可以与 OptiFine 叠加，而 Fabric / NeoForge 与两者都冲突。
+    pub(super) mutex_groups: &'static [&'static str],
 }
 
 /// 加载器下拉表（也是页面上的显示顺序）。
 pub(super) const LOADER_DEFS: &[LoaderDef] = &[
     LoaderDef {
         kind: LoaderKind::Forge,
-        mutex_group: Some("loader"),
+        mutex_groups: &["loader"],
     },
     LoaderDef {
         kind: LoaderKind::Fabric,
-        mutex_group: Some("loader"),
+        mutex_groups: &["loader", "optifine"],
     },
     LoaderDef {
         kind: LoaderKind::NeoForge,
-        mutex_group: Some("loader"),
+        mutex_groups: &["loader", "optifine"],
+    },
+    LoaderDef {
+        kind: LoaderKind::OptiFine,
+        mutex_groups: &["optifine"],
     },
 ];
 
 /// 一个加载器下拉 + 它当前的选择。
 pub(super) struct LoaderSlot {
     pub(super) kind: LoaderKind,
-    pub(super) mutex_group: Option<&'static str>,
+    pub(super) mutex_groups: &'static [&'static str],
     pub(super) select: Controller<VersionSelect>,
     pub(super) selection: Option<VersionItem>,
 }
@@ -95,6 +99,25 @@ pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSe
                 })
             }),
             chips: Vec::new(),
+            show_search: false,
+            allow_none: true,
+            initially_expanded: false,
+        },
+        // OptiFine：稳定版 / 预览版都可以选，最新两种各自置顶。
+        LoaderKind::OptiFine => VersionSelectInit {
+            title: format!("{} 版本", kind.display_name()),
+            fetch: Arc::new(move |context: &str| {
+                let source = source.clone();
+                let context = context.to_string();
+                Box::pin(async move {
+                    let entries = source.fetch_optifine_versions(&context).await?;
+                    Ok(optifine_items(entries))
+                })
+            }),
+            chips: vec![
+                KindChip::new("stable", "稳定版", true),
+                KindChip::new("preview", "预览版", true),
+            ],
             show_search: false,
             allow_none: true,
             initially_expanded: false,
