@@ -1,7 +1,8 @@
 # AGENTS.md
 
 给在本仓库里工作的编码代理（以及人）的约定。动手前先读
-[README.md](README.md)（功能 / 构建 / 用法）和 [ARCHITECTURE.md](ARCHITECTURE.md)（结构 / 依赖 / 设计）。
+[README.md](README.md)（功能 / 构建 / 用法）和 [ARCHITECTURE.md](ARCHITECTURE.md)（总体结构 /
+依赖 / 文档索引），再按需要看对应 crate 的 `README.md`（职责 / 模块布局 / 设计细节）。
 改 GTK4 前端时**必须遵循** [gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md) 里的
 relm4 / `view!` 约定，尤其是「状态驱动：状态放模型，界面用 `view!` 刷新」一节；那里规定的
 声明式写法、`FactoryComponent` / `FactoryVecDeque` 用法和命令式 GTK 的边界都同样有效。
@@ -21,7 +22,7 @@ relm4 / `view!` 约定，尤其是「状态驱动：状态放模型，界面用 
 ## 这是什么
 
 `dmcl`：非官方 Minecraft 启动器，Rust。一个 cargo workspace —— crate 划分、依赖关系、
-各 crate 职责见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+各 crate 职责见 [ARCHITECTURE.md](ARCHITECTURE.md) 与各 crate 的 `README.md`。
 
 Rust edition 2021，MSRV **1.95**，许可 GPL-3.0-or-later。
 
@@ -56,8 +57,9 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 
 ## 代码约定
 
-模块级的设计约定（`dmcl-mcmeta` 的结构体、加载器目录布局、`rules` 语义等）见
-[ARCHITECTURE.md](ARCHITECTURE.md)；下面是通用编码约定。
+模块级的设计约定（`dmcl-mcmeta` 的结构体、加载器目录布局、`rules` 语义等）见对应 crate 的
+`README.md`（例如 [crates/dmcl-mcmeta/README.md](crates/dmcl-mcmeta/README.md)）；
+下面是通用编码约定。
 
 - 异步 trait 用**装箱 future**（`dmcl_task::BoxFuture`）表达，**不要引入 `async-trait`**。
 - **不要引入日志框架**：直接用 `println!` / `eprintln!`。
@@ -103,11 +105,11 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 ## 文档分工
 
 - [README.md](README.md)：面向使用者 —— 功能、构建、快速开始、命令、配置文件。
-- [ARCHITECTURE.md](ARCHITECTURE.md)：面向开发者 —— workspace 的目录结构、依赖关系、
-  各 crate 职责、设计要点（URL 模板、任务 / 下载 / 安装规划 / 启动解耦）、GUI 扩展点、
-  GTK4 前端文档入口、总体测试策略。
-- 架构相关的新设计按 `ARCHITECTURE.md` 的文档分工落位，别堆进 README。代码注释解释
-  「为什么」，不要复述显而易见的「是什么」。
+- [ARCHITECTURE.md](ARCHITECTURE.md)：面向开发者 —— workspace 的总体目录结构、依赖关系、
+  crate 不读配置的硬规则、各 crate 文档索引、总体测试策略。
+- `crates/*/README.md`：面向开发者 —— 各 crate 的职责、依赖、模块布局与设计要点。
+- 架构相关的新设计写进对应 crate 的 `README.md`；只有跨 crate 的总体结构 / 依赖变化才改
+  `ARCHITECTURE.md`。代码注释解释「为什么」，不要复述显而易见的「是什么」。
 - 文档和注释只写**当前**行为；不要提已经被删掉 / 不存在的旧行为（「不再…」「之前…」
   这类历史对比），也不要为了对比去解释旧实现。
 

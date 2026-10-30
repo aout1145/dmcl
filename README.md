@@ -270,8 +270,18 @@ PR 和每周一定时跑 `cargo audit` 扫描依赖漏洞。
 ## 架构
 
 本项目是一个 cargo workspace，由六个 crate 组成（配置读取、业务逻辑、任务链、下载、
-元数据等各司其职）。目录结构、依赖关系、GTK4 前端文档与设计说明见
-[ARCHITECTURE.md](ARCHITECTURE.md)。
+元数据等各司其职）。总体结构、依赖关系与文档索引见
+[ARCHITECTURE.md](ARCHITECTURE.md)；各 crate 的职责、模块布局和设计细节见各自的 README：
+
+- [dmcl-task](crates/dmcl-task/README.md) —— 通用任务链、进度事件、取消与回滚；
+- [dmcl-mcmeta](crates/dmcl-mcmeta/README.md) —— 元数据文档、URL 模板与下载源、目录布局；
+- [dmcl-download](crates/dmcl-download/README.md) —— 并发 / 分块下载；
+- [dmcl-install](crates/dmcl-install/README.md) —— 版本规划、落盘、完整性检查、加载器安装；
+- [dmcl-launch](crates/dmcl-launch/README.md) —— 账户、Java 选择、命令行生成、启动；
+- [dmcl](crates/dmcl/README.md) —— 配置、CLI 与 GTK4 前端。
+
+GTK4 前端另有按目录拆分的文档，入口是
+[crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)。
 
 ## 许可
 

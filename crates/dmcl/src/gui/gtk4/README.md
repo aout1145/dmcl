@@ -1,7 +1,8 @@
 # gtk4 前端架构
 
 `crates/dmcl/src/gui/gtk4` —— `dmcl` 的 GTK4 + libadwaita 前端，框架用 [relm4]。
-面向开发者；整体架构见仓库根 [ARCHITECTURE.md](../../../../../ARCHITECTURE.md)。
+面向开发者；整体架构见仓库根 [ARCHITECTURE.md](../../../../../ARCHITECTURE.md)，应用层与配置见
+[crates/dmcl/README.md](../../../README.md)。
 
 本文只讲**整体架构**：分层、通用约定、组件索引和测试方式。单个目录的细节放在各目录的
 `README.md` 里，避免把页面行为堆进这一篇。
