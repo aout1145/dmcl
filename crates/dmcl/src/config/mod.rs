@@ -15,8 +15,8 @@
 //!
 //! ```json
 //! {
-//!   "launch": { "java": "autoselect", "account": "player", … },
-//!   "accounts": { "player": { "type": "offline", "username": "player" } },
+//!   "launch": { "java": "autoselect", "account": "steve", … },
+//!   "accounts": { "steve": { "type": "offline", "username": "Steve" } },
 //!   "javas": {
 //!     "jdk-17": {
 //!       "path": "/usr/lib/jvm/java-17/bin/java",
@@ -46,6 +46,7 @@ mod launch;
 mod root;
 
 pub use account::AccountConfig;
+pub(crate) use account::{unique_account_name, KeyringTokenStore};
 pub use download::DownloadConfig;
 pub use instance::{instance_config_path, read_instance_category, write_instance_category};
 pub use java::{
@@ -653,7 +654,7 @@ mod tests {
             }"#,
         );
         assert_eq!(config.launch.window_width, 1024);
-        assert_eq!(config.launch.account.as_deref(), Some("player"));
+        assert!(config.launch.account.is_none());
         assert!(config.javas.is_empty());
         assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
         assert!(!config.download.skip_music);
@@ -779,7 +780,7 @@ mod tests {
 
         let missing = Config::load_sync(Some(&dir.join("missing.json")));
         assert!(missing.error.is_none());
-        assert_eq!(missing.config.launch.account.as_deref(), Some("player"));
+        assert!(missing.config.launch.account.is_none());
         assert_eq!(
             missing.config.default_root_path().unwrap(),
             absolute(".minecraft")

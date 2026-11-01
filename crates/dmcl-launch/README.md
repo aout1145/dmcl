@@ -9,13 +9,14 @@
 ## 模块布局
 
 ```text
-account.rs  Account（登录快照）与 AccountSource（登录 / 刷新）
-java.rs     JavaOption / JavaDetails、JavaSelector、扫描与自动选择
-memory.rs   堆内存的自动分配与解析
-launcher.rs 拼启动命令行
-option.rs   LaunchOption
-prepare.rs  启动链：登录 → 检查并补全 → 准备 natives → 生成参数 → 启动
-monitor.rs  GameMonitor：等待退出 / 停止游戏
+account.rs   Account（登录快照）与 AccountSource（登录 / 刷新）
+microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
+java.rs      JavaOption / JavaDetails、JavaSelector、扫描与自动选择
+memory.rs    堆内存的自动分配与解析
+launcher.rs  拼启动命令行
+option.rs    LaunchOption
+prepare.rs   启动链：登录 → 检查并补全 → 准备 natives → 生成参数 → 启动
+monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```
 
 ## 设计要点
@@ -27,6 +28,19 @@ monitor.rs  GameMonitor：等待退出 / 停止游戏
 
 账户层不依赖启动链或任务系统；`LaunchOption` 只持有登录源，启动链的 `LoginTask` 只是
 它的调用方之一，账号管理页以后也可以直接复用。
+
+### 微软账户
+
+- `device_code_login` 是交互式授权，只在 `dmcl login` 里调用：请求设备代码 → 通过
+  `DeviceCodePresenter` 展示给用户 → 轮询令牌端点 → 换 Xbox Live / XSTS / Minecraft
+  会话；返回账户快照与 refresh token；
+- `MicrosoftAccountSource` 只做静默刷新：从 `RefreshTokenStore` 读 refresh token 换新
+  会话。没有 token 或已失效时返回错误、提示重新 `dmcl login`，不会在启动游戏时突然
+  要求浏览器授权；
+- refresh token 怎么存由调用方实现 `RefreshTokenStore`（`dmcl` 用系统钥匙串），这个
+  crate 不依赖具体凭据库；
+- 编译时通过 `DMCL_MICROSOFT_CLIENT_ID` 嵌入 Azure 公共客户端 ID；未设置时登录返回
+  一条说明怎么重新构建的错误。
 
 ### Java 选择
 

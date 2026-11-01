@@ -7,7 +7,7 @@
 它同时是库（`dmcl`）与可执行文件（`bin/dmcl`），方便将来复用到 GUI / 守护进程。
 在 workspace 内依赖全部业务 crate（`dmcl-task` / `dmcl-mcmeta` / `dmcl-download` /
 `dmcl-install` / `dmcl-launch`）；`relm4` / `sysinfo` / `notify` 只在 `gtk4` feature 下
-编译。
+编译，`keyring` 只在应用层（`config/account.rs`）使用。
 
 ## 模块布局
 
@@ -19,7 +19,7 @@ config/        mod.rs 整份文档读写与逐项容错
                account.rs / java.rs / root.rs / launch.rs / download.rs 各配置段
                instance.rs 实例 dmcl.json 的 instance 段（分类）
 cli/           mod.rs 命令定义、本地化与分发；progress.rs 终端进度
-               commands/ install / launch / list / search_java / version
+               commands/ install / launch / list / login / search_java / version
 gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 README）
 ```
 
@@ -52,6 +52,8 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`），包含 `launch`
 - Unix 下配置目录收紧为 `0700`、配置文件与 `dmcl.old.json` 备份为 `0600`；Windows 依赖
   `%APPDATA%` 用户目录自带的 ACL；
 - 动态表（`accounts` / `javas` / `minecraft_roots`）都保持配置文件里的书写顺序；
+- 微软账户的 refresh token 存在系统钥匙串（`keyring`，服务名 `dmcl`，用户名为账户键），
+  配置里只写玩家名与 uuid；默认配置不带账户，用 `dmcl login` 创建；
 - 配置加载按项容错：坏掉或不认识的配置项回退默认值，问题汇总成 `ConfigError`；CLI 把它
   当错误、逐条打印后退出。GUI 在启动后自动把修复后的全局配置写回文件，先把原文件备份为
   同目录的 `dmcl.old.json`，再弹窗说明修复结果并继续使用修复后的配置；

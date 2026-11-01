@@ -14,7 +14,9 @@ dmcl-download.workspace = true
 dmcl-install.workspace = true
 
 tokio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+reqwest = { workspace = true, features = ["form", "json"] }
 md-5.workspace = true
 uuid.workspace = true
 walkdir.workspace = true

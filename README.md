@@ -14,6 +14,8 @@
 - **启动游戏** —— 自动挑选 Java、生成 JVM 与游戏参数、启动子进程并监控（可停止）。
 - **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
   需要自己决定时也可以直接调用库里的 `dmcl_install::check_integrity`。
+- **微软登录** —— `dmcl login` 走设备代码流登录 Microsoft 账户；refresh token 存在系统
+  钥匙串，启动时静默刷新会话。
 - **多账户 / 多根目录 / 多 Java** —— 在全局配置里维护账户、Minecraft 根目录与 Java 表。
 - **多主页** —— 每个 `minecraft_roots` 条目对应一个常驻主页；标签可以随时关闭，
   关闭只影响显示，游戏进程和主页运行状态继续保留。
@@ -33,6 +35,15 @@
 ## 构建
 
 需要 stable Rust **1.95** 或更新。
+
+微软登录需要一份 Azure 应用（公共客户端）的 client id，编译时通过环境变量传入：
+
+```bash
+DMCL_MICROSOFT_CLIENT_ID=<client-id> cargo build --release
+```
+
+不设置也能编译，只是 `dmcl login` 会提示缺少应用 ID；离线账户不受影响。Azure 应用需要
+启用「公共客户端流」（device code flow），不需要配置重定向 URI。
 
 ### 带图形界面（推荐）
 
@@ -87,6 +98,9 @@ CI 的 GTK4 任务会产出已经带上 GTK 运行时的包：
 # 找本机 Java 并写进全局配置
 dmcl search-java
 
+# 登录微软账户（设备代码流；省略账户名时用玩家名）
+dmcl login
+
 # 装原版 1.20.1，本地版本名也叫 1.20.1
 dmcl install 1.20.1
 
@@ -116,11 +130,11 @@ dmcl list-mc --type=release,snapshot
 首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描常见安装目录
 （Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
 与 Homebrew）以及 `JAVA_HOME` 并写入全局配置。账户、根目录和 Java 表也可以通过直接编辑
-全局配置维护。账号目前只有离线模式，联机登录还没实现。图形界面的账号、实例管理
-页面仍在开发中；主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、
-设默认、拖动排序）、Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE
-版本与供应商），以及全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数）。账号分类
-还是置灰的占位项。目录的名称和路径修改在重启 DMCL 后生效。
+全局配置维护；微软账户用 `dmcl login` 创建。图形界面的账号、实例管理页面仍在开发中；
+主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、设默认、拖动排序）、
+Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE 版本与供应商），以及
+全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数）。账号分类还是置灰的占位项。
+目录的名称和路径修改在重启 DMCL 后生效。
 
 图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
 所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
@@ -138,6 +152,7 @@ dmcl list-mc --type=release,snapshot
 | `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                        |
 | `install … [--fabric] [--forge] [--neoforge] [--optifine]`                   | 安装模组加载器 / OptiFine                             |
 | `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…] [--optifine-version=…]` | 指定加载器 / OptiFine 版本                            |
+| `login [name]`                                                              | 登录微软账户（设备代码流）；省略名字时用玩家名且不覆盖已有账户 |
 | `list`                                                                      | 列出**已安装**的版本                                  |
 | `list-mc [--type=release,snapshot,…]`                                       | 列出 Minecraft 版本（默认 `release`）                 |
 | `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                               |
@@ -174,7 +189,7 @@ macOS `~/Library/Application Support`）。
 {
   "launch": {
     "java": "autoselect",
-    "account": "player",
+    "account": null,
     "window_width": 854,
     "window_height": 480,
     "min_memory": null,
@@ -183,9 +198,7 @@ macOS `~/Library/Application Support`）。
     "additional_jvm": "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True",
     "additional_game": ""
   },
-  "accounts": {
-    "player": { "type": "offline", "username": "player" }
-  },
+  "accounts": {},
   "javas": {
     "jdk-17": {
       "path": "/usr/lib/jvm/java-17/bin/java",
@@ -236,9 +249,14 @@ macOS `~/Library/Application Support`）。
 - `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
   `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
   失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
-- 账户条目目前只支持离线账户，格式为
-  `{ "type": "offline", "username": "..." }`。启动链第一步会调用账户的登录源；
-  离线账户直接通过，在线登录以后接在这里。
+- 账户条目支持两种格式：
+  - `{ "type": "offline", "username": "..." }` —— 离线账户，uuid 由名字派生；
+  - `{ "type": "microsoft", "username": "...", "uuid": "..." }` —— 微软账户，配置里只
+    保存玩家名与 uuid；refresh token 存在系统钥匙串（服务名 `dmcl`，用户名为账户键）。
+  默认配置不带任何账户：用 `dmcl login` 创建微软账户，或手动添加离线账户。`dmcl login`
+  省略名字时用玩家名且不覆盖已有账户；显式给出 `<name>` 时覆盖同名条目。启动链第一步
+  会调用账户的登录源；离线账户直接通过，微软账户静默刷新，refresh token 失效时提示重新
+  `dmcl login`。
 
 ### 实例覆盖与元数据
 

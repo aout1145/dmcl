@@ -171,8 +171,14 @@ pub(crate) fn account_index_for(
 /// 账户下拉里的显示文字；内部键与用户名不同时一并显示，便于区分重名账户。
 pub(crate) fn account_label(name: &str, account: &AccountConfig) -> String {
     match account {
-        AccountConfig::Offline { username } if username == name => username.clone(),
-        AccountConfig::Offline { username } => format!("{username}（{name}）"),
+        AccountConfig::Offline { username } | AccountConfig::Microsoft { username, .. }
+            if username == name =>
+        {
+            username.clone()
+        }
+        AccountConfig::Offline { username } | AccountConfig::Microsoft { username, .. } => {
+            format!("{username}（{name}）")
+        }
     }
 }
 
@@ -300,6 +306,16 @@ mod tests {
                 "工作",
                 &AccountConfig::Offline {
                     username: "steve".to_string()
+                }
+            ),
+            "steve（工作）"
+        );
+        assert_eq!(
+            account_label(
+                "工作",
+                &AccountConfig::Microsoft {
+                    username: "steve".to_string(),
+                    uuid: "069a79f444e94726a5befca90e38aaf5".to_string(),
                 }
             ),
             "steve（工作）"

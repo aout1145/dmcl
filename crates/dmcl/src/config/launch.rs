@@ -36,7 +36,7 @@ impl Default for LaunchConfig {
     fn default() -> Self {
         Self {
             java: JavaChoice::Auto,
-            account: Some("player".to_string()),
+            account: None,
             window_width: 854,
             window_height: 480,
             min_memory: None,
@@ -244,9 +244,9 @@ mod tests {
     use crate::config::{temp_dir, JavaConfig};
 
     #[test]
-    fn default_launch_uses_player_and_autoselect() {
+    fn default_launch_has_no_account_and_autoselect() {
         let launch = Config::default().launch;
-        assert_eq!(launch.account.as_deref(), Some("player"));
+        assert!(launch.account.is_none());
         assert!(launch.java.is_auto());
         assert_eq!(launch.custom_info, LAUNCHER_NAME);
     }

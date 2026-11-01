@@ -251,6 +251,13 @@ pub enum Commands {
         verid: String,
     },
 
+    /// 登录微软账户（设备代码流）
+    Login {
+        /// 账户名；省略时用玩家名，且不会覆盖已有账户
+        #[arg(value_name = "name")]
+        name: Option<String>,
+    },
+
     /// 搜索本机 java（常见安装目录与 JAVA_HOME）并写入配置
     #[command(name = "search-java")]
     SearchJava,
@@ -324,6 +331,8 @@ pub async fn dispatch(
 
         Commands::List => commands::list::installed(root_path).await,
 
+        Commands::Login { name } => commands::login::run(name.as_deref(), config).await,
+
         Commands::SearchJava => commands::search_java::run(config).await,
 
         Commands::Version => commands::version::run().await,
@@ -348,6 +357,7 @@ mod tests {
             "list-fabric",
             "list-optifine",
             "list",
+            "login",
             "search-java",
             "gui",
             "version",
@@ -375,6 +385,21 @@ mod tests {
         let cli = Cli::try_parse_from(["dmcl", "list-mc"]).unwrap();
         match cli.command {
             Some(Commands::ListMc { r#type }) => assert_eq!(r#type, vec!["release"]),
+            other => panic!("解析结果不对: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_name_is_optional() {
+        let cli = Cli::try_parse_from(["dmcl", "login"]).unwrap();
+        match cli.command {
+            Some(Commands::Login { name }) => assert!(name.is_none()),
+            other => panic!("解析结果不对: {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["dmcl", "login", "steve"]).unwrap();
+        match cli.command {
+            Some(Commands::Login { name }) => assert_eq!(name.as_deref(), Some("steve")),
             other => panic!("解析结果不对: {other:?}"),
         }
     }
