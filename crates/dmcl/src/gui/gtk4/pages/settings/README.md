@@ -1,7 +1,7 @@
 # 设置页
 
 `pages/settings` —— 主菜单里的「首选项」。页面仿 GNOME 设置：左侧分类列表，右侧显示当前
-分类的内容。目前「Minecraft 目录」「Java 管理」「全局游戏选项」可用；「账号」和「下载」仍是
+分类的内容。目前「Minecraft 目录」「账号」「Java 管理」「全局游戏选项」可用；「下载」仍是
 置灰占位。
 
 ## 页面与入口
@@ -23,19 +23,21 @@
   1. 「Minecraft 目录」「账号」
   2. 「全局游戏选项」「Java 管理」
   3. 「下载」
-- 三个列表各自单选，选中一组时会清掉其它组的选择；账号和下载尚未实现，默认停在
+- 三个列表各自单选，选中一组时会清掉其它组的选择；下载尚未实现，默认停在
   「Minecraft 目录」；
-- 右栏是 `GtkStack`，可用的分类分别放 `DirectoryPage`、`JavaPage` 和 `GameOptionsPage`；
-  选中左栏的分类就切换到对应页面。
+- 右栏是 `GtkStack`，可用的分类分别放 `DirectoryPage`、`AccountPage`、`JavaPage` 和
+  `GameOptionsPage`；选中左栏的分类就切换到对应页面。
 
 分类实现在 `launcher/` 和 `game/`，可复用的交互放在 `common/`：
 
 | 文件 | 内容 |
 | --- | --- |
+| `common/account_display.rs` | 账户的 ID、类型文案与占位头像文字，账户页与游戏设置页共用 |
 | `common/drag_list.rs` | 通用的拖动排序：拖动手柄、落点提示、`DragMove` |
 | `common/java_cache.rs` | Java 探测结果缓存，Java 管理页与游戏设置页共用 |
 | `common/java_display.rs` | Java 标题 / 供应商 / 架构的展示文案 |
 | `launcher/mod.rs` | 分栏、分组侧栏、右栏切换、`PreferencesMsg` |
+| `launcher/account.rs` | 账号分类、`AccountRow`、添加离线账户、微软登录与删除 |
 | `launcher/directory.rs` | Minecraft 目录分类、`RootRow`、对话框与校验、配置写入 |
 | `launcher/java.rs` | Java 分类、`JavaRow`、搜索、探测对话框与配置写入 |
 | `game/mod.rs` | 游戏设置的目标抽象、字段级改动与选择项映射 |
@@ -76,6 +78,28 @@ toast 提示。`Config` 上的对应方法维护不变式：
 
 目录名同时是标题栏「Minecraft 目录」菜单里的主页名。主页在启动时按名字创建，所以改名、
 改路径和删除只写配置，**重启 DMCL 后**才会反映到已有主页；设置页的描述里写明了这一点。
+
+## 账号
+
+`AccountPage` 把 `Config::accounts` 的每一项映射成 `FactoryVecDeque<AccountRow>`：
+
+- 每行左侧是 `AdwAvatar` 占位头像（玩家名首字母；真实皮肤接口以后再加），标题是玩家名
+  （ID），副标题是账户类型「离线账户」或「微软账户」；行尾常驻删除按钮，使用错误色；
+- 分组底部是一行「添加账户」，右侧并排「添加离线账户」和「登录 Microsoft 账户」两个按钮。
+
+添加离线账户的对话框只收集玩家名；内部键用玩家名，重名时依次加 `-2`、`-3` 后缀。
+玩家名不能为空，允许添加多个同名玩家名的离线账户。
+
+Microsoft 登录复用 `dmcl_launch::device_code_login`：点按钮先弹出窗口，在后台确认系统钥匙串
+可用并请求设备代码，避免网络请求期间界面像卡住；代码就绪后在同一窗口里居中显示验证页面
+和设备代码，用户完成浏览器授权后自动继续。窗口用 `AdwHeaderBar` 默认的关闭按钮，关闭窗口
+会中止当前登录，之后可以重新打开。登录成功后先把 refresh token 写进钥匙串，成功后才把账户
+写进配置；保存凭据失败时不会留下没有凭据的配置条目。删除微软账户时，配置条目和系统钥匙串
+里的凭据一起清理；钥匙串清理失败只在页面上提示，配置已经删除。
+
+新增账户时，如果 `launch.account` 还是 `null`，新账户自动成为默认账户；已有默认账户时
+不改变选择。删除的正好是默认账户时，`launch.account` 回到 `null`。默认账户的入口仍然
+只在「全局游戏选项」。
 
 ## Java 管理
 
@@ -119,7 +143,7 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 
 | 行 | 内容 |
 | --- | --- |
-| 账户 | `AdwExpanderRow`「默认账户」，展开后是 `未选择` + 现有账户 |
+| 账户 | `AdwExpanderRow`「默认账户」，展开后是现有账户；账户项左侧是占位头像，标题是玩家名，下方小字是账户类型。没有选中账户时收起行显示「未选择」，列表里没有额外的「未选择」项 |
 | Java | `AdwExpanderRow`「默认 Java」，展开后是 `自动选择` + 现有 Java |
 | 窗口大小 | `AdwExpanderRow`；内置默认 / 720p / 1080p，最后一项「自定义」直接输入宽高 |
 | 内存 | `AdwExpanderRow`「游戏内存」；可选自动分配 / 手动分配，手动行右侧直接放 Xms / Xmx 输入框 |
@@ -127,7 +151,8 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 
 - 账户表和 Java 表是全局资源，表单直接从只读 `ConfigRef` 读取；写仍只走 target。
 - 两个选择器都用 `AdwExpanderRow`：收起时副标题显示当前选择，展开后每项是一行
-  `AdwActionRow`，右侧对勾表示当前项；选中后自动收起。
+  `AdwActionRow`，右侧对勾表示当前项；选中后自动收起。账户项和账号管理页使用同样的
+  占位头像 + ID + 类型布局。
 - 窗口大小用和账户 / Java 相同的展开选择器：收起时副标题显示当前宽高；展开后
   「默认」「720p」「1080p」三项上方是大字描述、下方是具体像素，最后一项「自定义」右侧
   用两个 `GtkSpinButton` 直接输入宽高。选中预设后自动收起。

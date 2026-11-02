@@ -106,6 +106,23 @@ impl RefreshTokenStore for KeyringTokenStore {
     }
 }
 
+impl KeyringTokenStore {
+    /// 删除这个账户键下的登录凭据；本来就没有条目时视为成功。
+    #[cfg(feature = "gtk4")]
+    pub(crate) async fn delete(&self) -> Result<()> {
+        let name = self.name.clone();
+        tokio::task::spawn_blocking(move || {
+            let entry = keyring_entry(&name)?;
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(err) => Err(anyhow!("无法删除系统钥匙串中的登录凭据：{err}")),
+            }
+        })
+        .await
+        .map_err(|err| anyhow!("钥匙串操作异常终止：{err}"))?
+    }
+}
+
 /// 打开钥匙串条目；没有可用的系统凭据库时给一条能照着排查的错误。
 fn keyring_entry(name: &str) -> Result<keyring::Entry> {
     if let Err(err) = keyring::Entry::store_status() {
@@ -144,7 +161,8 @@ pub(crate) fn unique_account_name(
     }
 }
 
-/// 默认账户表：空的。账户要么由 `dmcl login` 创建，要么由用户自己写进配置。
+/// 默认账户表：空的。账户由 `dmcl login`、图形界面的账户管理页创建，或由用户自己
+/// 写进配置。
 pub(super) fn default_accounts() -> IndexMap<String, AccountConfig> {
     IndexMap::new()
 }
@@ -178,6 +196,34 @@ pub(super) fn validate_selection(
 }
 
 impl Config {
+    /// 新增账户；键为空或重名时拒绝。还没有默认账户时把新账户设为默认。
+    pub fn add_account(&mut self, name: &str, account: AccountConfig) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(anyhow!("账户键不能为空"));
+        }
+        if self.accounts.contains_key(name) {
+            return Err(anyhow!("已存在同名账户：{name}"));
+        }
+        self.accounts.insert(name.to_string(), account);
+        if self.launch.account.is_none() {
+            self.launch.account = Some(name.to_string());
+        }
+        Ok(())
+    }
+
+    /// 删除账户；删掉的正好是默认账户时把 `launch.account` 清成 `null`。
+    pub fn remove_account(&mut self, name: &str) -> Result<()> {
+        if !self.accounts.contains_key(name) {
+            return Err(anyhow!("账户不存在：{name}"));
+        }
+        self.accounts.shift_remove(name);
+        if self.launch.account.as_deref() == Some(name) {
+            self.launch.account = None;
+        }
+        Ok(())
+    }
+
     /// 按 `launch.account` 取一个账户登录源。
     ///
     /// 没有选择账户（`null`）或指向不存在的账户时返回错误，不静默使用默认账户。
@@ -311,6 +357,60 @@ mod tests {
         assert_eq!(config.launch.account, None);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("launch.account"));
+    }
+
+    #[test]
+    fn adding_accounts_selects_the_first_one_and_keeps_the_existing_selection() {
+        let mut config = Config::default();
+        config
+            .add_account(
+                "first",
+                AccountConfig::Offline {
+                    username: "First".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(config.launch.account.as_deref(), Some("first"));
+
+        config.launch.account = Some("other".to_string());
+        config
+            .add_account(
+                "second",
+                AccountConfig::Offline {
+                    username: "Second".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(config.launch.account.as_deref(), Some("other"));
+        let first = config.accounts["first"].clone();
+        assert!(config.add_account("second", first).is_err());
+    }
+
+    #[test]
+    fn removing_the_selected_account_clears_the_selection() {
+        let mut config = Config::default();
+        config
+            .add_account(
+                "player",
+                AccountConfig::Offline {
+                    username: "Player".to_string(),
+                },
+            )
+            .unwrap();
+        config
+            .add_account(
+                "other",
+                AccountConfig::Offline {
+                    username: "Other".to_string(),
+                },
+            )
+            .unwrap();
+
+        config.remove_account("other").unwrap();
+        assert_eq!(config.launch.account.as_deref(), Some("player"));
+        config.remove_account("player").unwrap();
+        assert_eq!(config.launch.account, None);
+        assert!(config.remove_account("player").is_err());
     }
 
     #[test]

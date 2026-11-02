@@ -1,9 +1,10 @@
 //! 首选项：GNOME 设置式的左右分栏。
 //!
 //! 左侧是分类列表，右侧显示当前分类；页面嵌在标签页里，没有自己的窗口标题栏，所以
-//! 分栏保持常驻、不做折叠。「Minecraft 目录」「Java 管理」「全局游戏选项」可用，账号分类
-//! 仍是置灰占位。
+//! 分栏保持常驻、不做折叠。「Minecraft 目录」「账号」「全局游戏选项」「Java 管理」可用，
+//! 下载分类仍是置灰占位。
 
+mod account;
 mod directory;
 mod java;
 
@@ -18,6 +19,7 @@ use crate::gui::gtk4::app::{config_store, PageToast, Shell};
 
 use super::common::JavaProbeCache;
 use super::game::{GameOptionsInit, GameOptionsMsg, GameOptionsPage, GlobalGameOptionsTarget};
+use account::{AccountMsg, AccountPage};
 use directory::{DirectoryMsg, DirectoryPage};
 use java::{JavaMsg, JavaPage, JavaPageInit};
 
@@ -31,6 +33,8 @@ pub(crate) enum PreferencesMsg {
 pub(crate) struct PreferencesPage {
     /// 「Minecraft 目录」分类；控制器同时负责保活子组件。
     directory: Controller<DirectoryPage>,
+    /// 「账号」分类。
+    account: Controller<AccountPage>,
     /// 「Java 管理」分类。
     java: Controller<JavaPage>,
     /// 「全局游戏选项」分类。
@@ -77,9 +81,7 @@ impl SimpleComponent for PreferencesPage {
 
                             append = &adw::ActionRow {
                                 set_title: "账号",
-                                set_subtitle: "尚未实现",
-                                set_activatable: false,
-                                set_sensitive: false,
+                                set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("avatar-default-symbolic"),
                                 },
@@ -161,6 +163,7 @@ impl SimpleComponent for PreferencesPage {
         let config = config_store::store().config();
         let cache = Rc::new(JavaProbeCache::new());
         let directory = DirectoryPage::builder().launch(shell.clone()).detach();
+        let account = AccountPage::builder().launch(shell.clone()).detach();
         let java = JavaPage::builder()
             .launch(JavaPageInit {
                 shell: shell.clone(),
@@ -184,6 +187,7 @@ impl SimpleComponent for PreferencesPage {
         let content_stack = gtk::Stack::new();
         content_stack.set_vexpand(true);
         content_stack.add_named(directory.widget(), Some("directory"));
+        content_stack.add_named(account.widget(), Some("account"));
         content_stack.add_named(java.widget(), Some("java"));
         content_stack.add_named(game.widget(), Some("game"));
 
@@ -197,7 +201,11 @@ impl SimpleComponent for PreferencesPage {
         wire_sidebar(
             &widgets.minecraft_list,
             0,
-            |index| (index == 0).then_some("directory"),
+            |index| match index {
+                0 => Some("directory"),
+                1 => Some("account"),
+                _ => None,
+            },
             Rc::clone(&lists),
             content_stack.clone(),
         );
@@ -227,6 +235,7 @@ impl SimpleComponent for PreferencesPage {
 
         let model = Self {
             directory,
+            account,
             java,
             game,
         };
@@ -237,6 +246,7 @@ impl SimpleComponent for PreferencesPage {
         match message {
             PreferencesMsg::ConfigChanged => {
                 let _ = self.directory.sender().send(DirectoryMsg::ConfigChanged);
+                let _ = self.account.sender().send(AccountMsg::ConfigChanged);
                 let _ = self.java.sender().send(JavaMsg::ConfigChanged);
                 let _ = self.game.sender().send(GameOptionsMsg::Reload);
             }

@@ -116,7 +116,7 @@ pub(crate) struct JavaEntry {
 /// 「自动选择」在下拉里的下标。
 pub(crate) const JAVA_AUTO_INDEX: u32 = 0;
 
-/// 「未选择」账户在下拉里的下标。
+/// 没有选中账户时的下标；下拉里没有对应的行。
 pub(crate) const ACCOUNT_NONE_INDEX: u32 = 0;
 
 /// 下拉下标 → `launch.java`。

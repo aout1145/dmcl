@@ -2,7 +2,7 @@
 //!
 //! 账户和 Java 都用 `AdwExpanderRow` 作为选择器：收起时显示当前值，展开后列出全部
 //! 选项。每一项是一行 `AdwActionRow`：主标题、下方小字和右侧信息都由调用方给出，
-//! 最右侧用对勾表示当前选择。
+//! 最右侧用对勾表示当前选择。账户项可以在行首带一个占位头像。
 
 use relm4::adw;
 use relm4::adw::prelude::*;
@@ -16,6 +16,8 @@ pub(super) struct ChoiceRow {
     title: String,
     subtitle: String,
     detail: String,
+    /// 行首占位头像的文字；`None` 表示不显示头像。
+    avatar_text: Option<String>,
     selected: bool,
 }
 
@@ -26,6 +28,8 @@ pub(super) struct ChoiceRowInit {
     pub subtitle: String,
     /// 右侧小字，例如 Java 的供应商与架构。
     pub detail: String,
+    /// 行首占位头像的文字；`None` 表示不显示头像。
+    pub avatar_text: Option<String>,
     pub selected: bool,
 }
 
@@ -68,6 +72,16 @@ impl FactoryComponent for ChoiceRow {
             set_subtitle_selectable: false,
             set_activatable: true,
 
+            add_prefix = &adw::Avatar {
+                set_size: 32,
+                set_show_initials: true,
+                set_valign: gtk::Align::Center,
+                #[watch]
+                set_text: Some(self.avatar_text.as_deref().unwrap_or("")),
+                #[watch]
+                set_visible: self.avatar_text.is_some(),
+            },
+
             add_suffix = &gtk::Label {
                 #[watch]
                 set_label: &self.detail,
@@ -98,6 +112,7 @@ impl FactoryComponent for ChoiceRow {
             title: init.title,
             subtitle: init.subtitle,
             detail: init.detail,
+            avatar_text: init.avatar_text,
             selected: init.selected,
         }
     }

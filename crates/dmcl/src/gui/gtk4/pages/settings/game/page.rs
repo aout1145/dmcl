@@ -20,13 +20,15 @@ use relm4::prelude::*;
 
 use crate::config::{AccountConfig, JavaChoice, JavaConfig, LaunchConfig};
 use crate::gui::gtk4::app::ConfigRef;
-use crate::gui::gtk4::pages::settings::common::JavaProbeCache;
+use crate::gui::gtk4::pages::settings::common::{
+    account_avatar_text, account_type_label, account_username, JavaProbeCache,
+};
 
 use super::choice::{ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut};
 use super::{
     account_for_index, account_index_for, account_label, java_choice_for_index, java_detail,
     java_index_for_choice, java_label, java_title, window_preset, GameOptionField,
-    GameOptionsTarget, GameOptionsUpdate, JavaEntry, WINDOW_PRESETS,
+    GameOptionsTarget, GameOptionsUpdate, JavaEntry, ACCOUNT_NONE_INDEX, WINDOW_PRESETS,
 };
 
 /// 连续改动合并成一次写回的间隔。
@@ -87,7 +89,7 @@ pub(crate) struct GameOptionsPage {
     javas: Vec<JavaEntry>,
     /// Java 选择的当前下标；0 是「自动选择」。
     java_index: u32,
-    /// 账户选择的当前下标；0 是「未选择」。
+    /// 账户选择的当前下标；账户从 1 开始，0 表示还没有选中账户。
     account_index: u32,
     /// 待写回的字段。
     dirty: BTreeSet<GameOptionField>,
@@ -458,7 +460,7 @@ impl SimpleComponent for GameOptionsPage {
                 self.sync_memory_selection();
             }
             GameOptionsMsg::AccountSelected(index) => {
-                if index as usize > self.accounts.len() {
+                if index == ACCOUNT_NONE_INDEX || index as usize > self.accounts.len() {
                     return;
                 }
                 if index != self.account_index {
@@ -651,20 +653,15 @@ impl GameOptionsPage {
         {
             let mut guard = self.account_rows.guard();
             guard.clear();
-            guard.push_back(ChoiceRowInit {
-                index: 0,
-                title: "未选择".to_string(),
-                subtitle: String::new(),
-                detail: String::new(),
-                selected: self.account_index == 0,
-            });
-            for (offset, (name, account)) in self.accounts.iter().enumerate() {
+            for (offset, (_, account)) in self.accounts.iter().enumerate() {
                 let index = offset as u32 + 1;
+                let username = account_username(account);
                 guard.push_back(ChoiceRowInit {
                     index,
-                    title: account_label(name, account),
-                    subtitle: String::new(),
+                    title: username.to_string(),
+                    subtitle: account_type_label(account).to_string(),
                     detail: String::new(),
+                    avatar_text: Some(account_avatar_text(username)),
                     selected: self.account_index == index,
                 });
             }
@@ -678,6 +675,7 @@ impl GameOptionsPage {
                 title: "自动选择".to_string(),
                 subtitle: String::new(),
                 detail: String::new(),
+                avatar_text: None,
                 selected: self.java_index == 0,
             });
             for (offset, entry) in self.javas.iter().enumerate() {
@@ -687,6 +685,7 @@ impl GameOptionsPage {
                     title: java_title(entry),
                     subtitle: java_path(entry),
                     detail: java_detail(entry),
+                    avatar_text: None,
                     selected: self.java_index == index,
                 });
             }
@@ -709,6 +708,7 @@ impl GameOptionsPage {
                     title: preset.label.to_string(),
                     subtitle: format!("{} × {}", preset.width, preset.height),
                     detail: String::new(),
+                    avatar_text: None,
                     selected: selected == Some(index),
                 });
             }
@@ -778,9 +778,10 @@ impl GameOptionsPage {
 
     fn sync_account_selection(&self) {
         for index in 0..self.account_rows.len() {
+            // 账户行从下标 1 开始；下标 0 表示还没有选中账户。
             self.account_rows.send(
                 index,
-                ChoiceRowMsg::SetSelected(index as u32 == self.account_index),
+                ChoiceRowMsg::SetSelected(index as u32 + 1 == self.account_index),
             );
         }
         self.update_choice_subtitles();
