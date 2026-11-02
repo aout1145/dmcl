@@ -252,11 +252,11 @@ macOS `~/Library/Application Support`）。
 - 账户条目支持两种格式：
   - `{ "type": "offline", "username": "..." }` —— 离线账户，uuid 由名字派生；
   - `{ "type": "microsoft", "username": "...", "uuid": "..." }` —— 微软账户，配置里只
-    保存玩家名与 uuid；refresh token 存在系统钥匙串（服务名 `dmcl`，用户名为账户键）。
+    保存玩家名与 uuid；凭据（uuid + refresh token）存在系统钥匙串（服务名 `dmcl`，
+    用户名为账户键）。钥匙串里的 uuid 与配置不一致时按未登录处理。
   默认配置不带任何账户：用 `dmcl login` 创建微软账户，或手动添加离线账户。`dmcl login`
   省略名字时用玩家名且不覆盖已有账户；显式给出 `<name>` 时覆盖同名条目。启动链第一步
-  会调用账户的登录源；离线账户直接通过，微软账户静默刷新，refresh token 失效时提示重新
-  `dmcl login`。
+  会调用账户的登录源；离线账户直接通过，微软账户静默刷新，凭据缺失或失效时报错。
 
 ### 实例覆盖与元数据
 

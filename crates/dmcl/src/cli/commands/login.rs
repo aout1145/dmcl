@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use dmcl_launch::microsoft::{
-    device_code_login, DeviceCodePresenter, DeviceCodePrompt, RefreshTokenStore,
+    device_code_login, DeviceCodePresenter, DeviceCodePrompt, RefreshTokenStore, StoredCredential,
 };
 
 use crate::config::{unique_account_name, AccountConfig, Config, KeyringTokenStore};
@@ -46,7 +46,10 @@ pub(crate) async fn run(name: Option<&str>, config: &mut Config) -> Result<()> {
 
     // 先写钥匙串：失败时配置保持不变，不会留下一个指向空凭据的账户。
     KeyringTokenStore::new(&key)
-        .save(&login.refresh_token)
+        .save(&StoredCredential {
+            uuid: login.account.uuid.clone(),
+            refresh_token: login.refresh_token,
+        })
         .await?;
 
     config.accounts.insert(

@@ -48,8 +48,8 @@ pub struct PreparedLaunch {
 
 /// 让账户来源产出一个可用会话。
 ///
-/// 离线账户直接通过；在线实现只做静默刷新，refresh token 失效时提示用户运行
-/// `dmcl login`。登录失败会中止整条链，后面的下载 / 启动都不会开始。
+/// 离线账户直接通过；在线实现只做静默刷新，refresh token 失效时返回错误。
+/// 登录失败会中止整条链，后面的下载 / 启动都不会开始。
 pub struct LoginTask {
     account_source: Arc<dyn AccountSource>,
 }

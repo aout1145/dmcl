@@ -51,7 +51,7 @@ pub use launcher::GameLauncher;
 pub use memory::{auto_max_memory, resolve_memory, system_available_mib};
 pub use microsoft::{
     device_code_login, DeviceCodeLogin, DeviceCodePresenter, DeviceCodePrompt,
-    MicrosoftAccountSource, RefreshTokenStore, CLIENT_ID as MICROSOFT_CLIENT_ID,
+    MicrosoftAccountSource, RefreshTokenStore, StoredCredential, CLIENT_ID as MICROSOFT_CLIENT_ID,
 };
 pub use monitor::GameMonitor;
 pub use option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};

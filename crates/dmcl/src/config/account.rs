@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::{AccountSource, MicrosoftAccountSource, OfflineAccountSource, RefreshTokenStore};
+use dmcl_launch::{
+    AccountSource, MicrosoftAccountSource, OfflineAccountSource, RefreshTokenStore,
+    StoredCredential,
+};
 use dmcl_task::BoxFuture;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -16,7 +19,8 @@ const KEYRING_SERVICE: &str = "dmcl";
 
 /// 一个账户条目。
 ///
-/// 微软账户只把玩家名与 uuid 写进配置；refresh token 在系统钥匙串里，按账户键存取。
+/// 微软账户只把玩家名与 uuid 写进配置；凭据（uuid + refresh token）在系统钥匙串里，
+/// 按账户键存取。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AccountConfig {
@@ -27,19 +31,20 @@ pub enum AccountConfig {
 impl AccountConfig {
     /// 把这个配置条目变成一个登录源。
     ///
-    /// `name` 是配置里的账户键：微软账户用它定位钥匙串里的 refresh token。
+    /// `name` 是配置里的账户键：微软账户用它定位钥匙串里的凭据。
     pub fn source(&self, name: &str) -> Arc<dyn AccountSource> {
         match self {
             Self::Offline { username } => Arc::new(OfflineAccountSource::new(username.clone())),
-            Self::Microsoft { .. } => Arc::new(MicrosoftAccountSource::new(
+            Self::Microsoft { uuid, .. } => Arc::new(MicrosoftAccountSource::new(
                 name,
+                uuid,
                 Arc::new(KeyringTokenStore::new(name)),
             )),
         }
     }
 }
 
-/// 用系统钥匙串保存某个微软账户的 refresh token。
+/// 用系统钥匙串保存某个微软账户的凭据。
 ///
 /// 钥匙串调用是阻塞的，放进 `spawn_blocking`，不占异步运行时的工作线程。
 pub(crate) struct KeyringTokenStore {
@@ -63,13 +68,17 @@ impl KeyringTokenStore {
 }
 
 impl RefreshTokenStore for KeyringTokenStore {
-    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>>> {
+    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
         let name = self.name.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let entry = keyring_entry(&name)?;
                 match entry.get_password() {
-                    Ok(token) => Ok(Some(token)),
+                    Ok(stored) => {
+                        let credential = serde_json::from_str(&stored)
+                            .map_err(|_| anyhow!("系统钥匙串里的登录凭据无效"))?;
+                        Ok(Some(credential))
+                    }
                     Err(keyring::Error::NoEntry) => Ok(None),
                     Err(err) => Err(anyhow!("无法读取系统钥匙串中的登录凭据：{err}")),
                 }
@@ -79,14 +88,16 @@ impl RefreshTokenStore for KeyringTokenStore {
         })
     }
 
-    fn save<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<()>> {
+    fn save<'a>(&'a self, credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
         let name = self.name.clone();
-        let token = token.to_string();
+        let credential = credential.clone();
         Box::pin(async move {
+            let stored = serde_json::to_string(&credential)
+                .map_err(|err| anyhow!("无法序列化登录凭据：{err}"))?;
             tokio::task::spawn_blocking(move || {
                 let entry = keyring_entry(&name)?;
                 entry
-                    .set_password(&token)
+                    .set_password(&stored)
                     .map_err(|err| anyhow!("无法写入系统钥匙串：{err}"))
             })
             .await

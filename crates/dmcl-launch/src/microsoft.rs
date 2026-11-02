@@ -2,10 +2,10 @@
 //!
 //! 登录分两段：
 //!
-//! * [`device_code_login`] 是交互式授权，只在 `dmcl login` 里调用：展示一次性代码，
+//! * [`device_code_login`] 是交互式授权，只在交互式登录场景里调用：展示一次性代码，
 //!   轮询 Microsoft 登录服务，成功后再换 Xbox / Minecraft 会话；
-//! * [`MicrosoftAccountSource`] 是启动链使用的账户源：只读取持久化的 refresh token
-//!   并静默刷新，不会在启动游戏时突然要求用户去浏览器授权。
+//! * [`MicrosoftAccountSource`] 是启动链使用的账户源：只读取持久化的凭据
+//!   （uuid + refresh token）并静默刷新，不会在启动游戏时突然要求用户去浏览器授权。
 //!
 //! refresh token 怎么存由调用方通过 [`RefreshTokenStore`] 决定；这个 crate 不直接
 //! 依赖系统钥匙串，测试与无桌面环境也能换成内存实现。
@@ -69,31 +69,50 @@ impl std::fmt::Debug for DeviceCodeLogin {
     }
 }
 
-/// refresh token 的持久化。
+/// 持久化的微软凭据。
+///
+/// 除了 refresh token 还记住它属于哪个 Minecraft 档案：账户键被删掉又复用给另一个
+/// 微软账户时，靠 uuid 认出旧凭据，而不是静默登录成上一个账户。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredCredential {
+    /// 该凭据对应的 Minecraft 档案 uuid。
+    pub uuid: String,
+    /// 用来换新会话的 refresh token。
+    pub refresh_token: String,
+}
+
+/// 微软凭据的持久化。
 ///
 /// 应用层用系统钥匙串实现；测试或没有钥匙串的环境可以换成内存实现。
 pub trait RefreshTokenStore: Send + Sync {
-    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>>>;
-    fn save<'a>(&'a self, token: &'a str) -> BoxFuture<'a, Result<()>>;
+    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>>;
+    fn save<'a>(&'a self, credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>>;
 }
 
 /// 启动链使用的微软账户源：只做静默刷新。
 ///
-/// `login` 与 `refresh` 的语义相同：读取 refresh token 换一份新的 Minecraft 会话。
-/// 没有 token 或 token 已失效时返回错误，提示用户运行 `dmcl login` 重新授权 ——
-/// 启动游戏不应该变成一次浏览器交互。
+/// `login` 与 `refresh` 的语义相同：读取持久化的凭据换一份新的 Minecraft 会话。
+/// 没有凭据、凭据不属于配置里的档案或已失效时返回错误 —— 启动游戏不应该变成一次
+/// 浏览器交互。
 #[derive(Clone)]
 pub struct MicrosoftAccountSource {
     name: String,
+    uuid: String,
     store: Arc<dyn RefreshTokenStore>,
     http: reqwest::Client,
 }
 
 impl MicrosoftAccountSource {
-    /// `name` 是配置里的账户键，只用于日志和错误提示。
-    pub fn new(name: impl Into<String>, store: Arc<dyn RefreshTokenStore>) -> Self {
+    /// `name` 是配置里的账户键，用于日志和错误提示；`uuid` 是配置里记录的玩家
+    /// uuid，用来确认钥匙串里的凭据属于同一个档案。
+    pub fn new(
+        name: impl Into<String>,
+        uuid: impl Into<String>,
+        store: Arc<dyn RefreshTokenStore>,
+    ) -> Self {
         Self {
             name: name.into(),
+            uuid: uuid.into(),
             store,
             http: http_client(),
         }
@@ -111,36 +130,49 @@ impl AccountSource for MicrosoftAccountSource {
 
     fn refresh<'a>(&'a self) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
-            let refresh_token = self.store.load().await?.ok_or_else(|| {
-                anyhow!(
-                    "账户「{}」还没有登录过，请先运行 dmcl login {}",
-                    self.name,
-                    self.name
-                )
-            })?;
+            let credential = self.store.load().await?;
+            let credential = match credential {
+                Some(credential) if same_profile(&credential.uuid, &self.uuid) => credential,
+                _ => return Err(anyhow!("账户「{}」尚未登录", self.name)),
+            };
 
-            match refresh_session(&self.http, &refresh_token).await {
+            match refresh_session(&self.http, &credential.refresh_token).await {
                 Ok(session) => {
                     if let Some(token) = session.rotated_refresh_token {
-                        self.store.save(&token).await?;
+                        let credential = StoredCredential {
+                            uuid: session.account.uuid.clone(),
+                            refresh_token: token,
+                        };
+                        self.store.save(&credential).await?;
                     }
                     Ok(session.account)
                 }
-                Err(SessionError::InvalidGrant) => Err(anyhow!(
-                    "账户「{}」的登录已过期，请重新运行 dmcl login {}",
-                    self.name,
-                    self.name
-                )),
+                Err(SessionError::InvalidGrant) => {
+                    Err(anyhow!("账户「{}」的登录已过期", self.name))
+                }
                 Err(SessionError::Other(err)) => Err(err),
             }
         })
     }
 }
 
+/// 判断两个 uuid 是否指向同一个档案：忽略大小写与连字符。
+///
+/// 配置里手写的 uuid 可能带连字符，而 Minecraft 档案接口返回的是 32 位无连字符形式。
+fn same_profile(a: &str, b: &str) -> bool {
+    fn normalize(uuid: &str) -> String {
+        uuid.chars()
+            .filter(|ch| *ch != '-')
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+    normalize(a) == normalize(b)
+}
+
 /// 走设备代码流完成一次微软登录。
 ///
 /// 成功后返回账户快照与 refresh token。**保存 token、写入配置由调用方负责**：
-/// 账户键可能在拿到玩家名之后才能确定（省略 `dmcl login` 的 name 时）。
+/// 账户键可能在拿到玩家名之后才能确定。
 pub async fn device_code_login(presenter: &dyn DeviceCodePresenter) -> Result<DeviceCodeLogin> {
     let client_id = client_id()?;
     let client = http_client();
@@ -317,7 +349,7 @@ async fn poll_device_code(
     loop {
         tokio::time::sleep(Duration::from_secs(interval)).await;
         if tokio::time::Instant::now() >= deadline {
-            return Err(anyhow!("设备代码已过期，请重新运行 dmcl login"));
+            return Err(anyhow!("设备代码已过期"));
         }
 
         let result = request_token(
@@ -334,9 +366,7 @@ async fn poll_device_code(
             Ok(token) => return Ok(token),
             Err(error) if error.code == "authorization_pending" => {}
             Err(error) if error.code == "slow_down" => interval += 5,
-            Err(error) if error.code == "expired_token" => {
-                return Err(anyhow!("设备代码已过期，请重新运行 dmcl login"))
-            }
+            Err(error) if error.code == "expired_token" => return Err(anyhow!("设备代码已过期")),
             Err(error) if error.code == "authorization_declined" => {
                 return Err(anyhow!("登录请求已被拒绝"))
             }
@@ -631,11 +661,23 @@ mod tests {
     struct NoTokenStore;
 
     impl RefreshTokenStore for NoTokenStore {
-        fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>>> {
+        fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
             Box::pin(async { Ok(None) })
         }
 
-        fn save<'a>(&'a self, _token: &'a str) -> BoxFuture<'a, Result<()>> {
+        fn save<'a>(&'a self, _credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct FixedStore(StoredCredential);
+
+    impl RefreshTokenStore for FixedStore {
+        fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
+            Box::pin(async { Ok(Some(self.0.clone())) })
+        }
+
+        fn save<'a>(&'a self, _credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -708,9 +750,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_refresh_token_asks_the_user_to_log_in() {
-        let source = MicrosoftAccountSource::new("steve", Arc::new(NoTokenStore));
+    async fn a_missing_credential_means_the_account_is_not_logged_in() {
+        let source = MicrosoftAccountSource::new("steve", "uuid", Arc::new(NoTokenStore));
         let error = source.login().await.unwrap_err();
-        assert!(error.to_string().contains("dmcl login steve"), "{error}");
+        assert_eq!(error.to_string(), "账户「steve」尚未登录");
+    }
+
+    #[tokio::test]
+    async fn a_credential_from_another_profile_counts_as_not_logged_in() {
+        let store = FixedStore(StoredCredential {
+            uuid: "069a79f444e94726a5befca90e38aaf5".to_string(),
+            refresh_token: "token".to_string(),
+        });
+        let source = MicrosoftAccountSource::new("steve", "other-uuid", Arc::new(store));
+        let error = source.login().await.unwrap_err();
+        assert_eq!(error.to_string(), "账户「steve」尚未登录");
+    }
+
+    #[test]
+    fn uuids_match_regardless_of_case_and_hyphens() {
+        assert!(same_profile(
+            "069A79F4-44E9-4726-A5BE-FCA90E38AAF5",
+            "069a79f444e94726a5befca90e38aaf5"
+        ));
+        assert!(!same_profile(
+            "069a79f444e94726a5befca90e38aaf5",
+            "5627dd98e6be3c21b8a8e92344183641"
+        ));
     }
 }

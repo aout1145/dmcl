@@ -31,14 +31,14 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 
 ### 微软账户
 
-- `device_code_login` 是交互式授权，只在 `dmcl login` 里调用：请求设备代码 → 通过
+- `device_code_login` 是交互式授权，只在交互式登录场景里调用：请求设备代码 → 通过
   `DeviceCodePresenter` 展示给用户 → 轮询令牌端点 → 换 Xbox Live / XSTS / Minecraft
   会话；返回账户快照与 refresh token；
-- `MicrosoftAccountSource` 只做静默刷新：从 `RefreshTokenStore` 读 refresh token 换新
-  会话。没有 token 或已失效时返回错误、提示重新 `dmcl login`，不会在启动游戏时突然
-  要求浏览器授权；
-- refresh token 怎么存由调用方实现 `RefreshTokenStore`（`dmcl` 用系统钥匙串），这个
-  crate 不依赖具体凭据库；
+- `MicrosoftAccountSource` 只做静默刷新：从 `RefreshTokenStore` 读凭据换新会话。凭据里
+  记着它属于哪个档案；uuid 与配置不一致或凭据缺失时按「尚未登录」返回错误，已失效时
+  报「登录已过期」，不会在启动游戏时突然要求浏览器授权；
+- 凭据怎么存由调用方实现 `RefreshTokenStore`（`dmcl` 用系统钥匙串），这个 crate 不依赖
+  具体凭据库；
 - 编译时通过 `DMCL_MICROSOFT_CLIENT_ID` 嵌入 Azure 公共客户端 ID；未设置时登录返回
   一条说明怎么重新构建的错误。
 

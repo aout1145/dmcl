@@ -27,7 +27,7 @@ pub struct Account {
 /// 自己处理。启动链和账号管理页都可以直接使用它。
 ///
 /// `login` 的语义是「确保拿到一个可用会话」：在线实现在内部静默 refresh；refresh
-/// 不可用时返回错误，由交互式登录命令（`dmcl login`）重新授权，而不是在启动游戏时
+/// 不可用时返回错误，由调用方的交互式登录流程重新授权，而不是在启动游戏时
 /// 突然要求用户去浏览器操作。
 pub trait AccountSource: Send + Sync {
     /// 账户名，用于日志和 [`crate::LaunchOption`] 的 Debug 输出。
