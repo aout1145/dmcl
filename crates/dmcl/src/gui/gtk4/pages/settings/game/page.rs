@@ -69,6 +69,7 @@ pub(crate) enum GameOptionsMsg {
     CustomInfoChanged(String),
     AdditionalJvmChanged(String),
     AdditionalGameChanged(String),
+    VersionIsolationChanged(bool),
     /// 某个 Java 探测结束。
     Probed {
         path: PathBuf,
@@ -123,6 +124,7 @@ pub(crate) struct GameOptionsPage {
     custom_info_row: adw::EntryRow,
     additional_jvm_row: adw::EntryRow,
     additional_game_row: adw::EntryRow,
+    version_isolation_row: adw::SwitchRow,
 }
 
 #[relm4::component(pub(crate))]
@@ -143,6 +145,8 @@ impl SimpleComponent for GameOptionsPage {
                 window_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 memory_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                version_isolation_row -> adw::SwitchRow {},
                 #[local_ref]
                 advanced_expander -> adw::ExpanderRow {},
             },
@@ -333,6 +337,22 @@ impl SimpleComponent for GameOptionsPage {
         memory_expander.add_row(&auto_memory_row);
         memory_expander.add_row(&manual_memory_row);
 
+        let version_isolation_row = adw::SwitchRow::builder()
+            .title("版本隔离")
+            .subtitle("每个版本使用独立的游戏目录；关闭后共用 Minecraft 根目录")
+            .active(launch.version_isolation)
+            .build();
+        version_isolation_row.connect_active_notify({
+            let sender = sender.clone();
+            let syncing = Rc::clone(&syncing);
+            move |row| {
+                if syncing.get() {
+                    return;
+                }
+                sender.input(GameOptionsMsg::VersionIsolationChanged(row.is_active()));
+            }
+        });
+
         let advanced_expander = adw::ExpanderRow::builder()
             .title("高级")
             .subtitle("启动器信息、JVM 参数与游戏参数")
@@ -425,6 +445,7 @@ impl SimpleComponent for GameOptionsPage {
             custom_info_row: custom_info_row.clone(),
             additional_jvm_row: additional_jvm_row.clone(),
             additional_game_row: additional_game_row.clone(),
+            version_isolation_row: version_isolation_row.clone(),
         };
         let widgets = view_output!();
         model.rebuild_choices();
@@ -576,6 +597,14 @@ impl SimpleComponent for GameOptionsPage {
                 }
                 self.launch.additional_game = text;
                 self.dirty.insert(GameOptionField::AdditionalGame);
+                self.schedule_flush(&sender);
+            }
+            GameOptionsMsg::VersionIsolationChanged(value) => {
+                if value == self.launch.version_isolation {
+                    return;
+                }
+                self.launch.version_isolation = value;
+                self.dirty.insert(GameOptionField::VersionIsolation);
                 self.schedule_flush(&sender);
             }
             GameOptionsMsg::Probed { path, result } => {
@@ -773,6 +802,10 @@ impl GameOptionsPage {
         set_entry_text(&self.custom_info_row, &self.launch.custom_info);
         set_entry_text(&self.additional_jvm_row, &self.launch.additional_jvm);
         set_entry_text(&self.additional_game_row, &self.launch.additional_game);
+        if self.version_isolation_row.is_active() != self.launch.version_isolation {
+            self.version_isolation_row
+                .set_active(self.launch.version_isolation);
+        }
         self.syncing.set(false);
     }
 

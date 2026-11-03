@@ -4,7 +4,7 @@
 
 在 workspace 内依赖 `dmcl-install`（完整性检查与 natives）、`dmcl-mcmeta`（版本文档、
 目录布局、平台信息）、`dmcl-download` 和 `dmcl-task`。它**不读全局配置**：账户来源、
-根目录、版本名、窗口 / 内存、Java 选择器全部通过 `LaunchOption` 由调用者传入。
+根目录、版本名、窗口 / 内存、版本隔离、Java 选择器全部通过 `LaunchOption` 由调用者传入。
 
 ## 模块布局
 
@@ -60,6 +60,15 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 3/4（至少 1 GiB）决定 Xmx；32 位 Java 压到 1.5 GiB（显式上限也会被压）；读不到可用内存
 时固定 1.5 GiB；Xms 留空时取 Xmx。显式 `min_memory` 大于最终上限时原样保留，由调用方
 决定是否告警。
+
+### 版本隔离
+
+`LaunchOption::version_isolation` 决定游戏进程的工作目录与 `${game_directory}`：
+
+- `true`（默认）：使用版本目录 `versions/<version_name>`，每个版本的存档、mods 和配置互不影响；
+- `false`：使用 Minecraft 根目录，所有版本共用同一套游戏数据。
+
+安装文件、库和资源的路径不受影响，仍然来自根目录与版本目录。
 
 ### 启动与安装解耦
 

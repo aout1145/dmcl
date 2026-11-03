@@ -26,6 +26,10 @@ pub struct LaunchOption {
     pub root_path: PathBuf,
     /// 版本目录的**名字**，不是路径。
     pub version_name: String,
+    /// 是否为每个版本使用独立的游戏目录（`versions/<版本名>`）。
+    ///
+    /// 关闭后游戏进程的工作目录和 `${game_directory}` 都改用根目录。
+    pub version_isolation: bool,
     /// 窗口尺寸（像素）与堆大小（MiB）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
@@ -66,6 +70,7 @@ impl LaunchOption {
             account_source,
             root_path: root_path.into(),
             version_name: version_name.into(),
+            version_isolation: true,
             window_width: 854,
             window_height: 480,
             min_memory: None,
@@ -126,6 +131,7 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         assert!(option.additional_game.is_empty());
+        assert!(option.version_isolation);
         assert_eq!(
             dmcl_mcmeta::layout::version_dir(&option.root_path, &option.version_name),
             PathBuf::from("/mc/versions/1.20.1")

@@ -73,6 +73,7 @@ pub(crate) enum GameOptionField {
     CustomInfo,
     AdditionalJvm,
     AdditionalGame,
+    VersionIsolation,
 }
 
 /// 游戏设置表单的落点：全局配置，或某个实例的覆盖层。
@@ -100,6 +101,9 @@ pub(crate) fn apply_update(launch: &mut LaunchConfig, update: &GameOptionsUpdate
             }
             GameOptionField::AdditionalGame => {
                 launch.additional_game = update.launch.additional_game.clone();
+            }
+            GameOptionField::VersionIsolation => {
+                launch.version_isolation = update.launch.version_isolation;
             }
         }
     }
@@ -246,6 +250,7 @@ mod tests {
         let mut changed = launch.clone();
         changed.max_memory = Some(4096);
         changed.window_width = 1280;
+        changed.version_isolation = false;
         let update = GameOptionsUpdate {
             launch: changed,
             fields: [GameOptionField::MaxMemory].into_iter().collect(),
@@ -254,6 +259,17 @@ mod tests {
 
         assert_eq!(launch.max_memory, Some(4096));
         assert_eq!(launch.window_width, LaunchConfig::default().window_width);
+        assert!(launch.version_isolation);
+
+        let update = GameOptionsUpdate {
+            launch: LaunchConfig {
+                version_isolation: false,
+                ..launch.clone()
+            },
+            fields: [GameOptionField::VersionIsolation].into_iter().collect(),
+        };
+        apply_update(&mut launch, &update);
+        assert!(!launch.version_isolation);
     }
 
     #[test]

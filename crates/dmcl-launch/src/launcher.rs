@@ -29,8 +29,11 @@ pub struct GameLauncher {
     pub option: LaunchOption,
     /// 已经登录好的账户快照。
     pub account: Account,
-    /// `versions/<version_name>`。
+    /// `versions/<version_name>`，安装文件所在目录。
     pub version_path: PathBuf,
+    /// 游戏进程的工作目录与 `${game_directory}`：开启版本隔离时是版本目录，
+    /// 关闭时是 Minecraft 根目录。
+    pub game_path: PathBuf,
     pub java: Option<JavaOption>,
     pub json: VersionJson,
 }
@@ -39,11 +42,17 @@ impl GameLauncher {
     /// `this(LaunchOption, Account)`。
     pub async fn new(option: LaunchOption, account: Account) -> Result<Self> {
         let version_path = version_dir(&option.root_path, &option.version_name);
+        let game_path = if option.version_isolation {
+            version_path.clone()
+        } else {
+            option.root_path.clone()
+        };
         let json = read_version_json_safe(&option.root_path, &option.version_name).await?;
         Ok(Self {
             option,
             account,
             version_path,
+            game_path,
             java: None,
             json,
         })
@@ -288,7 +297,7 @@ impl GameLauncher {
         .to_string_lossy()
         .into_owned();
         let version_id = self.json.id.clone().unwrap_or_default();
-        let version_path = self.version_path.to_string_lossy().into_owned();
+        let game_path = self.game_path.to_string_lossy().into_owned();
         let account = &self.account;
         let custom_info = self.option.custom_info.clone();
         let classpath_separator = classpath_separator().to_string();
@@ -304,7 +313,7 @@ impl GameLauncher {
                 .replace("${auth_uuid}", &account.uuid)
                 .replace("${uuid}", &account.uuid)
                 .replace("${version_name}", &version_id)
-                .replace("${game_directory}", &version_path)
+                .replace("${game_directory}", &game_path)
                 .replace("${assets_root}", &assets_root)
                 .replace("${assets_index_name}", &asset_index_id)
                 .replace("${auth_access_token}", &account.access_token)
@@ -321,15 +330,15 @@ impl GameLauncher {
     /// 展示 / 可复制执行的命令行（进入工作目录 + 启动参数）。
     pub async fn generate_command(&mut self) -> Result<String> {
         let args = self.gen_args().await?;
-        Ok(command_preview(&self.version_path, &args))
+        Ok(command_preview(&self.game_path, &args))
     }
 }
 
 /// 展示用的命令行：进入工作目录 + 启动参数。可直接复制进当前平台的 shell 执行。
-pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -> String {
+pub(crate) fn command_preview(game_path: &std::path::Path, args: &[String]) -> String {
     #[cfg(windows)]
     {
-        let dir = quote_windows(&version_path.to_string_lossy());
+        let dir = quote_windows(&game_path.to_string_lossy());
         let args = args
             .iter()
             .map(|arg| quote_windows(arg))
@@ -339,7 +348,7 @@ pub(crate) fn command_preview(version_path: &std::path::Path, args: &[String]) -
     }
     #[cfg(not(windows))]
     {
-        let cd = format!("cd {}", quote_posix(&version_path.to_string_lossy()));
+        let cd = format!("cd {}", quote_posix(&game_path.to_string_lossy()));
         let args = args
             .iter()
             .map(|arg| quote_posix(arg))
@@ -407,12 +416,12 @@ fn quote_windows(arg: &str) -> String {
 /// 抽成自由函数是为了让 [`crate::LaunchTask`] 能直接用 [`crate::PreparedLaunch`]
 /// 里已有的参数启动，不必再建一个 [`GameLauncher`]、再选一次 java。这里**不打印**
 /// 任何东西：命令行由 [`crate::LaunchTask`] 通过进度事件流展示。
-pub(crate) fn spawn_game(version_path: &std::path::Path, args: &[String]) -> Result<GameMonitor> {
+pub(crate) fn spawn_game(game_path: &std::path::Path, args: &[String]) -> Result<GameMonitor> {
     if args.is_empty() {
         return Err(anyhow!("命令为空"));
     }
     let mut command = tokio::process::Command::new(&args[0]);
-    command.args(&args[1..]).current_dir(version_path);
+    command.args(&args[1..]).current_dir(game_path);
     let child = command.spawn()?;
     Ok(GameMonitor::new(child))
 }
@@ -445,10 +454,16 @@ mod tests {
         let account = source.login().await.unwrap();
         let option = LaunchOption::new(source, &root, "1.0");
         let version_path = version_dir(&root, "1.0");
+        let game_path = if option.version_isolation {
+            version_path.clone()
+        } else {
+            root.clone()
+        };
         GameLauncher {
             option,
             account,
             version_path,
+            game_path,
             java: Some(JavaOption {
                 path: PathBuf::from("/usr/bin/java"),
                 major: 17,
@@ -556,6 +571,48 @@ mod tests {
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         // 调用者追加的额外 JVM 参数原样带上
         assert!(args.contains(&"-Ddmcl.test.extra=1.0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn version_isolation_controls_the_game_directory() {
+        let root =
+            std::env::temp_dir().join(format!("dmcl-launch-isolation-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let version_json = root.join("versions").join("1.0").join("1.0.json");
+        tokio::fs::create_dir_all(version_json.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &version_json,
+            r#"{
+                "id": "1.0",
+                "mainClass": "com.example.Main",
+                "arguments": {"jvm": [], "game": ["--gameDir", "${game_directory}"]}
+            }"#,
+        )
+        .await
+        .unwrap();
+
+        let source = Arc::new(OfflineAccountSource::new("player"));
+        let account = source.login().await.unwrap();
+        let mut option = LaunchOption::new(source, &root, "1.0");
+        option.version_isolation = false;
+        let mut launcher = GameLauncher::new(option, account).await.unwrap();
+        launcher.java = Some(JavaOption {
+            path: PathBuf::from("/usr/bin/java"),
+            major: 17,
+            arch: Arch::X86_64,
+        });
+
+        assert_eq!(launcher.version_path, root.join("versions").join("1.0"));
+        assert_eq!(launcher.game_path, root);
+        let args = launcher.gen_args().await.unwrap();
+        assert!(
+            args.contains(&root.to_string_lossy().into_owned()),
+            "{args:?}"
+        );
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
     }
 
     #[test]

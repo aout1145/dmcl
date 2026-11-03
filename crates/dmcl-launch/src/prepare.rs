@@ -42,8 +42,8 @@ pub struct PreparedLaunch {
     pub args: Vec<String>,
     /// 转义后的命令行，用于展示 / 交给别人执行。
     pub command: String,
-    /// 游戏进程的工作目录（`versions/<name>`）。
-    pub version_path: PathBuf,
+    /// 游戏进程的工作目录（开启版本隔离时是 `versions/<name>`，否则是根目录）。
+    pub game_path: PathBuf,
 }
 
 /// 让账户来源产出一个可用会话。
@@ -183,11 +183,11 @@ impl Task<WithAccount<JavaOption>, PreparedLaunch> for GenerateArgsTask {
             // 复用上一步选好的 java，避免再选一次
             launcher.java = Some(java);
             let args = launcher.gen_args_in(&ctx).await?;
-            let command = command_preview(&launcher.version_path, &args);
+            let command = command_preview(&launcher.game_path, &args);
             Ok(PreparedLaunch {
                 args,
                 command,
-                version_path: launcher.version_path.clone(),
+                game_path: launcher.game_path.clone(),
             })
         })
     }
@@ -207,9 +207,9 @@ impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
             // 命令行经由事件流显示（走进度打印机），避免直接 println 与进度行抢行
             ctx.log(format!(
                 "命令：{}",
-                command_preview(&input.version_path, &input.args)
+                command_preview(&input.game_path, &input.args)
             ));
-            spawn_game(&input.version_path, &input.args)
+            spawn_game(&input.game_path, &input.args)
         })
     }
 }
@@ -349,7 +349,7 @@ mod tests {
         );
         assert!(prepared.args.iter().any(|arg| arg == "--demo"));
         assert!(!prepared.command.is_empty());
-        assert_eq!(prepared.version_path, root.join("versions").join("1.0"));
+        assert_eq!(prepared.game_path, root.join("versions").join("1.0"));
 
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }

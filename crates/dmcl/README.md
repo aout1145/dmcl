@@ -36,7 +36,7 @@ gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 REA
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
 | `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
-| `dmcl-launch`   | `LaunchOption`（账户登录源、根目录、版本名、窗口 / 内存（可自动）、`JavaSelector`）   |
+| `dmcl-launch`   | `LaunchOption`（账户登录源、根目录、版本名、窗口 / 内存（可自动）、版本隔离、`JavaSelector`）   |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 配置的**键、默认值与用户可见含义**见仓库根 [README.md](../../README.md#配置文件)；

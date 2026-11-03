@@ -134,7 +134,7 @@ dmcl list-mc --type=release,snapshot
 实例管理页面仍在开发中；
 主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、设默认、拖动排序）、
 Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE 版本与供应商），以及
-全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数）。账号分类还是置灰的占位项。
+全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数、版本隔离）。账号分类还是置灰的占位项。
 目录的名称和路径修改在重启 DMCL 后生效。
 
 图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
@@ -191,6 +191,7 @@ macOS `~/Library/Application Support`）。
   "launch": {
     "java": "autoselect",
     "account": null,
+    "version_isolation": true,
     "window_width": 854,
     "window_height": 480,
     "min_memory": null,
@@ -237,6 +238,9 @@ macOS `~/Library/Application Support`）。
   32 位时再压到 1.5 GiB；读不到系统可用内存时固定按 1.5 GiB 分配。`min_memory` 为 `null`
   时取最终的 `max_memory`。显式写的 `min_memory` 大于最终上限时原样保留，并在启动日志里
   给出警告。
+- `launch.version_isolation` 默认为 `true`：每个版本把 `versions/<version_name>` 作为游戏
+  工作目录（存档、mods、配置互不影响），`${game_directory}` 也指向它。设为 `false` 时所有
+  版本共用根目录，游戏进程的工作目录与 `${game_directory}` 都改成 Minecraft 根目录。
 - `minecraft_roots` 是「名字 → 路径」的映射，键直接作为界面上的显示名；默认有两个：
   「当前目录」（`.minecraft`，相对当前工作目录）和「官方启动器」（Windows 为
   `%APPDATA%\.minecraft`、macOS 为 `~/Library/Application Support/minecraft`、

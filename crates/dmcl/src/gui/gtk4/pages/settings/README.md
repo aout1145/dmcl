@@ -147,6 +147,7 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 | Java | `AdwExpanderRow`「默认 Java」，展开后是 `自动选择` + 现有 Java |
 | 窗口大小 | `AdwExpanderRow`；内置默认 / 720p / 1080p，最后一项「自定义」直接输入宽高 |
 | 内存 | `AdwExpanderRow`「游戏内存」；可选自动分配 / 手动分配，手动行右侧直接放 Xms / Xmx 输入框 |
+| 版本隔离 | `AdwSwitchRow`「版本隔离」，默认开启；关闭后游戏工作目录改用 Minecraft 根目录 |
 | 高级 | `AdwExpanderRow`，默认折叠；里面是启动器信息、额外 JVM 参数、额外游戏参数三行 `AdwEntryRow` |
 
 - 账户表和 Java 表是全局资源，表单直接从只读 `ConfigRef` 读取；写仍只走 target。
@@ -164,6 +165,8 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
   可用内存时固定 1.5 GiB），设置页可见时每秒刷新一次。「手动分配内存」行右侧直接放两个
   `GtkSpinButton` 编辑 Xms / Xmx。切到手动时以当前自动值为起点；Xms 不能超过 Xmx，输入上限
   取 `sysinfo` 读到的系统总内存，配置里已有更大的值时以上限为准不截断。
+- 「版本隔离」开关直接对应 `launch.version_isolation`（默认开启）。关闭后启动游戏时工作目录
+  与 `${game_directory}` 使用 Minecraft 根目录；窗口、内存等其它选项不受影响。
 - 控件改动立即更新模型，400ms 防抖后把「完整值 + 本次改动的字段」合并成一次提交；
   页面隐藏时立即提交。target 只写列出的字段，实例 target 因此可以只写覆盖层。
 - 根组件转发 `ConfigChanged` 时，表单重新读取 target 和全局账户 / Java 表。

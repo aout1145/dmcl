@@ -21,6 +21,8 @@ pub struct LaunchConfig {
     pub java: JavaChoice,
     /// `accounts` 里的账户名；`null` 表示没有选择账户。
     pub account: Option<String>,
+    /// 是否为每个版本使用独立的游戏目录（`versions/<版本名>`）；关闭后共用根目录。
+    pub version_isolation: bool,
     /// 窗口尺寸（像素）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
@@ -37,6 +39,7 @@ impl Default for LaunchConfig {
         Self {
             java: JavaChoice::Auto,
             account: None,
+            version_isolation: true,
             window_width: 854,
             window_height: 480,
             min_memory: None,
@@ -204,6 +207,7 @@ impl Config {
         option.min_memory = launch.min_memory;
         option.max_memory = launch.max_memory;
         option.custom_info = launch.custom_info.clone();
+        option.version_isolation = launch.version_isolation;
         option.additional_jvm = launch
             .additional_jvm
             .split_whitespace()
@@ -249,6 +253,7 @@ mod tests {
         assert!(launch.account.is_none());
         assert!(launch.java.is_auto());
         assert_eq!(launch.custom_info, LAUNCHER_NAME);
+        assert!(launch.version_isolation);
     }
 
     #[tokio::test]
@@ -313,7 +318,8 @@ mod tests {
 
         let path = instance_config_path(&root, "1.20.1");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text = r#"{"launch": {"max_memory": 4096, "account": null}}"#;
+        let text =
+            r#"{"launch": {"max_memory": 4096, "account": null, "version_isolation": false}}"#;
         std::fs::write(&path, text).unwrap();
 
         let loaded = config.load_instance(&root, "1.20.1").await;
@@ -321,11 +327,13 @@ mod tests {
         assert_eq!(loaded.launch.max_memory, Some(4096));
         assert_eq!(loaded.launch.window_width, 854);
         assert_eq!(loaded.launch.account, None);
+        assert!(!loaded.launch.version_isolation);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
         let sync = config.load_instance_sync(&root, "1.20.1");
         assert_eq!(sync.launch.max_memory, Some(4096));
         assert_eq!(sync.launch.account, None);
+        assert!(!sync.launch.version_isolation);
         assert!(sync.error.is_none());
 
         std::fs::remove_dir_all(&dir).unwrap();
@@ -434,6 +442,7 @@ mod tests {
         config.launch.custom_info = "test".to_string();
         config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
         config.launch.additional_game = "--foo bar".to_string();
+        config.launch.version_isolation = false;
         config.javas.insert(
             "jdk".to_string(),
             JavaConfig {
@@ -456,6 +465,7 @@ mod tests {
         assert!(option.additional_jvm.contains(&"-Da=1".to_string()));
         assert!(option.additional_jvm.contains(&"-Db=2".to_string()));
         assert_eq!(option.additional_game, vec!["--foo", "bar"]);
+        assert!(!option.version_isolation);
         assert_eq!(option.account_source.name(), "Steve");
 
         let _ = std::fs::remove_dir_all(&dir);
