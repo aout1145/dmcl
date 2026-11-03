@@ -83,8 +83,8 @@ impl SimpleComponent for TaskCenter {
                             set_spacing: 6,
                             set_margin_top: 6,
                             set_margin_bottom: 6,
-                            set_margin_start: 6,
-                            set_margin_end: 6,
+                            set_margin_start: 18,
+                            set_margin_end: 18,
                         },
                     },
 
