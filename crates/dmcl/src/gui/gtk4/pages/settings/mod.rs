@@ -9,4 +9,4 @@ mod game;
 mod launcher;
 
 pub(crate) use common::CSS;
-pub(crate) use launcher::{PreferencesMsg, PreferencesPage};
+pub(crate) use launcher::{AccountPage, DirectoryPage, PreferencesMsg, PreferencesPage};

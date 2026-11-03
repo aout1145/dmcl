@@ -24,7 +24,7 @@ const ABSOLUTE_INDEX: u32 = 0;
 
 /// 「Minecraft 目录」分类收到的消息。
 #[derive(Debug)]
-pub(super) enum DirectoryMsg {
+pub(crate) enum DirectoryMsg {
     /// 共享配置变了：重新读取根目录。
     ConfigChanged,
     /// 打开添加目录的对话框。
@@ -47,7 +47,7 @@ pub(super) enum DirectoryMsg {
     },
 }
 
-pub(super) struct DirectoryPage {
+pub(crate) struct DirectoryPage {
     config: ConfigRef,
     shell: Rc<Shell>,
     /// 页面级提示：只有首选项可见时才显示。
@@ -58,7 +58,7 @@ pub(super) struct DirectoryPage {
     add_row: adw::ButtonRow,
 }
 
-#[relm4::component(pub(super))]
+#[relm4::component(pub(crate))]
 impl SimpleComponent for DirectoryPage {
     type Init = Rc<Shell>;
     type Input = DirectoryMsg;

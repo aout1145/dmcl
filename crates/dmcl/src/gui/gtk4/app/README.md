@@ -9,7 +9,7 @@
 
 - `AdwApplicationWindow` + `AdwToolbarView`、标签页、提示层都由 `view!` 搭出来；
 - 启动 `Header`、`TaskCenter`；按配置里的全部 `minecraft_roots` 创建常驻 `HomePage`，
-  启动时只给默认 root 建标签页；
+  启动时只给默认 root 建标签页；配置文件不存在时再启动首次设置向导（`setup/`）；
 - 根组件输入 `AppMsg`：`HeaderOut` 负责打开主页和任务；主页的
   `HomeOut::CreateCustom { categories }` 打开新建实例页；`ConfigChanged` 给配置里新增的 root 补建主页
   并刷新标题栏菜单；`TabClosed` 清理对应页面的标签句柄并同步根目录勾选；主菜单和快捷键
@@ -95,6 +95,14 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 `type Args` 是它的实参（多个参数打包成元组，没有就是 `()`），再在根组件里 `open_page`。
 新增常驻页面：在根组件加一个 `PageSlot<C>` 字段，启动时 `launch` 一次，并在 `TabClosed`
 里调用它的 `close`。
+
+## 首次启动向导
+
+配置文件不存在时，根组件在启动后创建 [`SetupWizard`](setup/README.md)。它是一个不能直接
+关闭的模态 `AdwDialog`，依次完成账户、Minecraft 目录和版本隔离三步；账户页与目录页直接复用
+首选项里的组件。「跳过」需要确认，确认后会把当前配置写入文件，之后不再出现向导；「完成」
+要求默认账户和目录都有效，并在新默认目录的主页上继续。完成后根组件关闭启动时的初始主页
+标签，切到新目录的主页。
 
 ## 标题栏与标签页
 

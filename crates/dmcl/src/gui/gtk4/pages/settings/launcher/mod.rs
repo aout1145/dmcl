@@ -19,8 +19,10 @@ use crate::gui::gtk4::app::{config_store, PageToast, Shell};
 
 use super::common::JavaProbeCache;
 use super::game::{GameOptionsInit, GameOptionsMsg, GameOptionsPage, GlobalGameOptionsTarget};
-use account::{AccountMsg, AccountPage};
-use directory::{DirectoryMsg, DirectoryPage};
+use account::AccountMsg;
+pub(crate) use account::AccountPage;
+use directory::DirectoryMsg;
+pub(crate) use directory::DirectoryPage;
 use java::{JavaMsg, JavaPage, JavaPageInit};
 
 /// 首选项页收到的消息。

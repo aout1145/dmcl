@@ -17,6 +17,8 @@
   逐层往下传。
 - 一个主页绑定一个根目录；标题栏的根目录菜单可以打开多个主页。所有 root 的主页
   从启动起常驻，关闭标签只影响显示，页面状态和运行中的游戏监视不会丢失。
+- 配置文件不存在时，启动后弹出首次设置向导：账户、Minecraft 目录、版本隔离；
+  「跳过」需确认并写入当前配置，完成或跳过之后都不再出现。
 
 ## 编译与运行
 
@@ -113,6 +115,9 @@ gtk4/
 │   ├── config_warning.rs        # 配置修复结果弹窗
 │   ├── page_host.rs
 │   ├── shell.rs
+│   ├── setup/                   # 首次启动设置向导
+│   │   ├── README.md            # 三步、完成条件、跳过与主页切换
+│   │   └── mod.rs
 │   ├── toast.rs
 │   ├── header/                  # 标题栏 + 根目录行 + 外观切换 / 关于
 │   │   ├── mod.rs
@@ -170,6 +175,7 @@ gtk4/
 | 范围 | 主要组件 / 服务 | 文档 |
 | --- | --- | --- |
 | app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
+| 首次启动向导 | `SetupWizard`、完成条件、跳过与保存 | [app/setup/README.md](app/setup/README.md) |
 | 任务对话框 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 设置页 | `PreferencesPage`、`DirectoryPage`、`AccountPage`、`JavaPage`、`GameOptionsPage`、`RootRow`、`AccountRow`、`JavaRow`、`drag_list` | [pages/settings/README.md](pages/settings/README.md) |

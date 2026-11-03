@@ -3,8 +3,8 @@
 //! 每个 root 的主页从启动起就常驻：关闭标签页只影响用户看到的标签，不销毁
 //! `HomePage`。运行状态、watcher、选中项都由常驻的主页保留。
 //!
-//! 页面与任务对话框（`tasks`）都是独立组件、各带自己的消息。一次性页面（实现
-//! [`Page`](page_host::Page)）交给 [`PageHost`](page_host::PageHost) 懒创建；常驻页面由
+//! 页面、首次设置向导（`setup`）与任务对话框（`tasks`）都是独立组件、各带自己的消息。
+//! 一次性页面（实现 [`Page`](page_host::Page)）交给 [`PageHost`](page_host::PageHost) 懒创建；常驻页面由
 //! [`PageSlot`](page_host::PageSlot) 直接持有。共享能力（跑任务、弹提示、打开任务对话框）
 //! 在 [`Shell`] 里；共享配置是 [`config_store`] 里的全局单例，根组件负责初始化和订阅。
 //! 这里没有实例业务逻辑。
@@ -13,6 +13,7 @@ pub(crate) mod config_store;
 mod config_warning;
 mod header;
 pub(crate) mod page_host;
+mod setup;
 pub(crate) mod shell;
 mod tasks;
 mod toast;
@@ -30,13 +31,14 @@ use relm4::gtk;
 use relm4::prelude::*;
 use relm4::Sender;
 
-use crate::config::{ConfigError, LoadedConfig};
+use crate::config::{Config, ConfigError, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
 use crate::gui::gtk4::pages::settings::{PreferencesMsg, PreferencesPage};
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::{PageHost, PageSlot};
+use setup::{SetupMsg, SetupOut, SetupWizard};
 use tasks::{TaskCenter, TaskCenterOut, TaskMsg};
 
 /// 根组件收到的消息。
@@ -51,6 +53,8 @@ enum AppMsg {
     },
     /// 共享配置改过了：补建新增 root 的主页，并刷新标题栏菜单。
     ConfigChanged,
+    /// 首次启动向导结束。
+    Setup(SetupOut),
     /// 打开或聚焦首选项（应用级快捷键）。
     OpenPreferences,
     /// 打开「关于」对话框（主菜单的应用级 action）。
@@ -79,6 +83,10 @@ struct AppModel {
     homes: Vec<HomeSlot>,
     /// 首选项：常驻页面，最多一个标签。
     preferences: PageSlot<PreferencesPage>,
+    /// 首次启动的向导；完成后丢弃。
+    setup: Option<Controller<SetupWizard>>,
+    /// 启动时打开的主页名，向导切换默认目录时要关掉它的标签。
+    startup_root: String,
     /// 打开「新实例」页时要用。
     shell: Rc<Shell>,
     /// 共享配置的只读句柄，始终指向当前那份配置。
@@ -90,7 +98,7 @@ struct AppModel {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for AppModel {
-    type Init = (Option<ConfigError>, String);
+    type Init = (Option<ConfigError>, String, bool);
     type Input = AppMsg;
     type Output = ();
 
@@ -134,7 +142,7 @@ impl SimpleComponent for AppModel {
     }
 
     fn init(
-        (error, startup_root_name): Self::Init,
+        (error, startup_root_name, first_run): Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -215,6 +223,17 @@ impl SimpleComponent for AppModel {
             tab: None,
         };
 
+        // 首次启动（配置文件还不存在）时弹出设置向导；组件自己负责 present。
+        let setup = if first_run {
+            Some(
+                SetupWizard::builder()
+                    .launch((root.clone(), shell.clone()))
+                    .forward(sender.input_sender(), AppMsg::Setup),
+            )
+        } else {
+            None
+        };
+
         // 标签被移除时只清掉各页面的标签句柄；常驻页面继续存活，运行状态不会丢。
         // 关闭主窗口时，`AdwTabView` 会在组件 runtime 关闭之后才 detach 标签页；此时
         // 清理已经没有意义，用 `send` 静默丢弃，避免 `input()` 因 receiver 已关闭而 panic。
@@ -232,6 +251,8 @@ impl SimpleComponent for AppModel {
             page_host,
             homes,
             preferences,
+            setup,
+            startup_root: startup_root_name.clone(),
             shell,
             config,
             tab_view,
@@ -259,7 +280,16 @@ impl SimpleComponent for AppModel {
                     .controller
                     .sender()
                     .send(PreferencesMsg::ConfigChanged);
+                if let Some(setup) = &self.setup {
+                    let _ = setup.sender().send(SetupMsg::ConfigChanged);
+                }
             }
+            AppMsg::Setup(out) => match out {
+                SetupOut::Finished => self.open_setup_root(&sender),
+                SetupOut::Skipped => {}
+                // 等对话框关闭动画结束再丢控制器，避免关闭期间点到已停止的组件。
+                SetupOut::Closed => self.setup = None,
+            },
             AppMsg::OpenPreferences => self.open_preferences(),
             AppMsg::About => {
                 let _ = self.header.sender().send(HeaderMsg::About);
@@ -309,6 +339,27 @@ impl AppModel {
     /// 打开或聚焦首选项。
     fn open_preferences(&mut self) {
         self.preferences.open(&self.tab_view, "首选项");
+    }
+
+    /// 向导完成后切到当前默认目录的主页，并关掉启动时的初始主页标签。
+    fn open_setup_root(&mut self, sender: &ComponentSender<Self>) {
+        let root = self.config.read().minecraft_root.clone();
+        let roots = self.config.read().roots();
+        // 向导里可能刚新增了目录；先把主页补建出来，再打开标签。
+        self.sync_roots(roots, sender);
+
+        if root != self.startup_root {
+            if let Some(home) = self
+                .homes
+                .iter()
+                .find(|home| home.name == self.startup_root)
+            {
+                if let Some(tab) = &home.page.tab {
+                    self.tab_view.close_page(tab);
+                }
+            }
+        }
+        self.open_home(&root);
     }
 
     /// 新建实例页绑定到发出请求的主页 root，并带上主页已有分类的拷贝。
@@ -389,6 +440,9 @@ fn home_tab_title(root_name: &str) -> String {
 
 /// 启动 GTK4 界面；窗口关闭前一直阻塞在主线程。
 pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<()> {
+    // 只有配置文件确实不存在才算首次启动；权限等其它错误交给配置警告处理。
+    let first_run = std::fs::metadata(Config::path())
+        .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
     // 配置只读一次，之后所有页面都从全局仓库取；加载警告留给根组件弹窗。
     let LoadedConfig { config, error } = loaded;
     config_store::init(config);
@@ -412,6 +466,6 @@ pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<
     ] {
         relm4::set_global_css_with_priority(css, relm4::gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
-    app.run::<AppModel>((error, startup_root));
+    app.run::<AppModel>((error, startup_root, first_run));
     Ok(())
 }

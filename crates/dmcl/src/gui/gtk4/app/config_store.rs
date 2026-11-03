@@ -98,6 +98,13 @@ impl ConfigStore {
         });
     }
 
+    /// 把当前配置原样落盘，不修改值、不通知订阅者。
+    ///
+    /// 保存结束后回到 GLib 主线程调用 `on_done`。必须在 GTK 主线程调用。
+    pub fn save(&self, on_done: impl FnOnce(anyhow::Result<()>) + 'static) {
+        self.persist(PersistMode::Plain, on_done);
+    }
+
     /// 写入修复后的配置，并先把原文件备份为同目录的 `dmcl.old.json`。
     ///
     /// 保存结束后回到 GLib 主线程调用 `on_done`。必须在 GTK 主线程调用。

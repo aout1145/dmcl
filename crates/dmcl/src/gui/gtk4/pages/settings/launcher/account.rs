@@ -19,7 +19,7 @@ use crate::gui::gtk4::pages::settings::common::{
 
 /// 「账号」分类收到的消息。
 #[derive(Debug)]
-pub(super) enum AccountMsg {
+pub(crate) enum AccountMsg {
     /// 共享配置变了：重新读取账户表。
     ConfigChanged,
     /// 打开添加离线账户的对话框。
@@ -57,7 +57,7 @@ pub(super) enum AccountMsg {
     KeyringCleanupFailed(String),
 }
 
-pub(super) struct AccountPage {
+pub(crate) struct AccountPage {
     config: ConfigRef,
     shell: Rc<Shell>,
     /// 页面级提示：只有首选项可见时才显示。
@@ -80,7 +80,7 @@ pub(super) struct AccountPage {
     login_generation: u64,
 }
 
-#[relm4::component(pub(super))]
+#[relm4::component(pub(crate))]
 impl SimpleComponent for AccountPage {
     type Init = Rc<Shell>;
     type Input = AccountMsg;
