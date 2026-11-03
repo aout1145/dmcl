@@ -31,7 +31,7 @@ headerbar.dmcl-header tabbar .box { padding: 0; }
 headerbar.dmcl-header .dmcl-task-badge { min-width: 16px; min-height: 16px; padding: 0 3px; border-radius: 9999px; background-color: @accent_bg_color; color: @accent_fg_color; font-size: 0.72em; font-weight: 700; }
 .dmcl-root-row { padding-left: 4px; padding-right: 4px; }";
 
-/// 标题栏发给 root 的消息：需要页面宿主 / 任务窗口配合的动作。
+/// 标题栏发给 root 的消息：需要页面宿主 / 任务对话框配合的动作。
 #[derive(Debug)]
 pub(crate) enum HeaderOut {
     /// 点任务按钮：打开任务对话框。

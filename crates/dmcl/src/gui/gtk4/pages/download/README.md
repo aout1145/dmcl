@@ -17,7 +17,7 @@ CustomPage
   自动命名 / 图标 / 冲突检查 / InstallSpec
         │
         ▼
-  Shell::run(install_task) → 打开任务窗口 → 关闭页面
+  Shell::run(install_task) → 打开任务对话框 → 关闭页面
 ```
 
 页面拥有联动与安装流程，见 [custom/README.md](custom/README.md)。`InstanceSummary` 与

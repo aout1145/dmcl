@@ -1,7 +1,7 @@
 # app 层架构（外壳与服务）
 
 `crates/dmcl/src/gui/gtk4/app` —— GTK4 前端的界面框架：根组件、通用服务、页面宿主、
-标题栏与任务窗口。整体架构见 [gtk4/README.md](../README.md)。
+标题栏与任务对话框。整体架构见 [gtk4/README.md](../README.md)。
 
 ## 根组件
 
@@ -21,7 +21,7 @@
 
 标题栏也是独立组件（`header/mod.rs`，根目录菜单行在 `header/root_row.rs`，外观切换在
 `header/theme.rs`，「关于」在 `header/about.rs`），整行由 `view!` 声明，再由根组件的
-`view!` 用 `add_top_bar` 挂上去。需要页面宿主 / 任务窗口配合的动作通过 `HeaderOut`
+`view!` 用 `add_top_bar` 挂上去。需要页面宿主 / 任务对话框配合的动作通过 `HeaderOut`
 上报给根组件。
 
 ## 共享配置
@@ -53,7 +53,7 @@
 
 - `run(name, chain, input) -> TaskHandle<O>`：在 tokio 上跑链，把 `TaskEvent` 经
   `TaskMsg` 转发给任务组件，返回结果句柄。
-- `open_tasks()`：主动给任务组件发 `TaskMsg::Open`，弹出任务列表窗口。
+- `open_tasks()`：主动给任务组件发 `TaskMsg::Open`，弹出任务对话框。
 - `global_toast(text)`：应用级提示，始终往主界面**左下角**的提示层加一条。
 - `page_toast(page, text)`：页面级提示，只在目标页面当前可见（`is_mapped`）时显示；
   页面在后台标签、标签已关闭或已销毁时直接丢弃，不排队。
@@ -122,7 +122,7 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
   `GtkCheckButton` 都 `hexpand` 并居中，色板本身是 44px 圆形，`radio` 指示器透明后挪到
   右下角，选中时显示对勾；分别对应 `AdwStyleManager` 的 `Default` / `ForceLight` /
   `ForceDark`。「关于」由 `header/about.rs` 打开 `AdwAboutDialog`。
-- 任务按钮右上角有运行中数量角标；任务窗口在任务开始 / 结束 / 清除时把未结束任务数上报给
+- 任务按钮右上角有运行中数量角标；任务对话框在任务开始 / 结束 / 清除时把未结束任务数上报给
   根组件，再转给标题栏，角标为 0 时隐藏。
 - 标题栏布局用 `view!` 声明。标签栏仍占满中间宽度；在它和右侧按钮之间留一段 28px 的固定
   `GtkWindowHandle`，拖这段空白可以移动窗口，避免拖拽被标签栏内部的滚动区吃掉。
@@ -147,7 +147,7 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 `header/theme.rs` 里的外观色板 CSS 由根组件以 `header::THEME_CSS` 一并挂上。
 
 其余模块的 CSS 在各自目录的文档里：下载域见
-[download](../pages/download/README.md#css)，任务窗口见
+[download](../pages/download/README.md#css)，任务对话框见
 [tasks](tasks/README.md#css)。
 
 ## 关闭主窗口
@@ -158,13 +158,13 @@ let handle = shell.run(format!("启动 {name}"), chain, ());
 - 还有运行中 / 取消中的任务：弹 `AdwAlertDialog` 确认；确认后取消所有未结束任务，
   再回 `TaskCenterOut::Quit`。
 
-未结束任务数由任务组件自己维护，根组件不再缓存一份。关闭任务窗口本身只隐藏窗口，
+未结束任务数由任务组件自己维护，根组件不再缓存一份。关闭任务对话框本身只是收起，
 不取消任务、不弹确认；用户可以在任务继续跑的时候关掉任务列表。
 
-正在运行的游戏不属于任务窗口：关闭主窗口不会结束它们，也不会为它们弹额外确认。
+正在运行的游戏不属于任务对话框：关闭主窗口不会结束它们，也不会为它们弹额外确认。
 
-## 任务窗口
+## 任务对话框
 
-`TaskCenter` 是独立的模态 `AdwWindow`，细节见
+`TaskCenter` 是独立的模态 `AdwDialog`，细节见
 [tasks/README.md](tasks/README.md)。app 层只负责在根组件里启动它，
 并把 `Shell` 产生的事件转给它。

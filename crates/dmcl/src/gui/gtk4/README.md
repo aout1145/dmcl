@@ -39,7 +39,7 @@
   | 场景 | 首选 |
   | --- | --- |
   | 窗口 / 外壳 | `AdwApplicationWindow` + `AdwToolbarView` + `AdwHeaderBar` |
-  | 自定义对话框 | `AdwDialog`（`present` 在主窗口里，自适应）；需要用户拖动改尺寸时用模态 `AdwWindow` |
+  | 自定义对话框 | `AdwDialog`（`present` 在主窗口里，自适应；不能拖动改尺寸） |
   | 确认 / 提示对话框 | `AdwAlertDialog`（不要再用 1.6 起弃用的 `AdwMessageDialog`） |
   | 通知 | `AdwToastOverlay` / `AdwToast` |
   | 空状态 | `AdwStatusPage` |
@@ -119,8 +119,8 @@ gtk4/
 │   │   ├── root_row.rs
 │   │   ├── theme.rs
 │   │   └── about.rs
-│   └── tasks/                   # 任务窗口
-│       ├── README.md            # 任务窗口 / 卡片 / 警告确认 / 进度还原
+│   └── tasks/                   # 任务对话框
+│       ├── README.md            # 任务对话框 / 卡片 / 警告确认 / 进度还原
 │       ├── mod.rs
 │       ├── message.rs
 │       ├── confirm.rs
@@ -170,7 +170,7 @@ gtk4/
 | 范围 | 主要组件 / 服务 | 文档 |
 | --- | --- | --- |
 | app 外壳 | 根组件、`Shell`、`PageHost` / `PageSlot`、标题栏、toast | [app/README.md](app/README.md) |
-| 任务窗口 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
+| 任务对话框 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 设置页 | `PreferencesPage`、`DirectoryPage`、`AccountPage`、`JavaPage`、`GameOptionsPage`、`RootRow`、`AccountRow`、`JavaRow`、`drag_list` | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
@@ -179,14 +179,14 @@ gtk4/
 ## 消息与边界
 
 消息按组件拆分，不集中在一个文件里。根组件接收标题栏的 `HeaderOut`（打开主页、
-任务窗口）、应用级快捷键的打开首选项消息和任务窗口的 `TaskCenterOut`（运行中数量角标），
-页面与任务的动作彼此独立。页面直接调注入的 `Shell`；任务窗口自己处理确认与提示。各组件
+任务对话框）、应用级快捷键的打开首选项消息和任务对话框的 `TaskCenterOut`（运行中数量角标），
+页面与任务的动作彼此独立。页面直接调注入的 `Shell`；任务对话框自己处理确认与提示。各组件
 完整的消息表见对应目录的文档。
 
 跨组件的边界只有四条：
 
 - **页面 → `Shell`**：传 `TaskChain`，拿回可 `await` 的结果句柄；任务事件由 `Shell` 转发给
-  任务窗口。
+  任务对话框。
 - **页面 → 子组件**：通过组件输入消息推自动值、冲突与安装按钮状态。
 - **子组件 → 页面**：通过组件输出消息上报选择、名称变化和安装请求。
 - **页面 ↔ 共享配置**：直接向全局 `ConfigStore` 订阅 / 修改；写完后由订阅消息通知需要

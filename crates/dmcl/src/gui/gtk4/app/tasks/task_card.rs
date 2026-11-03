@@ -22,7 +22,7 @@ pub(crate) const CSS: &str = "\
 .dmcl-task-log { border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 6px; }
 .dmcl-task-log-text { font-size: 0.8em; }";
 
-/// 卡片发给任务窗口的消息。
+/// 卡片发给任务对话框的消息。
 #[derive(Debug)]
 pub(crate) enum CardOut {
     /// 点右上角的叉（运行中 = 取消，已结束 = 清除）。
@@ -37,7 +37,7 @@ pub(crate) enum CardMsg {
 }
 
 pub(crate) struct TaskCard {
-    /// 任务 id（任务窗口按它分发事件）。
+    /// 任务 id（任务对话框按它分发事件）。
     pub(crate) id: u64,
     state: TaskState,
     /// 已经写进 `GtkTextView` 的日志条数，用来只追加新日志。

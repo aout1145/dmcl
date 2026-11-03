@@ -1,4 +1,4 @@
-//! 任务对话框：一个模态窗口 + 任务卡片列表（组件）。
+//! 任务对话框：一个模态 `AdwDialog` + 任务卡片列表（组件）。
 //!
 //! 任务相关的一切都在这里：对话框本身、卡片、取消、警告确认、起止提示、关闭时清理。
 //! 它不知道任务是什么；事件由 [`crate::gui::gtk4::app::Shell`] 转发过来。
@@ -24,7 +24,7 @@ pub(crate) use task_card::CSS;
 use super::ToastService;
 use task_card::{CardOut, TaskCard};
 
-/// 任务窗口发给 root 的消息。
+/// 任务对话框发给 root 的消息。
 #[derive(Debug)]
 pub(crate) enum TaskCenterOut {
     /// 当前运行中（含取消中）的任务数，用来更新标题栏角标。
@@ -34,14 +34,14 @@ pub(crate) enum TaskCenterOut {
 }
 
 pub(crate) struct TaskCenter {
-    /// 组件本身就是那个模态窗口。
-    dialog: adw::Window,
+    /// 组件本身就是那个模态对话框。
+    dialog: adw::Dialog,
     /// 任务卡片列表；空列表时 `GtkStack` 切到空状态。
     cards: FactoryVecDeque<TaskCard>,
     cancels: HashMap<u64, CancelHandle>,
     /// 弹起止提示用。
     toasts: ToastService,
-    /// 主窗口：任务窗口关着时，确认框挂它。
+    /// 主窗口：对话框和确认框都 `present` 在它里面。
     window: adw::ApplicationWindow,
     /// 上次上报给标题栏的未结束任务数，只在变化时发消息。
     reported_running: usize,
@@ -54,22 +54,19 @@ impl SimpleComponent for TaskCenter {
     type Output = TaskCenterOut;
 
     view! {
-        adw::Window {
-            set_title: Some("任务"),
-            set_default_width: 640,
-            set_default_height: 720,
-            set_modal: true,
-            set_destroy_with_parent: true,
+        adw::Dialog {
+            set_title: "任务",
+            // 对话框不能拖动改尺寸，用固定的内容尺寸；主窗口更小时会自动缩小。
+            set_content_width: 640,
+            set_content_height: 720,
 
-            // 关闭后隐藏，保留窗口本身（尺寸与内容），下次打开沿用；任务继续运行。
-            // 取消任务由关闭主窗口时的确认流程负责。
-            connect_close_request[sender] => move |_| {
-                sender.input(TaskMsg::CloseRequested);
-                gtk::glib::Propagation::Stop
+            // 关闭（Esc / 标题栏关闭按钮）只收起对话框，不取消任务；内容保留，下次打开沿用。
+            connect_closed[sender] => move |_| {
+                sender.input(TaskMsg::Closed);
             },
 
             #[wrap(Some)]
-            set_content = &adw::ToolbarView {
+            set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {},
 
                 #[wrap(Some)]
@@ -112,8 +109,6 @@ impl SimpleComponent for TaskCenter {
                 CardOut::Close(index) => TaskMsg::CloseCard(index),
             });
 
-        root.set_transient_for(Some(&window));
-
         let model = TaskCenter {
             dialog: root.clone(),
             cards,
@@ -131,7 +126,7 @@ impl SimpleComponent for TaskCenter {
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
-            TaskMsg::Open => self.dialog.present(),
+            TaskMsg::Open => self.dialog.present(Some(&self.window)),
             TaskMsg::Start { id, name, cancel } => {
                 self.cards.guard().push_front((id, name.clone()));
                 self.cancels.insert(id, cancel);
@@ -143,13 +138,8 @@ impl SimpleComponent for TaskCenter {
                     message, decision, ..
                 } = &event
                 {
-                    // 确认框挂在当前最上层的窗口上：任务窗口开着就挂它（否则会被模态的
-                    // 任务窗口挡住）；关着就挂主窗口，不要把任务列表强行弹出来。
-                    let parent: &gtk::Window = if self.dialog.is_visible() {
-                        self.dialog.upcast_ref()
-                    } else {
-                        self.window.upcast_ref()
-                    };
+                    // 确认框和任务对话框都 present 在主窗口里，后 present 的显示在上层；
+                    // 所以不用把任务列表强行弹出来，也不必关心任务对话框是否开着。
                     // 确认框的标题用任务名（没有的话退回「确认」）。
                     let title = self
                         .cards
@@ -157,7 +147,7 @@ impl SimpleComponent for TaskCenter {
                         .find(|card| card.id == id)
                         .map(|card| card.name().to_string())
                         .unwrap_or_else(|| "确认".to_string());
-                    confirm::ask(parent, &title, message, decision.clone());
+                    confirm::ask(&self.window, &title, message, decision.clone());
                 }
                 let index = self.cards.iter().position(|card| card.id == id);
                 if let Some(index) = index {
@@ -215,7 +205,7 @@ impl SimpleComponent for TaskCenter {
                     }
                 }
             }
-            TaskMsg::CloseRequested => self.hide(),
+            TaskMsg::Closed => self.clear_succeeded(),
             TaskMsg::CloseMain => {
                 if self.cards.iter().any(|card| !card.is_finished()) {
                     self.confirm_quit(&sender);
@@ -238,12 +228,6 @@ impl SimpleComponent for TaskCenter {
 }
 
 impl TaskCenter {
-    /// 隐藏窗口，并清掉成功的任务卡片。
-    fn hide(&mut self) {
-        self.dialog.set_visible(false);
-        self.clear_succeeded();
-    }
-
     /// 关闭主窗口时还有任务在跑：确认后取消任务并退出。
     fn confirm_quit(&self, sender: &ComponentSender<Self>) {
         let dialog = adw::AlertDialog::new(
@@ -263,13 +247,8 @@ impl TaskCenter {
             }
         });
 
-        // 任务窗口开着时挂它，否则会被模态的任务窗口挡住。
-        let parent: &gtk::Window = if self.dialog.is_visible() {
-            self.dialog.upcast_ref()
-        } else {
-            self.window.upcast_ref()
-        };
-        dialog.present(Some(parent));
+        // 与任务对话框共用主窗口的对话框宿主，present 后显示在它上层。
+        dialog.present(Some(&self.window));
     }
 
     /// 给所有还没结束的卡片发取消请求；已经结束的不动。
@@ -293,7 +272,7 @@ impl TaskCenter {
         }
     }
 
-    /// 去掉所有成功的卡片（关闭窗口时用），失败、已取消和运行中的保留。
+    /// 去掉所有成功的卡片（收起对话框时用），失败、已取消和运行中的保留。
     fn clear_succeeded(&mut self) {
         let mut removed = Vec::new();
         {

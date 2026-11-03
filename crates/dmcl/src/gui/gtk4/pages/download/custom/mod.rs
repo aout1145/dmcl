@@ -12,8 +12,8 @@
 //! 叠加，而 Fabric / NeoForge 与两者都冲突；选中后冲突行会被禁用并提示「与 xx 冲突」，
 //! 取消选择后恢复。
 //!
-//! 用户点安装后立即关闭本页并主动打开任务列表（[`Shell::open_tasks`]）；任务结果由
-//! 任务窗口展示。标签的移除由 `AdwTabView` 的 `page-detached` 清理。
+//! 用户点安装后主动打开任务列表并立即关闭本页（[`Shell::open_tasks`]）；任务结果由
+//! 任务对话框展示。标签的移除由 `AdwTabView` 的 `page-detached` 清理。
 
 mod loaders;
 mod message;
@@ -153,7 +153,7 @@ impl CustomPage {
         self.refresh_name_state();
     }
 
-    /// 安装当前装配：把任务交给任务窗口，然后立即关页并打开任务列表。
+    /// 安装当前装配：把任务交给任务对话框，然后打开任务列表并立即关页。
     fn install(&mut self, name: String, category: String) {
         let Some(mc) = self.mc_version.clone() else {
             self.shell
@@ -183,7 +183,7 @@ impl CustomPage {
                 return;
             }
         };
-        // 结果句柄用来在安装成功后写入分类；任务本身已经在 Shell / 任务窗口那边独立跑。
+        // 结果句柄用来在安装成功后写入分类；任务本身已经在 Shell / 任务对话框那边独立跑。
         let handle = self.shell.run(
             format!("安装 {name}"),
             dmcl_install::install_task(options, spec),
@@ -204,7 +204,7 @@ impl CustomPage {
                 shell.global_toast(&format!("写入实例分类失败：{err:#}"));
             }
         });
-        // 先弹任务窗口，再在下一轮 idle 关页：任务窗口已经在，关页不会把它压到主窗口下面。
+        // 先打开任务对话框，再在下一轮 idle 关页：关页只会移除标签，不影响对话框。
         // 关页会丢掉页面本体，所以先用克隆拿住 `TabTitle`，idle 里不再碰 `self`。
         self.shell.open_tasks();
         let tab = self.tab.clone();

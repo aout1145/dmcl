@@ -101,7 +101,7 @@ HomeMsg::MonitorExited { name, stopped, abnormal }
 - **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，
   立即给 monitor task 发停止信号。
 - **Running 阶段停止**：给 monitor task 发 stop。
-- **取消任务**：任务窗口自己持有 `CancelHandle`，与主页停止是两条路径。
+- **取消任务**：任务对话框自己持有 `CancelHandle`，与主页停止是两条路径。
 
 ## 提示
 

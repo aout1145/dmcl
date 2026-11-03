@@ -25,8 +25,8 @@ pub(crate) enum TaskMsg {
     },
     /// 卡片右上角的叉：运行中 = 取消，已结束 = 清除这条记录。
     CloseCard(DynamicIndex),
-    /// 用户请求关闭任务窗口（窗口的 `close-request`）：只隐藏，不取消任务。
-    CloseRequested,
+    /// 用户关闭了任务对话框（Esc / 标题栏关闭按钮）：只收起，不取消任务。
+    Closed,
     /// 用户请求关闭主窗口：有未结束任务时先确认。
     CloseMain,
     /// 确认退出：取消所有未结束的任务，然后通知 app 层退出。

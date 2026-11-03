@@ -1,19 +1,19 @@
-# 任务窗口与任务卡片
+# 任务对话框与任务卡片
 
-`crates/dmcl/src/gui/gtk4/app/tasks` —— 任务列表窗口、任务卡片、警告确认。
+`crates/dmcl/src/gui/gtk4/app/tasks` —— 任务对话框、任务卡片、警告确认。
 app 层见 [app/README.md](../README.md)，整体架构见
 [gtk4/README.md](../../README.md)。
 
-## 窗口与生命周期
+## 对话框与生命周期
 
-- 任务列表是一个独立的**模态 `AdwWindow`**（`transient_for` 主窗口，用户可以拖动边缘改
-  尺寸，默认 640×720）：标题栏按钮发 `TaskMsg::Open` → `present()`。之所以不用
-  `AdwDialog`，是因为它不支持用户拖动改尺寸。
-- 关闭（`close-request`）时直接隐藏窗口，**不取消任务**，任务继续在后台运行。
+- 任务列表是一个**模态 `AdwDialog`**（`present` 在主窗口里，内容尺寸 640×720，
+  主窗口更小时会自动缩小）：标题栏按钮发 `TaskMsg::Open` → `present()`。`AdwDialog`
+  不能由用户拖动边缘改尺寸。
+- 关闭（`closed`）时只是收起对话框，**不取消任务**，任务继续在后台运行。
 - 关闭**主窗口**时由 `TaskCenter` 处理 `TaskMsg::CloseMain`：没有未结束任务就直接回
   `TaskCenterOut::Quit`；有任务则弹确认，确认后发 `TaskMsg::CancelAllAndQuit`，
   取消所有未结束任务再回 `Quit`。任务卡片进入「取消中」。
-- 窗口本身只是隐藏（保留尺寸与位置），下次打开沿用；隐藏时只清掉**成功**的任务卡片，
+- 对话框本身只是收起（内容保留），下次打开沿用；收起时只清掉**成功**的任务卡片，
   失败、已取消和取消中的任务保留。
 - **任务起止有提示**：`TaskMsg::Start` 时弹「任务「…」开始」，`TaskMsg::Finished` 时弹
   「任务「…」完成 / 失败 / 已取消」。任务属于 app 层，这些提示走 `global_toast`，
@@ -45,7 +45,7 @@ app 层见 [app/README.md](../README.md)，整体架构见
 - **失败**：左侧错误图标，直接显示任务链的错误文本（里面已经带了出错的步骤名）。
 
 右上角的叉：运行中 = 取消；取消中 = 禁用；已结束 = 清除这条记录（`CardOut::Close`，
-由任务窗口按状态分派）。取消请求由 `Shell` 识别任务返回的 `Cancelled` 错误，最后落到
+由任务对话框按状态分派）。取消请求由 `Shell` 识别任务返回的 `Cancelled` 错误，最后落到
 「已取消」而不是「失败」。
 
 ## 进度还原
@@ -67,16 +67,16 @@ app 层见 [app/README.md](../README.md)，整体架构见
 ## 退出确认
 
 主窗口的关闭策略放在 `TaskCenter`，因为未结束任务数就是它从卡片列表算出来的，不需要在
-根组件再缓存一份。`TaskMsg::CloseMain` 到达时直接查 `cards`：确认框的 parent 也按
-“任务窗口开着就挂它，否则挂主窗口”选择，避免被模态任务窗口挡住。
+根组件再缓存一份。`TaskMsg::CloseMain` 到达时直接查 `cards`：确认框同样 `present` 在主窗口
+里，靠对话框宿主叠在任务对话框上层。
 
 ## 警告确认
 
 任务通过 `TaskEvent::Warning` 发来需要拍板的警告，且会阻塞等待。`TaskCenter` 收到后直接用
 `confirm.rs` 弹 `AdwAlertDialog`：
 
-- parent 取**当前最上层的窗口**：任务窗口开着就挂任务窗口，关着就挂主窗口，不会为了弹确认框
-  把任务列表带出来；
+- 同样 `present` 在主窗口里，显示在当前打开的对话框上层；关着时不会为了弹确认框把任务
+  列表带出来；
 - **标题是任务名**；
 - 选「继续 / 中止」后调 `WarningDecision::accept()` / `abort()`。
 
@@ -84,7 +84,7 @@ app 层见 [app/README.md](../README.md)，整体架构见
 
 | 类型 | 文件 | 说明 |
 | --- | --- | --- |
-| `TaskMsg` | `message.rs` | `Open` / `Start` / `Event` / `Finished { id, ok, cancelled, error }` / `CloseCard` / `CloseRequested` / `CloseMain` / `CancelAllAndQuit` |
+| `TaskMsg` | `message.rs` | `Open` / `Start` / `Event` / `Finished { id, ok, cancelled, error }` / `CloseCard` / `Closed` / `CloseMain` / `CancelAllAndQuit` |
 | `TaskCenterOut` | `mod.rs` | `RunningCount(n)`：当前未结束任务数，给标题栏角标；`Quit`：根组件可以销毁主窗口了 |
 | `CardMsg` | `task_card.rs` | 日志区展开状态变化 |
 | `CardOut` | `task_card.rs` | `Close(DynamicIndex)`：点卡片右上角的叉 |
