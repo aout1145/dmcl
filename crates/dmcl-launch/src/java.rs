@@ -169,6 +169,7 @@ fn platform_java_roots() -> Vec<PathBuf> {
         roots.push(home.join(".gradle/jdks"));
         roots.push(home.join(".asdf/installs/java"));
         roots.push(home.join(".local/share/mise/installs/java"));
+        roots.push(home.join(".minecraft/runtime"));
         roots.extend(child_dirs_with_prefix(
             &home.join(".linuxbrew/opt"),
             &["openjdk"],
@@ -205,11 +206,25 @@ fn platform_java_roots() -> Vec<PathBuf> {
             continue;
         };
         let base = PathBuf::from(base);
+        roots.push(base.join("Minecraft Launcher").join("runtime"));
         roots.extend(VENDORS.iter().map(|vendor| base.join(vendor)));
         roots.extend(child_dirs_with_prefix(&base.join("Microsoft"), &["jdk"]));
     }
+    if let Some(appdata) = env::var_os("APPDATA").filter(|path| !path.is_empty()) {
+        roots.push(PathBuf::from(appdata).join(".minecraft").join("runtime"));
+    }
     if let Some(local) = env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty()) {
-        let programs = PathBuf::from(local).join("Programs");
+        let local = PathBuf::from(local);
+        // Microsoft Store 版官方启动器的 LocalCache。
+        roots.push(
+            local
+                .join("Packages")
+                .join("Microsoft.4297127D64EC6_8wekyb3d8bbwe")
+                .join("LocalCache")
+                .join("Local")
+                .join("runtime"),
+        );
+        let programs = local.join("Programs");
         roots.push(programs.join("Eclipse Adoptium"));
         roots.push(programs.join("Java"));
         roots.extend(child_dirs_with_prefix(
@@ -235,6 +250,7 @@ fn platform_java_roots() -> Vec<PathBuf> {
     if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
         let home = PathBuf::from(home);
         roots.push(home.join("Library/Java/JavaVirtualMachines"));
+        roots.push(home.join("Library/Application Support/minecraft/runtime"));
         roots.push(home.join(".sdkman/candidates/java"));
     }
     roots.extend(child_dirs_with_prefix(
@@ -580,13 +596,33 @@ mod tests {
     fn default_java_roots_include_the_platform_directory() {
         let roots = default_java_roots();
         #[cfg(target_os = "linux")]
-        assert!(roots.contains(&PathBuf::from("/usr/lib/jvm")));
+        {
+            assert!(roots.contains(&PathBuf::from("/usr/lib/jvm")));
+            if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+                assert!(roots.contains(&PathBuf::from(home).join(".minecraft/runtime")));
+            }
+        }
         #[cfg(target_os = "macos")]
-        assert!(roots.contains(&PathBuf::from("/Library/Java/JavaVirtualMachines")));
+        {
+            assert!(roots.contains(&PathBuf::from("/Library/Java/JavaVirtualMachines")));
+            if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+                assert!(roots.contains(
+                    &PathBuf::from(home).join("Library/Application Support/minecraft/runtime")
+                ));
+            }
+        }
         #[cfg(target_os = "windows")]
-        assert!(roots
-            .iter()
-            .any(|path| path.file_name().is_some_and(|name| name == "Java")));
+        {
+            assert!(roots
+                .iter()
+                .any(|path| path.file_name().is_some_and(|name| name == "Java")));
+            assert!(roots
+                .iter()
+                .any(|path| path.ends_with("Minecraft Launcher/runtime")));
+            if let Some(appdata) = env::var_os("APPDATA").filter(|path| !path.is_empty()) {
+                assert!(roots.contains(&PathBuf::from(appdata).join(".minecraft").join("runtime")));
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

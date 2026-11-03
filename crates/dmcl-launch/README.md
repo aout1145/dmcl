@@ -47,7 +47,7 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
 调用者实现的 `JavaSelector` 决定。
 
-- `default_java_roots()` 按平台给出常见安装目录与 `JAVA_HOME`；
+- `default_java_roots()` 按平台给出常见安装目录、官方启动器的 Java 运行目录与 `JAVA_HOME`；
 - `find_java(roots)` 只返回扫描结果（扫不到就是空列表）；
 - `auto_select_java(required_major, &options)` 只按缓存的 `major` / `arch` 选择、**不执行
   Java**：版本相等优先，其次最接近的更高版本，再其次最高的更低版本；同一档内优先当前

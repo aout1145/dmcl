@@ -129,8 +129,9 @@ dmcl list-mc --type=release,snapshot
 
 首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描常见安装目录
 （Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
-与 Homebrew）以及 `JAVA_HOME` 并写入全局配置。账户、根目录和 Java 表也可以通过直接编辑
-全局配置维护；微软账户用 `dmcl login` 创建。图形界面的账号、实例管理页面仍在开发中；
+与 Homebrew）、官方启动器下载的 Java 运行目录以及 `JAVA_HOME`，并写入全局配置。账户、根目录
+和 Java 表也可以通过直接编辑全局配置维护；微软账户用 `dmcl login` 创建。图形界面的账号、
+实例管理页面仍在开发中；
 主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、设默认、拖动排序）、
 Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE 版本与供应商），以及
 全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数）。账号分类还是置灰的占位项。
@@ -159,7 +160,7 @@ Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显�
 | `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                       |
 | `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                    |
 | `list-optifine <mc-version-id>`                                             | 列出 OptiFine 版本（稳定版 / 预览版）                 |
-| `search-java`                                                               | 搜索本机 Java（常见安装目录 / `JAVA_HOME`），合并进全局配置并保存 |
+| `search-java`                                                               | 搜索本机 Java（常见安装目录 / 官方启动器的 Java 运行目录 / `JAVA_HOME`），合并进全局配置并保存 |
 | `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错） |
 | `version`                                                                   | 显示版本与构建时间                                    |
 
