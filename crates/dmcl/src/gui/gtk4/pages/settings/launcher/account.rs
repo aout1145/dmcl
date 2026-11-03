@@ -47,6 +47,8 @@ pub(super) enum AccountMsg {
         uuid: String,
         error: Option<String>,
     },
+    /// 把某个账户设为默认（写入 `launch.account`）。
+    SetDefault(String),
     /// 请求删除某个账户（先弹确认框）。
     Remove(String),
     /// 确认框里点了删除。
@@ -105,6 +107,7 @@ impl SimpleComponent for AccountPage {
         let accounts = FactoryVecDeque::builder().launch(group.clone()).forward(
             sender.input_sender(),
             |out| match out {
+                AccountRowOut::SetDefault(key) => AccountMsg::SetDefault(key),
                 AccountRowOut::Remove(key) => AccountMsg::Remove(key),
             },
         );
@@ -215,6 +218,19 @@ impl SimpleComponent for AccountPage {
                 };
                 confirm_remove(&key, account_username(&account), &sender);
             }
+            AccountMsg::SetDefault(key) => {
+                {
+                    let config = self.config.read();
+                    if config.launch.account.as_deref() == Some(key.as_str()) {
+                        return;
+                    }
+                }
+                self.update_config(|config| {
+                    config.launch.account = Some(key);
+                    Ok(())
+                });
+                self.reload();
+            }
             AccountMsg::RemoveConfirmed(key) => {
                 let account = self.config.read().accounts.get(&key).cloned();
                 let Some(account) = account else {
@@ -242,13 +258,14 @@ impl SimpleComponent for AccountPage {
 impl AccountPage {
     /// 按共享配置重建行；操作按钮固定在最后。
     fn reload(&mut self) {
-        let accounts: Vec<(String, AccountConfig)> = {
+        let (accounts, default): (Vec<(String, AccountConfig)>, Option<String>) = {
             let config = self.config.read();
-            config
+            let accounts = config
                 .accounts
                 .iter()
                 .map(|(name, account)| (name.clone(), account.clone()))
-                .collect()
+                .collect();
+            (accounts, config.launch.account.clone())
         };
 
         let group = self.accounts.widget().clone();
@@ -257,7 +274,8 @@ impl AccountPage {
             guard.clear();
             group.remove(&self.actions_row);
             for (name, account) in accounts {
-                guard.push_back((name, account));
+                let is_default = default.as_deref() == Some(name.as_str());
+                guard.push_back((name, account, is_default));
             }
         }
         group.add(&self.actions_row);
@@ -517,23 +535,26 @@ impl DeviceCodePresenter for GuiPresenter {
 }
 
 /// 一个账户行：左侧占位头像，标题是玩家名，下方小字是账户类型。
+/// 行尾是「设为默认」和删除按钮。
 pub(super) struct AccountRow {
     key: String,
     username: String,
     type_label: &'static str,
     avatar: String,
+    is_default: bool,
 }
 
 /// 账户行发出的动作；带配置键，列表顺序变化也不会指错。
 #[derive(Debug)]
 pub(super) enum AccountRowOut {
+    SetDefault(String),
     Remove(String),
 }
 
 #[relm4::factory(pub(super))]
 impl FactoryComponent for AccountRow {
-    type Init = (String, AccountConfig);
-    type Input = ();
+    type Init = (String, AccountConfig, bool);
+    type Input = bool;
     type Output = AccountRowOut;
     type CommandOutput = ();
     type ParentWidget = adw::PreferencesGroup;
@@ -554,6 +575,16 @@ impl FactoryComponent for AccountRow {
                 set_valign: gtk::Align::Center,
             },
 
+            #[name(default_button)]
+            add_suffix = &gtk::Button {
+                #[watch]
+                set_icon_name: if self.is_default { "starred-symbolic" } else { "non-starred-symbolic" },
+                #[watch]
+                set_tooltip_text: Some(if self.is_default { "默认账户" } else { "设为默认" }),
+                add_css_class: "flat",
+                set_valign: gtk::Align::Center,
+            },
+
             #[name(remove_button)]
             add_suffix = &gtk::Button {
                 set_icon_name: "user-trash-symbolic",
@@ -566,7 +597,7 @@ impl FactoryComponent for AccountRow {
     }
 
     fn init_model(
-        (key, account): Self::Init,
+        (key, account, is_default): Self::Init,
         _index: &DynamicIndex,
         _sender: FactorySender<Self>,
     ) -> Self {
@@ -576,6 +607,7 @@ impl FactoryComponent for AccountRow {
             avatar: account_avatar_text(&username),
             username,
             type_label: account_type_label(&account),
+            is_default,
         }
     }
 
@@ -588,6 +620,13 @@ impl FactoryComponent for AccountRow {
     ) -> Self::Widgets {
         let widgets = view_output!();
 
+        widgets.default_button.connect_clicked({
+            let sender = sender.clone();
+            let key = self.key.clone();
+            move |_| {
+                let _ = sender.output(AccountRowOut::SetDefault(key.clone()));
+            }
+        });
         widgets.remove_button.connect_clicked({
             let sender = sender.clone();
             let key = self.key.clone();
@@ -597,6 +636,10 @@ impl FactoryComponent for AccountRow {
         });
 
         widgets
+    }
+
+    fn update(&mut self, is_default: bool, _sender: FactorySender<Self>) {
+        self.is_default = is_default;
     }
 }
 
