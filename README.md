@@ -1,340 +1,150 @@
 # DMCL
 
-非官方 Minecraft 启动器，Rust 编写。提供 GTK4 + libadwaita 图形界面和命令行两种前端，
-业务逻辑在各 `dmcl-*` crate 里，两个前端共用同一套安装、下载、启动实现。
+非官方 Minecraft 启动器，使用 Rust 编写，提供基于 GTK4 + libadwaita 的图形界面，支持
+Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下载和启动功能。
 
-## 特性
+## 功能
 
-- **图形界面** —— 基于 GTK4 + libadwaita（relm4），遵循 GNOME 设计风格。
-- **安装原版** —— 按版本号下载版本 JSON、客户端 jar、库与资源文件，在
-  `versions/<名字>/` 下装出一个可玩的版本。
-- **一键装模组加载器** —— Fabric / Forge / NeoForge，可指定加载器版本。
-- **一键装 OptiFine** —— 下载 OptiFine 并改写版本 JSON；单独安装时会解出它自带的
-  launchwrapper，叠加在 Forge 上时沿用 Forge 的。OptiFine 的版本列表与下载固定走 bmclapi。
-- **启动游戏** —— 自动挑选 Java、生成 JVM 与游戏参数、启动子进程并监控（可停止）。
-- **启动前完整性检查** —— 报告缺失 / 内容不符的文件；`launch` 默认「缺了就补」，
-  需要自己决定时也可以直接调用库里的 `dmcl_install::check_integrity`。
-- **微软登录** —— `dmcl login` 走设备代码流登录 Microsoft 账户；refresh token 存在系统
-  钥匙串，启动时静默刷新会话。
-- **多账户 / 多根目录 / 多 Java** —— 在全局配置里维护账户、Minecraft 根目录与 Java 表。
-- **多主页** —— 每个 `minecraft_roots` 条目对应一个常驻主页；标签可以随时关闭，
-  关闭只影响显示，游戏进程和主页运行状态继续保留。
-- **实例分类** —— 在实例的 `dmcl.json` 里用 `instance.category` 标分类，主页按分类分组
-  显示；新建实例页可以直接填，也可以从已有分类里选。
-- **全局默认 + 实例覆盖** —— 全局 `launch` 是所有实例的默认启动配置；每个实例可以
-  在 `versions/<version_name>/dmcl.json` 里只写要覆盖的字段。
-- **镜像源** —— `official`（Mojang）或 `bmclapi`。文档里的地址统一归一成
-  `${MC_MAVEN}` 这样的模板，下载时才按镜像解析；写回磁盘的版本 JSON 与官方启动器通用。
-  OptiFine 的版本列表与下载只有 bmclapi 提供，因此不受 `download.mirror` 影响，固定走
-  `https://bmclapi2.bangbang93.com/optifine/…`。
-- **并发下载** —— 多文件并发 + 大文件按 `Range` 分块；先写 `.part`，校验通过才改名，
-  失败自动重试。
-- **可配置** —— 镜像、并发度、分块阈值、内存、窗口尺寸、附加 JVM / 游戏参数、Java 选择……
-- **跨平台** —— Linux / Windows / macOS 都有 CI 覆盖（默认构建与 GTK4 前端）。
+- **多目录主页** —— 每个 Minecraft 目录拥有独立主页，可并行管理多个目录。
+- **实例管理** —— 自动识别实例并按分类归组，显示运行状态；启动时自动完成账户登录、Java
+  选择、文件检查与补全，并支持取消与停止。
+- **创建实例** —— 支持原版与 Forge / Fabric / NeoForge / OptiFine，可指定版本、名称、图标
+  和分类，并检查实例名是否已被占用。
+- **账户** —— 支持离线账户与 Microsoft 账户、设备代码登录和默认账户。
+- **Minecraft 目录** —— 添加、重命名、修改路径、设为默认、调整顺序和删除，路径支持相对与
+  绝对形式。
+- **Java** —— 搜索本机 Java，或手动维护 Java 列表，显示版本、供应商、架构和路径。
+- **全局启动配置** —— 设置默认账户、默认 Java、窗口尺寸、内存、版本隔离和附加启动参数。
+- **任务** —— 安装与启动任务的进度、步骤、日志和取消；退出时若有未完成任务会先确认。
+- **外观** —— 跟随系统、浅色和深色三种主题。
+- **实例管理页** —— 编辑单个实例的启动覆盖（未完成）。
+- **删除实例** —— 删除已安装的实例（未完成）。
+- **下载设置** —— 下载相关的全局设置（未完成）。
+- **异常退出报告** —— 游戏异常退出时展示错误信息（未完成）。
+- **Forge 版本筛选** —— 按稳定 / 推荐类别筛选 Forge 版本（未完成）。
 
-## 构建
+## 图形界面
 
-需要 stable Rust **1.95** 或更新。
+图形界面以主页组织实例：每个 Minecraft 目录对应一个主页，可以在多个目录之间切换。关闭
+主页不会中断安装、启动或已运行的游戏，重新打开后仍保持原来的状态。
 
-微软登录需要一份 Azure 应用（公共客户端）的 client id，编译时通过环境变量传入：
+实例列表会随目录内容自动更新，并按分类分组；分类按首次出现的顺序排列，未分类的实例排在
+最后。启动实例时，DMCL 会完成账户登录、Java 选择、文件检查与补全，并生成启动参数。启动
+过程中可以取消，运行中可以停止。若实例的启动配置存在问题，启动前会提示用户选择取消或继续。
+
+### 创建实例
+
+创建实例时可选择 Minecraft 版本，以及可选的 Forge、Fabric、NeoForge 或 OptiFine。Forge
+与 OptiFine 可以组合，Fabric、NeoForge 与二者互斥。实例名称和图标会根据选择自动生成，
+也可以手动指定；分类可沿用已有分类或新建。DMCL 会检查实例名是否已被占用。安装以任务形式
+进行，失败或取消不会留下不完整的实例。
+
+### 任务
+
+安装和启动都以任务形式运行。任务列表展示当前步骤、整体进度和日志，并支持取消。关闭任务
+列表不会中断任务；退出 DMCL 时若有未完成的任务，会先要求确认。需要用户决定的警告会以
+对话框提示，任务在用户选择后继续。
+
+### 设置
+
+首选项集中管理账户、Minecraft 目录、Java 和全局启动选项。
+
+- **账户**：支持离线账户和 Microsoft 账户。Microsoft 账户通过设备代码登录，凭据保存在
+  系统凭据存储中；可以设置默认账户，删除 Microsoft 账户时会同时清理凭据。
+- **Minecraft 目录**：可添加、重命名、修改路径、设为默认、调整顺序和删除。路径支持相对与
+  绝对两种形式；对已有主页而言，名称、路径的修改和删除要重启 DMCL 后才生效。
+- **Java**：可搜索本机 Java，或手动添加、编辑、删除和调整顺序；列表显示 Java 版本、
+  供应商、架构和路径。默认 Java 在全局游戏选项中设置。
+- **全局游戏选项**：设置默认账户、默认 Java、窗口尺寸、内存、版本隔离和附加启动参数。
+  修改会自动保存，并在下次启动实例时生效。
+
+下载设置尚未实现。
+
+### 外观
+
+支持跟随系统、浅色和深色三种外观。`Ctrl+,` 可打开首选项。
+
+## 命令行
+
+不启用图形界面时，`dmcl` 是一个普通命令行工具；启用图形界面后也可以继续使用这些子命令。
+常用操作：
 
 ```bash
-DMCL_MICROSOFT_CLIENT_ID=<client-id> cargo build --release
+dmcl search-java                       # 扫描本机 Java 并写入全局配置
+dmcl login                             # 微软设备代码登录
+dmcl install 1.20.1                    # 安装原版
+dmcl install 1.20.1 --fabric           # 安装 Fabric
+dmcl install 1.20.1 --forge --forge-version 47.3.0 --optifine
+dmcl launch 1.20.1                     # 启动
+dmcl list                              # 查看已安装版本
 ```
 
-不设置也能编译，只是 `dmcl login` 会提示缺少应用 ID；离线账户不受影响。Azure 应用需要
-启用「公共客户端流」（device code flow），不需要配置重定向 URI。
+`dmcl install 1.20.1 --neoforge` 安装 NeoForge，`--optifine` 单独安装 OptiFine，
+`--fabric-version` / `--neoforge-version` / `--optifine-version` 指定加载器版本。
+`--minecraft-root=<名字>` 可以在本次运行中切换根目录，不写回全局配置。完整命令和参数用
+`dmcl --help` 查看。
 
-GitHub Actions 的 `build.yaml` / `build-gtk4.yaml` 会读取仓库 secret
-`DMCL_MICROSOFT_CLIENT_ID`：配置了就用它的值构建，没配置时不会设置这个环境变量。
+不带子命令时：启用图形界面则打开图形界面，否则打印帮助并以非零状态退出。
 
-### 带图形界面（推荐）
+## 构建与运行
 
-图形前端由 cargo feature `gtk4` 门控，默认**不**编译；开启需要 GTK ≥ 4.22、
-libadwaita ≥ 1.9：
+需要 stable Rust **1.95** 或更新。图形界面由 cargo feature `gtk4` 门控，默认不编译：
 
 ```bash
 cargo build --release --features gtk4
-./target/release/dmcl        # 无子命令：打开图形界面
+./target/release/dmcl
 ```
 
-各平台装 GTK 开发库：
+需要 GTK ≥ 4.22、libadwaita ≥ 1.9：
 
-| 平台            | 安装方式                                                                                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Debian / Ubuntu | `sudo apt install libgtk-4-dev libadwaita-1-dev`（Ubuntu 24.04 的 GTK 4.14 太旧，建议 26.04+ 或更新发行版）                                                                                  |
-| macOS           | `brew install pkgconf gtk4 libadwaita`                                                                                                                                                       |
-| Windows         | MSYS2 MINGW64：`pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-gtk4 mingw-w64-x86_64-libadwaita`，再用 rustup 的 `stable-x86_64-pc-windows-gnu` 工具链构建（见下） |
+- **Debian / Ubuntu**：`sudo apt install libgtk-4-dev libadwaita-1-dev`
+- **macOS**：`brew install pkgconf gtk4 libadwaita`
+- **Windows**：用 MSYS2 MINGW64 安装 `mingw-w64-x86_64-gtk4` 与
+  `mingw-w64-x86_64-libadwaita` 后，用 `stable-x86_64-pc-windows-gnu` 工具链构建。
 
-Windows 示例（MSYS2 MINGW64 里用 GNU host 工具链，避免 `pkg-config` 把它当成交叉编译）：
-
-```bash
-rustup toolchain install stable-x86_64-pc-windows-gnu --force-non-host
-cargo +stable-x86_64-pc-windows-gnu build --release --features gtk4
-# 运行 target/release/dmcl.exe（需要 mingw64/bin 在 PATH 里）
-```
-
-### 只构建命令行
+只构建命令行：
 
 ```bash
 cargo build --release
 ./target/release/dmcl --help
 ```
 
-不带子命令时默认尝试打开图形界面；没有编译 `gtk4` 时会打印帮助并以非零状态退出。
-显式的 `dmcl gui` 在前端不可用时直接报错，不会回退。
-
-### 自包含包
-
-CI 的 GTK4 任务会产出已经带上 GTK 运行时的包：
-
-- **Linux**：`dmcl-gtk4-linux.AppImage`（在 Ubuntu 26.04 上构建，需要较新的 glibc）；
-- **Windows**：`dmcl-gtk4-windows.zip`，解压后双击 `dmcl.cmd` 启动（x64，自带 GTK DLL）；
-- **macOS**：`dmcl-gtk4-macos.zip`，解压得到 `DMCL.app`（ad-hoc 签名，首次打开可能需要在
-  Finder 里右键 → 打开）。
-
-## 快速开始
-
-带 GTK4 的构建不带子命令时会打开图形界面；只构建命令行时用子命令操作：
+微软登录需要一份 Azure 公共客户端应用的 client id，编译时传入：
 
 ```bash
-# 找本机 Java 并写进全局配置
-dmcl search-java
-
-# 登录微软账户（设备代码流；省略账户名时用玩家名）
-dmcl login
-
-# 装原版 1.20.1，本地版本名也叫 1.20.1
-dmcl install 1.20.1
-
-# 装 Fabric / Forge / NeoForge
-dmcl install 1.20.1 --fabric
-dmcl install 1.20.1 --forge --forge-version 47.3.0
-
-# 装 OptiFine（可单独装，也可和 Forge 一起装）
-dmcl install 1.19.2 --optifine
-dmcl install 1.19.2 --forge --forge-version 47.3.0 --optifine
-
-# 启动
-dmcl launch 1.20.1
-
-# 看看装了什么 / 远端有哪些版本
-dmcl list
-dmcl list-mc --type=release,snapshot
+DMCL_MICROSOFT_CLIENT_ID=<client-id> cargo build --release --features gtk4
 ```
 
-`--optifine-version` 用 `HD_U_H8` 这种短版本号（不带 Minecraft 版本前缀）；省略时取最新
-稳定版。OptiFine 通常只适合原版或 Forge；CLI 与其它加载器一样不做组合校验，GUI 会用冲突组
-避免不兼容的选择。单独安装时会把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch`，
-加入 OptiFine 自带的 launchwrapper，并使用 `optifine.OptiFineTweaker`；与 Forge 一起安装时
-沿用 Forge 提供的 launchwrapper 与主类，只把 tweakClass 换成
-`optifine.OptiFineForgeTweaker`。
+不设置也能编译，只是登录 Microsoft 账户时会提示缺少应用 ID；离线账户不受影响。CI 会读取
+仓库 secret `DMCL_MICROSOFT_CLIENT_ID`，配置了就用它构建。
 
-首次启动前需要一份可用的 Java；`dmcl search-java` 会扫描常见安装目录
-（Linux `/usr/lib/jvm`、Windows 各 JDK 厂商目录、macOS `/Library/Java/JavaVirtualMachines`
-与 Homebrew）、官方启动器下载的 Java 运行目录以及 `JAVA_HOME`，并写入全局配置。账户、根目录
-和 Java 表也可以通过直接编辑全局配置维护；微软账户用 `dmcl login` 创建。图形界面的账号、
-实例管理页面仍在开发中；
-主菜单的「首选项」目前可以管理 Minecraft 目录（添加、改名、改路径、删除、设默认、拖动排序）、
-Java（添加、编辑、删除、拖动排序、搜索本机 Java；列表显示 JDK/JRE 版本与供应商），以及
-全局游戏选项（默认账户 / Java、窗口尺寸、内存、启动参数、版本隔离）。账号分类还是置灰的占位项。
-目录的名称和路径修改在重启 DMCL 后生效。
-
-图形界面里，标题栏左侧的「Minecraft 目录」菜单可以打开其它 `minecraft_roots` 的主页。
-所有 root 的主页在程序启动时就已创建，关闭标签只是隐藏
-页面；重新打开后选中项、运行状态和正在监视的游戏都还在。新建实例使用主页右下角的悬浮
-`+` 按钮；创建目标始终是该主页绑定的 root。
-
-最右侧主菜单里的「首选项」也可以用 `Ctrl+,` 打开；首选项最多只有一个标签，页面是左侧分类、
-右侧内容的双栏布局。菜单打开时，`Alt+P` / `Alt+A` 分别触发首选项和关于。
-
-## 命令
-
-| 命令                                                                        | 说明                                                  |
-| --------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `launch <version-name>`                                                     | 登录 → 检查并补全文件 → 生成参数 → 启动               |
-| `install <mc-version-id> [version-name]`                                    | 安装原版；省略版本名时自动命名                        |
-| `install … [--fabric] [--forge] [--neoforge] [--optifine]`                   | 安装模组加载器 / OptiFine                             |
-| `install … [--fabric-version=…] [--forge-version=…] [--neoforge-version=…] [--optifine-version=…]` | 指定加载器 / OptiFine 版本                            |
-| `login [name]`                                                              | 登录微软账户（设备代码流）；省略名字时用玩家名且不覆盖已有账户 |
-| `list`                                                                      | 列出**已安装**的版本                                  |
-| `list-mc [--type=release,snapshot,…]`                                       | 列出 Minecraft 版本（默认 `release`）                 |
-| `list-fabric <mc-version-id>`                                               | 列出 Fabric loader 版本                               |
-| `list-forge <mc-version-id>`                                                | 列出 Forge 版本                                       |
-| `list-neoforge <mc-version-id>`                                             | 列出 NeoForge 版本                                    |
-| `list-optifine <mc-version-id>`                                             | 列出 OptiFine 版本（稳定版 / 预览版）                 |
-| `search-java`                                                               | 搜索本机 Java（常见安装目录 / 官方启动器的 Java 运行目录 / `JAVA_HOME`），合并进全局配置并保存 |
-| `gui [frontend]`                                                            | 启动图形界面（默认前端 `gtk4`；前端不可用时直接报错） |
-| `version`                                                                   | 显示版本与构建时间                                    |
-
-不带子命令时：有 GTK4 前端就打开 GUI；没有就打印帮助并以非零状态退出。
-
-全局选项 `--minecraft-root=<name>` 用来在本次运行中切换 `minecraft_roots` 里的根目录，
-可以放在子命令前或后，不会写回全局配置：
-
-```bash
-dmcl --minecraft-root=test launch 1.20.1
-dmcl list --minecraft-root=test
-```
+CI 的 GTK4 任务会产出带运行时的包：Linux 的 AppImage、Windows 的 zip 和 macOS 的
+`DMCL.app`。CI 在 Linux / Windows / macOS 三平台跑默认构建与 GTK4 构建。
 
 ## 配置文件
 
-全局配置位置：`<系统配置目录>/dmcl/dmcl.json`
-（Linux `$XDG_CONFIG_HOME` 或 `~/.config`；Windows `%APPDATA%`；
-macOS `~/Library/Application Support`）。
+全局配置位于 `<系统配置目录>/dmcl/dmcl.json`（Linux `$XDG_CONFIG_HOME` 或 `~/.config`；
+Windows `%APPDATA%`；macOS `~/Library/Application Support`）。图形界面的修改会立即写回，
+命令行和手动编辑也维护同一份文件。
 
-保存时先写同目录的 `dmcl.<pid>.json`，再改名覆盖，不会留下半截 JSON。Unix 下配置目录
-权限为 `0700`，配置文件与 `dmcl.old.json` 备份为 `0600`；Windows 依赖 `%APPDATA%`
-用户目录自带的 ACL。
-
-所有键都是可选的，缺失的键沿用默认值：
-
-```json
-{
-  "launch": {
-    "java": "autoselect",
-    "account": null,
-    "version_isolation": true,
-    "window_width": 854,
-    "window_height": 480,
-    "min_memory": null,
-    "max_memory": null,
-    "custom_info": "dmcl",
-    "additional_jvm": "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True",
-    "additional_game": ""
-  },
-  "accounts": {},
-  "javas": {
-    "jdk-17": {
-      "path": "/usr/lib/jvm/java-17/bin/java",
-      "major": 17,
-      "arch": "x86_64"
-    }
-  },
-  "minecraft_roots": {
-    "当前目录": ".minecraft",
-    "官方启动器": "/home/me/.minecraft"
-  },
-  "minecraft_root": "当前目录",
-  "download": {
-    "max_tasks": 64,
-    "skip_music": false,
-    "mirror": "official-first",
-    "chunk_threshold_mib": 8,
-    "chunk_size_mib": 4,
-    "max_chunks_per_file": 8,
-    "max_attempts": 3
-  }
-}
-```
-
-- `launch.java` 可以是 `"autoselect"`，也可以是 `javas` 里的某个名字。
-- `javas` 的每一项只接受 `{ "path", "major", "arch" }` 对象，记录可执行文件路径、大版本号与
-  架构。已经有条目时，启动直接用这两个缓存字段选择 Java，不再执行 `java -version`；`javas`
-  为空且自动选择时仍会扫描常见目录。Java 换版本或换架构后重跑 `dmcl search-java`，或在
-  首选项里点「搜索已安装的 Java」刷新。
-- `search-java` 自动生成的 `javas` 名字形如
-  `openjdk-linux-x86_64-17.0.2-1a2b3c4d`，末尾是安装路径的短哈希；同一路径不会重复加入。
-- `launch.account` 是 `accounts` 里的某个名字，也可以写成 `null`；为 `null` 时启动会报错。
-- `launch.min_memory` / `launch.max_memory` 是堆大小（MiB），默认都是 `null`，表示自动分配。
-  `max_memory` 为 `null` 时取「系统可用内存的 3/4」与 1 GiB 中较大的那个；选中的 Java 是
-  32 位时再压到 1.5 GiB；读不到系统可用内存时固定按 1.5 GiB 分配。`min_memory` 为 `null`
-  时取最终的 `max_memory`。显式写的 `min_memory` 大于最终上限时原样保留，并在启动日志里
-  给出警告。
-- `launch.version_isolation` 默认为 `true`：每个版本把 `versions/<version_name>` 作为游戏
-  工作目录（存档、mods、配置互不影响），`${game_directory}` 也指向它。设为 `false` 时所有
-  版本共用根目录，游戏进程的工作目录与 `${game_directory}` 都改成 Minecraft 根目录。
-- `minecraft_roots` 是「名字 → 路径」的映射，键直接作为界面上的显示名；默认有两个：
-  「当前目录」（`.minecraft`，相对当前工作目录）和「官方启动器」（Windows 为
-  `%APPDATA%\.minecraft`、macOS 为 `~/Library/Application Support/minecraft`、
-  其它平台为 `~/.minecraft`）。
-- 映射值可以写相对路径，按当前工作目录解析；取用根目录时才绝对化，读取配置不会改写它。
-- 图形界面添加 / 编辑目录时可以选「绝对路径」或「相对路径」；选相对时，工作目录下的路径
-  写成相对形式，其余会提示并自动改回绝对路径。输入的路径必须是已存在的目录。
-- `minecraft_root` 指向 `minecraft_roots` 里的某个名字，默认「当前目录」。
-- `accounts` / `javas` / `minecraft_roots` 都保持配置文件里的书写顺序。
-- `download.skip_music` 为 `true` 时跳过 `*.ogg` 资源（音乐与音效）。
-- `download.mirror` 是镜像使用策略：`"official-only"`（仅官方源）、
-  `"official-first"`（官方源优先，失败再试镜像源，**默认**）、`"mirror-first"`（镜像源优先，
-  失败再回官方源）。元数据取数与文件下载都按这个优先级轮换。
-- 账户条目支持两种格式：
-  - `{ "type": "offline", "username": "..." }` —— 离线账户，uuid 由名字派生；
-  - `{ "type": "microsoft", "username": "...", "uuid": "..." }` —— 微软账户，配置里只
-    保存玩家名与 uuid；凭据（uuid + refresh token）存在系统钥匙串（服务名 `dmcl`，
-    用户名为账户键）。钥匙串里的 uuid 与配置不一致时按未登录处理。
-  默认配置不带任何账户：用 `dmcl login` 或在首选项的「账号」页创建微软账户，也可以
-  在「账号」页添加离线账户或手动写进配置。`dmcl login` 省略名字时用玩家名且不覆盖已有
-  账户；显式给出 `<name>` 时覆盖同名条目。启动链第一步会调用账户的登录源；离线账户直接
-  通过，微软账户静默刷新，凭据缺失或失效时报错。
-
-### 实例覆盖与元数据
-
-每个实例可以在自己的版本目录里写一份 `dmcl.json`，包含启动覆盖 `launch` 和实例元数据
-`instance`：
-
-```text
-<minecraft_root>/versions/<version_name>/dmcl.json
-```
-
-```json
-{
-  "instance": {
-    "category": "整合包"
-  },
-  "launch": {
-    "account": "steve",
-    "max_memory": 4096
-  }
-}
-```
-
-- `instance.category` 就是实例分类名；缺省或空白表示「未分类」。主页按分类分组显示，
-  修改文件后会自动刷新。
-- 文件不存在：完全使用全局 `launch`，不会自动创建文件。
-- 文件存在：以全局 `launch` 为底，实例里出现的字段逐项覆盖，没写的字段继续继承全局。
-- 启动配置只读：不会自动写回；坏字段的修复只在内存里生效。
-- GUI 新建实例时填了分类，会在安装成功后把 `instance.category` 写进该实例的
-  `dmcl.json`；分类留空则不创建文件。安装失败或取消会回滚版本目录，不会留下实例配置。
-- 实例配置里有启动相关的警告时，GUI 会在启动链开始前弹出确认框；点「取消」不启动，点
-  「继续启动」才使用修复后的配置继续。
-- 安装阶段还没有实例目录，使用全局 `launch`，不读取、不创建实例 `dmcl.json`。
-
+保存时先写临时文件再改名覆盖。图形界面启动时发现坏掉或不认识的配置项会回退默认值，把原文件
+备份为同目录的 `dmcl.old.json`，再写入修复后的配置并弹窗说明。
 
 ## 开发与测试
 
 ```bash
-cargo test --workspace                       # 离线单测
-cargo test --workspace -- --ignored          # 联网冒烟测试（要能访问 Mojang / bmclapi）
-cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
-```
-
-GTK4 前端额外检查：
-
-```bash
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings
 cargo test -p dmcl --features gtk4
 ```
 
-CI 分三个 workflow：`build.yaml` 跑 Linux / Windows / macOS 的默认构建；`build-gtk4.yaml`
-装 GTK 后跑三个平台的 GTK4 检查、测试、构建，并上传自包含包；`audit.yaml` 在每次提交、
-PR 和每周一定时跑 `cargo audit` 扫描依赖漏洞。
+需要联网的测试标了 `#[ignore]`，用 `cargo test --workspace -- --ignored` 单独运行。
 
-## 架构
-
-本项目是一个 cargo workspace，由六个 crate 组成（配置读取、业务逻辑、任务链、下载、
-元数据等各司其职）。总体结构、依赖关系与文档索引见
-[ARCHITECTURE.md](ARCHITECTURE.md)；各 crate 的职责、模块布局和设计细节见各自的 README：
-
-- [dmcl-task](crates/dmcl-task/README.md) —— 通用任务链、进度事件、取消与回滚；
-- [dmcl-mcmeta](crates/dmcl-mcmeta/README.md) —— 元数据文档、URL 模板与下载源、目录布局；
-- [dmcl-download](crates/dmcl-download/README.md) —— 并发 / 分块下载；
-- [dmcl-install](crates/dmcl-install/README.md) —— 版本规划、落盘、完整性检查、加载器安装；
-- [dmcl-launch](crates/dmcl-launch/README.md) —— 账户、Java 选择、命令行生成、启动；
-- [dmcl](crates/dmcl/README.md) —— 配置、CLI 与 GTK4 前端。
-
-GTK4 前端另有按目录拆分的文档，入口是
-[crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md)。
+总体结构、依赖关系与文档索引见 [ARCHITECTURE.md](ARCHITECTURE.md)；各 crate 的职责与设计
+见各自的 `README.md`，GTK4 前端从
+[crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md) 开始。
 
 ## 许可
 
