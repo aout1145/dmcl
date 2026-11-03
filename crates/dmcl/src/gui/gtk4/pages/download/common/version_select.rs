@@ -12,10 +12,10 @@
 //!
 //! 状态机：
 //!
-//! * `Idle` —— 还没给上下文，行不可展开；
+//! * `Idle` —— 还没给上下文，整行禁用（副标题「（先选择 Minecraft 版本）」）；
 //! * `Loading` —— 展开区里转 spinner；
 //! * `Ready` —— 正常列表（置顶区 + 过滤后的完整列表）；
-//! * `Empty` —— 取到了但列表为空（Forge 对不少版本没有构建）：行不可展开、副标题
+//! * `Empty` —— 取到了但列表为空（Forge 对不少版本没有构建）：整行禁用、副标题
 //!   「无可用版本」；
 //! * `Failed` —— 行尾显示刷新按钮，展开区只显示左对齐的错误信息。
 //!
@@ -197,7 +197,7 @@ impl VersionSelect {
             return format!("与 {conflict} 冲突");
         }
         match &self.state {
-            LoadState::Idle => "（先选择 Minecraft 版本）".to_string(),
+            LoadState::Idle => "先选择 Minecraft 版本".to_string(),
             LoadState::Loading => "载入中…".to_string(),
             LoadState::Ready(_) => match &self.selected {
                 Some(selected) => selected.label.clone(),
@@ -209,8 +209,9 @@ impl VersionSelect {
         }
     }
 
-    /// 这一行是否允许展开（Idle / Empty / 冲突不可；Loading / Failed 允许展开看状态与错误）。
-    fn can_expand(&self) -> bool {
+    /// 这一行是否可用（可展开、可选择）：Idle（未选 MC 版本）/ Empty（该上下文下没有
+    /// 可用版本）/ 冲突时整行禁用；Loading / Failed 仍可展开看进度与错误。
+    fn is_enabled(&self) -> bool {
         self.conflict.is_none() && !matches!(self.state, LoadState::Idle | LoadState::Empty)
     }
 
@@ -323,11 +324,11 @@ impl VersionSelect {
                 .set_text(&format!("获取版本列表失败：{err}"));
         }
 
-        let can_expand = self.can_expand();
+        let enabled = self.is_enabled();
         let was_enabled = self.expander.enables_expansion();
-        if was_enabled != can_expand {
-            self.expander.set_enable_expansion(can_expand);
-            if can_expand {
+        if was_enabled != enabled {
+            self.expander.set_enable_expansion(enabled);
+            if enabled {
                 // libadwaita 在 enable-expansion 从 false 变 true 时会顺手展开；
                 // 除了配置了首次自动展开的行（MC），其余保持收起，等用户点标题栏。
                 // 自动展开只消费一次，之后用户手动收起不会被后续状态同步重新展开。
@@ -335,8 +336,8 @@ impl VersionSelect {
                 self.expand_on_first_show = false;
             }
         }
-        if !can_expand {
-            // Empty / Idle 时不能让用户停在一个空展开区里。
+        if !enabled {
+            // 禁用时不能让用户停在一个空展开区里。
             self.expander.set_expanded(false);
         }
     }
@@ -517,7 +518,7 @@ impl SimpleComponent for VersionSelect {
             add_css_class: "dmcl-version-select",
             set_title: &model.title,
             #[watch]
-            set_sensitive: model.conflict.is_none(),
+            set_sensitive: model.is_enabled(),
             #[watch]
             set_subtitle: &model.display_text(),
 
