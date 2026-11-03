@@ -674,7 +674,6 @@ fn show_add_offline(sender: &ComponentSender<AccountPage>) {
 
 /// 删除前的确认框；微软账户会说明凭据也会一起清理。
 fn confirm_remove(key: &str, username: &str, sender: &ComponentSender<AccountPage>) {
-    let config = config_store::store().config();
     let title = format!("删除账户「{username}」？");
     let dialog = adw::AlertDialog::new(Some(&title), None);
     dialog.add_response("cancel", "取消");
