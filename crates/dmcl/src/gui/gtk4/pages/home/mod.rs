@@ -130,7 +130,8 @@ impl SimpleComponent for HomePage {
                     #[local_ref]
                     sections_widget -> gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 24,
+                        // 组内标题与卡片间距是 12，这里再留出明显更大的组间距，避免上一组卡片和下一组标题挤在一起。
+                        set_spacing: 64,
                         set_margin_top: 18,
                         set_margin_bottom: 80,
                         set_margin_start: 18,

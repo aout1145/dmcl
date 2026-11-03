@@ -32,7 +32,7 @@ impl FactoryComponent for CategorySection {
     view! {
         root = gtk::Box {
             set_orientation: gtk::Orientation::Vertical,
-            set_spacing: 8,
+            set_spacing: 12,
 
             gtk::Label {
                 set_xalign: 0.0,
