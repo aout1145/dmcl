@@ -45,6 +45,9 @@ DMCL_MICROSOFT_CLIENT_ID=<client-id> cargo build --release
 不设置也能编译，只是 `dmcl login` 会提示缺少应用 ID；离线账户不受影响。Azure 应用需要
 启用「公共客户端流」（device code flow），不需要配置重定向 URI。
 
+GitHub Actions 的 `build.yaml` / `build-gtk4.yaml` 会读取仓库 secret
+`DMCL_MICROSOFT_CLIENT_ID`：配置了就用它的值构建，没配置时不会设置这个环境变量。
+
 ### 带图形界面（推荐）
 
 图形前端由 cargo feature `gtk4` 门控，默认**不**编译；开启需要 GTK ≥ 4.22、

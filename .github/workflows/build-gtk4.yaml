@@ -18,6 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 只有配置了 secret 才导出环境变量，空串保持「未设置」。
+      - name: Configure Microsoft client id
+        shell: bash
+        env:
+          CLIENT_ID: ${{ secrets.DMCL_MICROSOFT_CLIENT_ID }}
+        run: |
+          if [ -n "$CLIENT_ID" ]; then
+            echo "DMCL_MICROSOFT_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -59,6 +69,16 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v5
+
+      # 只有配置了 secret 才导出环境变量，空串保持「未设置」。
+      - name: Configure Microsoft client id
+        shell: bash
+        env:
+          CLIENT_ID: ${{ secrets.DMCL_MICROSOFT_CLIENT_ID }}
+        run: |
+          if [ -n "$CLIENT_ID" ]; then
+            echo "DMCL_MICROSOFT_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -102,6 +122,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
+
+      # 只有配置了 secret 才导出环境变量，空串保持「未设置」。
+      - name: Configure Microsoft client id
+        shell: bash
+        env:
+          CLIENT_ID: ${{ secrets.DMCL_MICROSOFT_CLIENT_ID }}
+        run: |
+          if [ -n "$CLIENT_ID" ]; then
+            echo "DMCL_MICROSOFT_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
