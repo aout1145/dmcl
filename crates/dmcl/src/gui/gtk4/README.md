@@ -96,6 +96,9 @@
   本身不会监听外部状态，页面必须先收到一条消息。
 - `update` 自己负责异步落盘，并强制调用方传一个失败处理函数（在 GLib 主线程上执行）；
   保存内部串行化，连续修改时最后一次写入包含全部改动。`update` 必须在 GTK 主线程调用。
+- 后台任务（例如启动链里的 Java 选择器）用 `update_async`：它同步改内存并通知页面，返回
+  的 future 只负责落盘，调用方可以 `await` 后自行处理保存错误，也可以在必须“改完立刻重读”
+  的场景里先拿返回值、稍后再保存。
 - 启动时加载配置发现的问题由 `save_with_backup` 修复：先备份原文件为同目录的
   `dmcl.old.json`，再写入修复后的配置。
 - 读 guard 要短命：`std::sync::RwLock` 不可重入，持着 guard 调 `update` 会自锁。
@@ -136,6 +139,7 @@ gtk4/
     │   ├── README.md            # 主页 / 实例磁贴 / 启动停止
     │   ├── mod.rs
     │   ├── message.rs
+    │   ├── java.rs              # GUI 的 Java 选择器（无可用配置时扫描本机）
     │   └── instance_card.rs
     ├── settings/
     │   ├── README.md            # 首选项

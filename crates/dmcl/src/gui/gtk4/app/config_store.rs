@@ -13,6 +13,7 @@
 //! 读 guard 要短命：`std::sync::RwLock` 不可重入，持着 guard 调 `update` 会自锁。用
 //! `#[watch]` 读配置时一条语句内读完，不要让 guard 活到会写配置的回调里。
 
+use std::future::Future;
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
 use tokio::sync::watch;
@@ -90,12 +91,39 @@ impl ConfigStore {
         f: impl FnOnce(&mut Config),
         on_error: impl FnOnce(anyhow::Error) + 'static,
     ) {
-        self.apply(f);
-        self.persist(PersistMode::Plain, move |result| {
-            if let Err(err) = result {
-                on_error(err);
+        let saving = self.update_async(f);
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        relm4::spawn(async move {
+            let _ = tx.send(saving.await);
+        });
+        relm4::spawn_local(async move {
+            match rx.await {
+                Ok(Err(err)) => on_error(err),
+                Ok(Ok(())) => {}
+                // 保存任务在回传结果之前结束：不能静默当成成功。
+                Err(_) => on_error(anyhow::anyhow!("保存配置任务意外结束")),
             }
         });
+    }
+
+    /// 原地修改配置、通知订阅者，返回落盘 future。
+    ///
+    /// 修改与通知**同步**完成，调用方随后 `reload` 也能立刻读到新值；返回的 future 只负责
+    /// 拿保存锁、克隆快照并写文件。后台任务可以直接 `.await` 它并自行决定怎么处理保存错误。
+    pub fn update_async(
+        &self,
+        f: impl FnOnce(&mut Config),
+    ) -> impl Future<Output = anyhow::Result<()>> + 'static {
+        self.apply(f);
+
+        let config = Arc::clone(&self.config);
+        let save_lock = Arc::clone(&self.save_lock);
+        async move {
+            let _saving = save_lock.lock().await;
+            let snapshot = config.read().expect("配置锁已中毒").clone();
+            snapshot.save().await
+        }
     }
 
     /// 把当前配置原样落盘，不修改值、不通知订阅者。
@@ -151,7 +179,7 @@ impl ConfigStore {
 mod tests {
     use super::*;
 
-    // 测试只走 apply：`update` 会真的写 `Config::path()`，不能碰用户的配置。
+    // 测试只走 apply / update_async：真正 await 保存会写 `Config::path()`，不能碰用户的配置。
 
     #[test]
     fn apply_changes_the_config_seen_through_existing_handles() {
@@ -161,6 +189,19 @@ mod tests {
         let before = config.read().launch.max_memory.unwrap_or(0);
         store.apply(|config| config.launch.max_memory = Some(before + 1));
         assert_eq!(config.read().launch.max_memory, Some(before + 1));
+    }
+
+    #[test]
+    fn update_async_applies_before_the_save_future_is_polled() {
+        let store = ConfigStore::new(Config::default());
+        let config = store.config();
+        let changes = store.changes();
+
+        // 设置页依赖这个语义：改完立刻 reload，必须读到新值。
+        let _saving = store.update_async(|config| config.launch.max_memory = Some(2048));
+        assert_eq!(config.read().launch.max_memory, Some(2048));
+        assert!(changes.has_changed().unwrap());
+        // 不 poll 保存 future，测试不会真的写配置文件；future 在这里随作用域丢弃。
     }
 
     #[test]

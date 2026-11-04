@@ -9,11 +9,13 @@ mod category_section;
 mod create_instance;
 mod instance_card;
 mod instance_warning;
+mod java;
 pub(crate) mod message;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::event::{EventKind, ModifyKind};
@@ -378,13 +380,14 @@ impl HomePage {
         name: &str,
         launch: &LaunchConfig,
     ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
+        let java = Arc::new(java::GuiJavaSelector {
+            choice: launch.java.clone(),
+            config: self.config.clone(),
+        });
         let config = self.config.read();
-        let option = config.launch_option(launch, name, &self.root_path)?;
-        let install = std::sync::Arc::new(config.install_options(
-            config.download_source(),
-            launch,
-            &self.root_path,
-        )?);
+        let option = config.launch_option(launch, name, &self.root_path, java)?;
+        let install =
+            std::sync::Arc::new(config.install_options(config.download_source(), &self.root_path)?);
         Ok(dmcl_launch::launch_chain(option, install))
     }
 

@@ -91,6 +91,21 @@ HomeMsg::MonitorExited { name, stopped, abnormal }
 它能精确判断正常退出、异常退出、用户主动停止。关闭标签页后 monitor task 和 `GameMonitor`
 继续工作；重新打开页面时看到的就是最新状态。只有程序退出时才会中止这些任务。
 
+## Java 选择
+
+主页启动链使用 `home/java.rs` 的 `GuiJavaSelector`，与 CLI「只认配置」的策略不同：
+
+- `JavaChoice::Named`：只按配置名取；路径失效直接报错，不自动扫描；
+- `JavaChoice::Auto`：先从 `javas` 里路径存在的条目自动选择；一个可用条目都没有时扫描
+  本机，把结果合并进 `javas` 后继续启动。写配置失败静默忽略，本次仍使用扫描结果；
+- 选中的 Java 与版本要求不匹配时，由启动链的「选择 Java」步骤向用户确认，确认后才继续。
+
+将来的自动下载 Java 只在这个选择器里实现。
+
+安装器 processor 用的 Java 不走这个选择器：`Config::install_options` 使用
+`download.java`（默认 `autoselect`），从 `javas` 自动选择，没有可用条目时扫描本机，
+与启动选中的 Java 无关。
+
 ## 启动 / 停止
 
 - **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」

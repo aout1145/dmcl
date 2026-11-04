@@ -164,7 +164,7 @@ pub fn natives_task(
     os: Os,
     arch: Arch,
 ) -> TaskChain<(), ()> {
-    TaskChain::new(format!("准备 natives：{version_name}"))
+    TaskChain::new(format!("解压 natives：{version_name}"))
         .then(
             natives_download_step(options.clone(), version_name.clone(), os, arch),
             "下载 natives",

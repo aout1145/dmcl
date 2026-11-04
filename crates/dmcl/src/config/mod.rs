@@ -29,7 +29,7 @@
 //!     "官方启动器": "…"
 //!   },
 //!   "minecraft_root": "当前目录",
-//!   "download": { "max_tasks": 64, "skip_music": false, … }
+//!   "download": { "max_tasks": 64, "skip_music": false, "java": "autoselect", … }
 //! }
 //! ```
 //!
@@ -49,6 +49,7 @@ pub use account::AccountConfig;
 pub(crate) use account::{unique_account_name, KeyringTokenStore};
 pub use download::DownloadConfig;
 pub use instance::{instance_config_path, read_instance_category, write_instance_category};
+pub(crate) use java::ensure_java_path;
 pub use java::{
     configs_from_details, merge_javas, same_java_path, unique_java_name, JavaChoice, JavaConfig,
     JavaConfigs,
@@ -301,6 +302,10 @@ impl Config {
             &self.accounts,
             &self.javas,
         ));
+        warnings.extend(java::validate_download_selection(
+            &mut self.download,
+            &self.javas,
+        ));
         warnings
     }
 
@@ -367,20 +372,18 @@ impl Config {
         self.save_to(path).await
     }
 
-    /// 配置 + 传入的启动配置 → [`InstallOptions`]（含「用哪个 java 跑安装器 processor」）。
-    pub fn install_options(
-        &self,
-        source: DownloadSource,
-        launch: &LaunchConfig,
-        root: &Path,
-    ) -> Result<InstallOptions> {
+    /// 配置 + 下载源 → [`InstallOptions`]。
+    ///
+    /// 安装器 processor 用的 Java 由安装流程自己的 `JavaProvider` 按 `download.java` 选择，
+    /// 与 `launch.java` 无关。
+    pub fn install_options(&self, source: DownloadSource, root: &Path) -> Result<InstallOptions> {
         Ok(InstallOptions::new(root.to_path_buf(), source)
             .with_download(self.download_options())
             .with_skip_music(self.download.skip_music)
-            .with_java(Arc::new(java::ConfigJava {
-                choice: launch.java.clone(),
-                configs: self.javas.clone(),
-            })))
+            .with_java(Arc::new(java::InstallJavaProvider::new(
+                self.download.java.clone(),
+                self.javas.clone(),
+            ))))
     }
 }
 
@@ -827,7 +830,7 @@ mod tests {
 
         let root = dir.join("mc");
         let install = config
-            .install_options(config.download_source(), &config.launch, &root)
+            .install_options(config.download_source(), &root)
             .unwrap();
         assert_eq!(install.root_path, root);
         assert!(install.skip_music);

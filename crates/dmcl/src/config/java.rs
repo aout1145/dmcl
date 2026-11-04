@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use dmcl_install::JavaProvider;
-use dmcl_launch::{auto_select_java, JavaDetails, JavaOption, JavaSelector, ScanJava};
+use dmcl_launch::{auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption};
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::{Arch, Os};
+use dmcl_task::BoxFuture;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -34,7 +35,8 @@ pub struct JavaConfig {
 }
 
 impl JavaConfig {
-    fn option(&self) -> JavaOption {
+    /// 转成 `dmcl-launch` 只认识的运行时信息。
+    pub(crate) fn option(&self) -> JavaOption {
         JavaOption {
             path: self.path.clone(),
             major: self.major,
@@ -46,7 +48,7 @@ impl JavaConfig {
 /// java 配置表：名字 → 配置项，保持顺序。
 pub type JavaConfigs = IndexMap<String, JavaConfig>;
 
-/// `launch.java` —— 要么自动选择，要么是 [`JavaConfigs`] 里的一个键。
+/// `launch.java` / `download.java` —— 要么自动选择，要么是 [`JavaConfigs`] 里的一个键。
 ///
 /// 序列化成普通字符串（`"autoselect"` 或配置项名字），因此配置文件里直接写即可。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -107,61 +109,48 @@ pub(super) fn parse_javas(body: Value, warnings: &mut Vec<ConfigWarning>) -> Jav
     super::parse_table("javas", body, JavaConfigs::new(), warnings)
 }
 
+/// `launch.java` / `download.java` 指向不存在的 Java 时回退为自动选择。
+fn validate_choice(
+    field: &str,
+    choice: &mut JavaChoice,
+    javas: &JavaConfigs,
+) -> Option<ConfigWarning> {
+    let JavaChoice::Named(name) = choice else {
+        return None;
+    };
+    if javas.contains_key(name) {
+        return None;
+    }
+    let name = name.clone();
+    *choice = JavaChoice::Auto;
+    Some(ConfigWarning {
+        message: format!("配置项「{field}」指向的 Java 不存在：{name}，已改为 autoselect"),
+        detail: "请编辑配置选择已有 Java".to_string(),
+    })
+}
+
 /// `launch.java` 指向不存在的 Java 时回退为自动选择。
 pub(super) fn validate_selection(
     launch: &mut LaunchConfig,
     javas: &JavaConfigs,
 ) -> Vec<ConfigWarning> {
-    let mut warnings = Vec::new();
-
-    if let JavaChoice::Named(name) = &launch.java {
-        if !javas.contains_key(name) {
-            let name = name.clone();
-            launch.java = JavaChoice::Auto;
-            warnings.push(ConfigWarning {
-                message: format!(
-                    "配置项「launch.java」指向的 Java 不存在：{name}，已改为 autoselect"
-                ),
-                detail: "请编辑配置选择已有 Java".to_string(),
-            });
-        }
-    }
-
-    warnings
+    validate_choice("launch.java", &mut launch.java, javas)
+        .into_iter()
+        .collect()
 }
 
-/// 按配置里的选择挑一个 Java；只读缓存的 `major` / `arch`，不执行 Java。
-pub(super) async fn select_java(
-    required_major: u32,
-    choice: &JavaChoice,
-    configs: &JavaConfigs,
-) -> Result<JavaOption> {
-    match choice {
-        JavaChoice::Named(name) => {
-            let java = configs
-                .get(name)
-                .ok_or_else(|| anyhow!("Java 配置项不存在：{name}"))?;
-            ensure_java_path(name, java)?;
-            Ok(java.option())
-        }
-        JavaChoice::Auto if configs.is_empty() => ScanJava.select_java(required_major).await,
-        JavaChoice::Auto => {
-            let options: Vec<JavaOption> = configs
-                .values()
-                .filter(|java| java.path.is_file())
-                .map(JavaConfig::option)
-                .collect();
-            if options.is_empty() {
-                return Err(anyhow!("配置中的 Java 可执行文件均不存在，请重新搜索 Java"));
-            }
-            auto_select_java(required_major, &options)
-                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中提供 Java 路径"))
-        }
-    }
+/// `download.java` 指向不存在的 Java 时回退为自动选择。
+pub(super) fn validate_download_selection(
+    download: &mut super::DownloadConfig,
+    javas: &JavaConfigs,
+) -> Vec<ConfigWarning> {
+    validate_choice("download.java", &mut download.java, javas)
+        .into_iter()
+        .collect()
 }
 
 /// 手动指定 Java 时，路径必须仍然存在；选择阶段只检查文件，不执行 Java。
-fn ensure_java_path(name: &str, java: &JavaConfig) -> Result<()> {
+pub(crate) fn ensure_java_path(name: &str, java: &JavaConfig) -> Result<()> {
     if java.path.is_file() {
         Ok(())
     } else {
@@ -280,14 +269,18 @@ impl Config {
         Ok(())
     }
 
-    /// 删除 Java；删掉的正好是默认项时改回自动选择。
+    /// 删除 Java；删掉的正好是启动 / 安装的选择项时改回自动选择。
     pub fn remove_java(&mut self, name: &str) -> Result<()> {
         if !self.javas.contains_key(name) {
             return Err(anyhow!("Java 不存在：{name}"));
         }
         self.javas.shift_remove(name);
-        if self.launch.java == JavaChoice::Named(name.to_string()) {
+        let named = JavaChoice::Named(name.to_string());
+        if self.launch.java == named {
             self.launch.java = JavaChoice::Auto;
+        }
+        if self.download.java == named {
+            self.download.java = JavaChoice::Auto;
         }
         Ok(())
     }
@@ -318,27 +311,48 @@ fn path_hash(path: &Path) -> String {
     )
 }
 
-/// 让 `dmcl-install` 用配置里的 java 选择去跑安装器 processor。
-pub(super) struct ConfigJava {
-    pub(super) choice: JavaChoice,
-    pub(super) configs: JavaConfigs,
+/// 安装流程用的 Java 提供者：按 `download.java` 选择，自动模式下先读配置、再扫描本机。
+///
+/// 与启动时的 `launch.java` 无关：安装只需要一个能跑安装器 processor 的 Java。
+/// 扫描结果不写回配置。
+pub(crate) struct InstallJavaProvider {
+    choice: JavaChoice,
+    configs: JavaConfigs,
 }
 
-impl JavaSelector for ConfigJava {
-    fn select_java<'a>(
-        &'a self,
-        required_major: u32,
-    ) -> dmcl_task::BoxFuture<'a, Result<JavaOption>> {
-        Box::pin(async move { select_java(required_major, &self.choice, &self.configs).await })
+impl InstallJavaProvider {
+    pub(crate) fn new(choice: JavaChoice, configs: JavaConfigs) -> Self {
+        Self { choice, configs }
     }
 }
 
-impl JavaProvider for ConfigJava {
-    fn java_for<'a>(&'a self, required_major: u32) -> dmcl_task::BoxFuture<'a, Result<PathBuf>> {
+impl JavaProvider for InstallJavaProvider {
+    fn java_for<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<PathBuf>> {
         Box::pin(async move {
-            select_java(required_major, &self.choice, &self.configs)
-                .await
+            if let JavaChoice::Named(name) = &self.choice {
+                let java = self
+                    .configs
+                    .get(name)
+                    .ok_or_else(|| anyhow!("Java 配置项不存在：{name}"))?;
+                ensure_java_path(name, java)?;
+                return Ok(java.path.clone());
+            }
+
+            let configured: Vec<JavaOption> = self
+                .configs
+                .values()
+                .filter(|java| java.path.is_file())
+                .map(JavaConfig::option)
+                .collect();
+            if let Some(java) = auto_select_java(required_major, &configured) {
+                return Ok(java.path);
+            }
+
+            let found = configs_from_details(find_java(&default_java_roots()).await);
+            let options: Vec<JavaOption> = found.values().map(JavaConfig::option).collect();
+            auto_select_java(required_major, &options)
                 .map(|java| java.path)
+                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中添加 Java 路径"))
         })
     }
 }
@@ -471,34 +485,20 @@ mod tests {
         assert!(config.launch.java.is_auto());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("launch.java"));
+
+        let (config, warnings) = Config::parse(r#"{"download": {"java": "nope"}}"#);
+        assert!(config.download.java.is_auto());
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.message.contains("download.java")));
     }
 
     #[tokio::test]
-    async fn selection_uses_cached_versions_without_probing() {
-        // 文件都是空的；能选中说明选择过程只检查路径，没有执行 java
-        let dir = temp_java_dir("java-selection");
+    async fn install_java_auto_selects_from_usable_config_entries() {
+        let dir = temp_java_dir("install-java");
         let configs = JavaConfigs::from([
             ("eight".to_string(), file_entry(&dir, "eight", 8)),
             ("seventeen".to_string(), file_entry(&dir, "seventeen", 17)),
-            ("twentyone".to_string(), file_entry(&dir, "twentyone", 21)),
-        ]);
-
-        let selected = select_java(17, &JavaChoice::Auto, &configs).await.unwrap();
-        assert_eq!(selected.path, dir.join("seventeen"));
-
-        let selected = select_java(8, &JavaChoice::Named("twentyone".into()), &configs)
-            .await
-            .unwrap();
-        assert_eq!(selected.path, dir.join("twentyone"));
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn auto_selection_ignores_missing_paths() {
-        let dir = temp_java_dir("java-mixed");
-        let valid = file_entry(&dir, "valid", 17);
-        let configs = JavaConfigs::from([
             (
                 "missing".to_string(),
                 JavaConfig {
@@ -507,72 +507,35 @@ mod tests {
                     arch: Arch::X86_64,
                 },
             ),
-            ("valid".to_string(), valid.clone()),
         ]);
+        let provider = InstallJavaProvider::new(JavaChoice::Auto, configs);
 
-        // 21 的路径不存在，只能选仍然存在的 17
-        let selected = select_java(21, &JavaChoice::Auto, &configs).await.unwrap();
-        assert_eq!(selected.path, valid.path);
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn missing_paths_are_reported_for_auto_and_named_selection() {
-        let dir = temp_java_dir("java-missing");
-        let missing = dir.join("java");
-        let configs = JavaConfigs::from([(
-            "gone".to_string(),
-            JavaConfig {
-                path: missing.clone(),
-                major: 17,
-                arch: Arch::X86_64,
-            },
-        )]);
-
-        let err = select_java(17, &JavaChoice::Auto, &configs)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("均不存在"), "{err}");
-        assert!(err.contains("重新搜索 Java"), "{err}");
-
-        let err = select_java(17, &JavaChoice::Named("gone".into()), &configs)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("gone"), "{err}");
-        assert!(err.contains(&missing.display().to_string()), "{err}");
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn unknown_named_java_is_reported_even_without_entries() {
-        let err = select_java(17, &JavaChoice::Named("nope".into()), &JavaConfigs::new())
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("nope"), "{err}");
-        assert!(err.contains("不存在"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn config_java_converts_to_the_launch_types() {
-        let dir = temp_java_dir("java-config-java");
-        let configs = JavaConfigs::from([("jdk".to_string(), file_entry(&dir, "jdk", 17))]);
-        let java = ConfigJava {
-            choice: JavaChoice::Named("jdk".into()),
-            configs,
-        };
-
-        let option = JavaSelector::select_java(&java, 17).await.unwrap();
-        assert_eq!(option.path, dir.join("jdk"));
-        assert_eq!(option.major, 17);
-        assert_eq!(option.arch, Arch::X86_64);
         assert_eq!(
-            JavaProvider::java_for(&java, 17).await.unwrap(),
-            dir.join("jdk")
+            JavaProvider::java_for(&provider, 17).await.unwrap(),
+            dir.join("seventeen")
+        );
+        // 21 的路径不存在，不能选它；退回仍然存在的最高版本 17。
+        assert_eq!(
+            JavaProvider::java_for(&provider, 21).await.unwrap(),
+            dir.join("seventeen")
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_java_honors_an_explicit_choice() {
+        let dir = temp_java_dir("install-java-named");
+        let configs = JavaConfigs::from([
+            ("eight".to_string(), file_entry(&dir, "eight", 8)),
+            ("seventeen".to_string(), file_entry(&dir, "seventeen", 17)),
+        ]);
+        let provider = InstallJavaProvider::new(JavaChoice::Named("eight".into()), configs);
+
+        // 显式指定就不按版本要求改选，即使 8 低于要求。
+        assert_eq!(
+            JavaProvider::java_for(&provider, 17).await.unwrap(),
+            dir.join("eight")
         );
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -622,10 +585,12 @@ mod tests {
         let mut config = Config::default();
         config.add_java("jdk", entry("/jdk", 17)).unwrap();
         config.launch.java = JavaChoice::Named("jdk".to_string());
+        config.download.java = JavaChoice::Named("jdk".to_string());
         config.remove_java("jdk").unwrap();
 
         assert!(config.javas.is_empty());
         assert_eq!(config.launch.java, JavaChoice::Auto);
+        assert_eq!(config.download.java, JavaChoice::Auto);
         assert!(config.remove_java("jdk").is_err());
     }
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
-use dmcl_launch::{LaunchOption, LAUNCHER_NAME};
+use dmcl_launch::{JavaSelector, LaunchOption, LAUNCHER_NAME};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -188,19 +188,16 @@ impl Config {
         instance_result(launch, path, warnings)
     }
 
-    /// 配置 + 传入的启动配置 → [`LaunchOption`]。
+    /// 配置 + 传入的启动配置 + Java 选择器 → [`LaunchOption`]。
     pub fn launch_option(
         &self,
         launch: &LaunchConfig,
         version_name: &str,
         root: &Path,
+        java: Arc<dyn JavaSelector>,
     ) -> Result<LaunchOption> {
         let account_source = self.selected_account_source(launch)?;
-        let mut option = LaunchOption::new(account_source, root.to_path_buf(), version_name)
-            .with_java(Arc::new(java::ConfigJava {
-                choice: launch.java.clone(),
-                configs: self.javas.clone(),
-            }))
+        let mut option = LaunchOption::new(account_source, root.to_path_buf(), version_name, java)
             .with_local_layout(self.download.skip_music);
         option.window_width = launch.window_width;
         option.window_height = launch.window_height;
@@ -454,7 +451,16 @@ mod tests {
         config.launch.java = JavaChoice::Named("jdk".to_string());
 
         let option = config
-            .launch_option(&config.launch, "1.20.1", &root)
+            .launch_option(
+                &config.launch,
+                "1.20.1",
+                &root,
+                Arc::new(dmcl_launch::JavaOption {
+                    path: PathBuf::from("/nonexistent/bin/java"),
+                    major: 17,
+                    arch: dmcl_mcmeta::os::Arch::X86_64,
+                }),
+            )
             .unwrap();
         assert_eq!(option.root_path, root);
         assert_eq!(option.window_width, 1920);

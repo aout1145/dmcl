@@ -15,7 +15,7 @@ java.rs      JavaOption / JavaDetails、JavaSelector、扫描与自动选择
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
 option.rs    LaunchOption
-prepare.rs   启动链：登录 → 检查并补全 → 准备 natives → 生成参数 → 启动
+prepare.rs   启动链：检查并补全 → 选择 Java → 解压 natives → 登录 → 生成参数 → 启动
 monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```
 
@@ -52,7 +52,9 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 - `auto_select_java(required_major, &options)` 只按缓存的 `major` / `arch` 选择、**不执行
   Java**：版本相等优先，其次最接近的更高版本，再其次最高的更低版本；同一档内优先当前
   平台架构，再按候选顺序；
-- `ScanJava` 是没有配置表时的默认选择器：扫描常见目录后自动挑选。
+- 具体用哪个 Java 由调用者实现的 `JavaSelector` 决定；`allows_auto_install()` 表示选择失败
+  或版本 / 架构不匹配时，是否允许启动流程自动下载 Java 后重选。`JavaOption` 作为固定选择器
+  时返回 `false`。
 
 ### 内存
 
@@ -97,19 +99,21 @@ monitor.wait().await?;
 
 ### 一站式启动链
 
-`launch_chain(option, install)` 把五步串成 `TaskChain<(), GameMonitor>`：
+`launch_chain(option, install)` 把六步串成 `TaskChain<(), GameMonitor>`：
 
-1. **登录** —— 先让 `AccountSource` 产出可用会话，失败就中止、不开始下载；
-2. **检查并补全文件** —— 复用 `dmcl-install` 的完整性检查；缺件时跑一次安装补全；
-3. **准备 natives** —— 先选好 java，再按当前平台的 os 与这个 java 的 arch 跑
-   `natives_task`（下载 + 解压到 `natives_dir`，即
-   `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
-4. **生成启动参数** —— 只在文件齐备、java 选好后才拼，且复用同一个 java，不再选第二次；
-5. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
+1. **检查并补全文件** —— 复用 `dmcl-install` 的完整性检查；缺件时跑一次安装补全；
+2. **选择 Java** —— 读取版本要求的 Java 大版本，通过选择器选好 Java；版本 / 架构不匹配时
+   先等用户确认；
+3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑 `natives_task`（下载 + 解压到
+   `natives_dir`，即 `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
+4. **登录** —— 让 `AccountSource` 产出可用会话；失败就中止，不会继续生成参数或启动；
+5. **生成启动参数** —— 只在文件齐备、Java 选好、账户可用后才拼，且复用同一个 Java；
+6. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
    还是中途停掉。
 
-「先登录、再补全文件、最后生成参数」是刻意的顺序：认证失败时立即中止，不会开始下载；
-参数只在文件齐备后才拼，避免在缺件时生成一份用不了（或需要重拼）的命令行。
+前四步里只有登录需要账户，所以登录放在解压 natives 之后、生成参数之前；这样长时间下载时
+不会白跑一次登录，也不会让会话在下载期间过期。参数只在文件齐备后才拼，避免在缺件时生成
+一份用不了（或需要重拼）的命令行。
 
 ## 相关文档
 

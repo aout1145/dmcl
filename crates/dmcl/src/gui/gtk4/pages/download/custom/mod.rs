@@ -173,7 +173,7 @@ impl CustomPage {
         }
         let options = {
             let config = self.config.read();
-            config.install_options(config.download_source(), &config.launch, &self.root_path)
+            config.install_options(config.download_source(), &self.root_path)
         };
         let options = match options {
             Ok(options) => Arc::new(options),

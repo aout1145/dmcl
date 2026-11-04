@@ -87,6 +87,16 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`），包含 `launch`
 `major` / `arch` 合并进全局 `javas` 并保存；手动添加 / 编辑条目时由首选项探测一次并写入
 同样的缓存。之后启动只读这份缓存，不再探测。
 
+CLI 的启动只认配置：`javas` 为空或路径全部失效时直接报错并提示先执行
+`dmcl search-java`，不会扫描本机。GUI 的启动选择器（`pages/home/java.rs`）在配置里没有
+可用条目时会扫描本机，把结果合并进 `javas` 后继续启动；写配置失败静默忽略，不阻断本次
+启动。将来的自动下载 Java 只接在 GUI 的选择器里，CLI 始终只使用配置。
+
+安装流程的 Java 与启动分开：`download.java` 决定安装器 processor 用哪个 Java（默认
+`autoselect`），与 `launch.java` 无关。`autoselect` 先从 `javas` 里可用的条目自动选择，
+一个都没有时扫描本机再选（不写回配置）；显式指定时只使用该条目。CLI 与 GUI 的安装都走
+这份逻辑。
+
 ### CLI
 
 CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/mod.rs`，各命令实现按文件
@@ -112,7 +122,8 @@ GTK4 + libadwaita 前端在 `src/gui/gtk4`，用 relm4，由 cargo feature `gtk4
 - GUI 共用一份运行时配置：`gtk4/app/config_store.rs` 里的 `ConfigStore` 是 GTK 主线程上的
   全局单例，GUI 入口把 `Config::load_sync` 读到的配置放进去。页面拿 `ConfigRef` 只读
   句柄，写只能走 `ConfigStore::update`：原地修改、通知订阅者，并异步落盘（保存失败时在
-  主线程回调调用方给的错误处理函数）；
+  主线程回调调用方给的错误处理函数）。启动链这类后台任务可以先用 `update_async` 同步
+  修改配置，再自行 `await` 落盘；保存失败由调用方决定是否提示；
 - 配置里新增的根目录会补建常驻主页；删除根目录不销毁已有页面，只从标题栏菜单移除；
 - 首选项的「账号」页管理离线与微软账户：添加离线账户、设备代码登录 Microsoft、删除账户；
   文件里只保存玩家名与 uuid，微软凭据仍在系统钥匙串；

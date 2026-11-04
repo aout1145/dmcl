@@ -84,8 +84,7 @@ pub(crate) async fn run(args: InstallArgs, config: &Config, root_path: &Path) ->
         spec = spec.with_loader(*kind, version.clone());
     }
 
-    let launch = config.launch.clone();
-    let options = Arc::new(config.install_options(source, &launch, root_path)?);
+    let options = Arc::new(config.install_options(source, root_path)?);
     let mut printer = ProgressPrinter::new();
     let result = install_task(options, spec)
         .run_with((), |event| handle_event(&mut printer, event))

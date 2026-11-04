@@ -127,7 +127,8 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 
 「搜索已安装的 Java」在后台调用 `dmcl_launch::find_java`，结果按路径去重后合并进 `javas`：
 已有条目保留名字、只刷新 `major` / `arch`，新条目用扫描生成的名字（`类型-平台-架构-版本-短哈希`）。
-合并规则是 `config/java.rs` 的 `merge_javas`，CLI 的 `search-java` 与界面共用。
+合并规则是 `config/java.rs` 的 `merge_javas`，CLI 的 `search-java`、界面与主页启动时的自动
+扫描共用。
 
 添加 / 编辑对话框只有可执行文件一行。路径可以用文件选择器，也可以手输；路径一变就清掉旧
 结果并立即校验，不必等输入框失去焦点。半截路径只检查文件是否存在，只有路径已经指向文件时
@@ -139,7 +140,7 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 绝对路径和探测结果；新增条目的内部键由探测结果自动生成，不从界面收集名称。
 
 `Config` 上的 Java 方法与根目录那套保持一致：名称只是内部键，非空且不重名；拖动只改顺序；
-删掉的正好是 `launch.java` 指向的条目时，`launch.java` 回到 `autoselect`。
+删掉的正好是 `launch.java` / `download.java` 指向的条目时，对应选择项回到 `autoselect`。
 
 ## 全局游戏选项
 

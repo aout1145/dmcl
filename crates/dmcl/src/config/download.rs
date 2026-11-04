@@ -5,7 +5,7 @@ use dmcl_launch::{LAUNCHER_NAME, LAUNCHER_VERSION};
 use dmcl_mcmeta::source::{DownloadSource, MirrorPolicy};
 use serde::{Deserialize, Serialize};
 
-use super::Config;
+use super::{Config, JavaChoice};
 
 /// 1 MiB。
 const MIB: u64 = 1024 * 1024;
@@ -28,6 +28,8 @@ pub struct DownloadConfig {
     pub max_chunks_per_file: usize,
     /// 单个文件最多尝试几次。
     pub max_attempts: u32,
+    /// 安装器 processor 用哪个 Java，或自动选择。
+    pub java: JavaChoice,
 }
 
 impl Default for DownloadConfig {
@@ -40,6 +42,7 @@ impl Default for DownloadConfig {
             chunk_size_mib: 4,
             max_chunks_per_file: 8,
             max_attempts: 3,
+            java: JavaChoice::Auto,
         }
     }
 }

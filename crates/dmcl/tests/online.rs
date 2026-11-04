@@ -8,9 +8,10 @@
 //! 也就是 CLI 每个命令实际走的那条路。
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use dmcl::config::{AccountConfig, Config};
-use dmcl_launch::GameLauncher;
+use dmcl_launch::{GameLauncher, JavaOption};
 
 const VERSION: &str = "1.7.10";
 
@@ -45,7 +46,7 @@ async fn the_whole_chain_runs_from_a_config_document() {
     // 配置 → 下载源 / 安装选项
     let source = config.download_source();
     let install = config
-        .install_options(source, &config.launch, &root)
+        .install_options(source, &root)
         .expect("install_options");
     assert_eq!(install.root_path, root);
     assert_eq!(install.download.max_connections, 8);
@@ -58,9 +59,14 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .join(format!("versions/{VERSION}/{VERSION}.json"))
         .is_file());
 
-    // 配置 → 启动选项 → 启动器
+    // 配置 → 启动选项 → 启动器；测试用固定的 Java，避免依赖本机安装。
+    let java = JavaOption {
+        path: std::env::temp_dir().join("dmcl-online-java"),
+        major: 17,
+        arch: dmcl_mcmeta::os::Arch::X86_64,
+    };
     let option = config
-        .launch_option(&config.launch, VERSION, &root)
+        .launch_option(&config.launch, VERSION, &root, Arc::new(java))
         .expect("launch_option");
     assert_eq!(option.account_source.name(), "player");
     let account = option.account_source.login().await.expect("login");
@@ -83,15 +89,10 @@ async fn the_whole_chain_runs_from_a_config_document() {
         "缺失项应当带着 URL 模板，方便交给 dmcl-install 修复"
     );
 
-    // 命令行能生成（这台机器没有 java 就跳过这一段）
-    match launcher.generate_command().await {
-        Ok(command) => {
-            assert!(command.contains("--username player"), "{command}");
-            assert!(!command.contains("${"), "还有未替换的模板: {command}");
-        }
-        Err(err) if format!("{err:#}").contains("java") => {}
-        Err(err) => panic!("generate_command: {err:#}"),
-    }
+    // 命令行能生成；所有模板都必须被替换掉。
+    let command = launcher.generate_command().await.expect("generate_command");
+    assert!(command.contains("--username player"), "{command}");
+    assert!(!command.contains("${"), "还有未替换的模板: {command}");
 }
 
 #[tokio::test]

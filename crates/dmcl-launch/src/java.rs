@@ -117,6 +117,10 @@ impl JavaDetails {
 pub trait JavaSelector: Send + Sync {
     /// 返回满足 `required_major` 的 Java。
     fn select_java<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>>;
+
+    /// 选择失败，或选中的 Java 与版本要求不匹配时，是否允许启动流程自动下载 Java
+    /// 后重新选择。
+    fn allows_auto_install(&self) -> bool;
 }
 
 /// 一个已经确定的 Java 可以直接当选择器用。
@@ -124,20 +128,9 @@ impl JavaSelector for JavaOption {
     fn select_java<'a>(&'a self, _required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
         Box::pin(async move { Ok(self.clone()) })
     }
-}
 
-/// 没有配置表时的默认选择器：扫描本机常见目录后自动挑选。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ScanJava;
-
-impl JavaSelector for ScanJava {
-    fn select_java<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
-        Box::pin(async move {
-            let details = find_java(&default_java_roots()).await;
-            let options: Vec<JavaOption> = details.into_iter().map(|java| java.option).collect();
-            auto_select_java(required_major, &options)
-                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中提供 Java 路径"))
-        })
+    fn allows_auto_install(&self) -> bool {
+        false
     }
 }
 

@@ -30,7 +30,14 @@ async fn integrity_and_command_line_for_a_real_version() {
 
     let source = Arc::new(OfflineAccountSource::new("player"));
     let account = source.login().await.expect("login");
-    let mut option = LaunchOption::new(source, &root, VERSION);
+    let Some(java) = dmcl_launch::find_java(&dmcl_launch::default_java_roots())
+        .await
+        .into_iter()
+        .next()
+    else {
+        return; // 这台机器没有 java 就跳过
+    };
+    let mut option = LaunchOption::new(source, &root, VERSION, Arc::new(java.option));
     option.min_memory = Some(512);
     option.max_memory = Some(2048);
     let mut launcher = GameLauncher::new(option, account)
@@ -59,11 +66,7 @@ async fn integrity_and_command_line_for_a_real_version() {
         .starts_with("${")));
 
     // 命令行能生成出来（不要求文件齐，只是拼参数）
-    let command = match launcher.generate_command().await {
-        Ok(command) => command,
-        Err(err) if format!("{err:#}").contains("java") => return, // 这台机器没有 java 就跳过
-        Err(err) => panic!("generate_command: {err:#}"),
-    };
+    let command = launcher.generate_command().await.expect("generate_command");
     assert!(command.contains("--username player"), "{command}");
     assert!(command.contains("-Xmx2048m"), "{command}");
     // 所有模板都必须被替换掉

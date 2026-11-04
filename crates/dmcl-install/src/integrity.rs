@@ -145,7 +145,7 @@ pub async fn check_integrity(plan: &PlanContext, version_name: &str) -> Result<I
     }
 
     // natives 不在这里检查：它的分类器取决于启动时选中的 java 架构，由启动流程的
-    // 「准备 natives」步骤负责下载 + 解压（见 `dmcl_install::natives_task`）。
+    // 「解压 natives」步骤负责下载 + 解压（见 `dmcl_install::natives_task`）。
 
     status.complete = status.missing.is_empty();
     Ok(status)

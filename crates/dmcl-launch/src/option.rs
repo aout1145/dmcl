@@ -7,7 +7,7 @@ use std::sync::Arc;
 use dmcl_install::PlanContext;
 
 use crate::account::AccountSource;
-use crate::java::{JavaSelector, ScanJava};
+use crate::java::JavaSelector;
 
 /// 启动器名字（替换 `${launcher_name}`）。
 pub const LAUNCHER_NAME: &str = "dmcl";
@@ -18,7 +18,7 @@ pub const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户来源用 `Arc<dyn AccountSource>`（而不是裸接口引用）保存，结构体因此仍是
-/// `Send + Sync`，可以交给 GUI 的另一个线程；java 的选择也在这里。
+/// `Send + Sync`，可以交给 GUI 的另一个线程；java 选择器同样由调用者传入。
 #[derive(Clone)]
 pub struct LaunchOption {
     pub account_source: Arc<dyn AccountSource>,
@@ -39,7 +39,7 @@ pub struct LaunchOption {
     pub custom_info: String,
     pub additional_jvm: Vec<String>,
     pub additional_game: Vec<String>,
-    /// 怎么选 java（默认扫描本机常见目录后自动选择）。
+    /// 怎么选 java：由调用者提供的选择器决定。
     pub java: Arc<dyn JavaSelector>,
     /// 跳过 `*.ogg` 资源（完整性检查时也要一致，否则会把音乐报成缺失）。
     pub skip_music: bool,
@@ -60,11 +60,12 @@ impl fmt::Debug for LaunchOption {
 }
 
 impl LaunchOption {
-    /// 除三个必填项外，其余字段取各自的默认值。
+    /// 除必填项外，其余字段取各自的默认值。
     pub fn new(
         account_source: Arc<dyn AccountSource>,
         root_path: impl Into<PathBuf>,
         version_name: impl Into<String>,
+        java: Arc<dyn JavaSelector>,
     ) -> Self {
         Self {
             account_source,
@@ -81,15 +82,9 @@ impl LaunchOption {
                 "-Dfml.ignorePatchDiscrepancies=True".to_string(),
             ],
             additional_game: Vec::new(),
-            java: Arc::new(ScanJava),
+            java,
             skip_music: false,
         }
-    }
-
-    /// 指定 java 选择器。
-    pub fn with_java(mut self, java: Arc<dyn JavaSelector>) -> Self {
-        self.java = java;
-        self
     }
 
     /// 指定本地文件布局相关的配置（与安装流程保持一致）。
@@ -114,12 +109,21 @@ mod tests {
     use crate::java::JavaOption;
     use dmcl_mcmeta::os::Arch;
 
+    fn fixed_java() -> JavaOption {
+        JavaOption {
+            path: PathBuf::from("/opt/jdk17/bin/java"),
+            major: 17,
+            arch: Arch::X86_64,
+        }
+    }
+
     #[test]
     fn defaults_match_the_original_struct() {
         let option = LaunchOption::new(
             Arc::new(OfflineAccountSource::new("player")),
             "/mc",
             "1.20.1",
+            Arc::new(fixed_java()),
         );
         assert_eq!(option.window_width, 854);
         assert_eq!(option.window_height, 480);
@@ -140,14 +144,15 @@ mod tests {
 
     #[tokio::test]
     async fn java_selection_can_be_supplied_by_the_caller() {
-        let java = JavaOption {
-            path: PathBuf::from("/opt/jdk17/bin/java"),
-            major: 17,
-            arch: Arch::X86_64,
-        };
-        let option = LaunchOption::new(Arc::new(OfflineAccountSource::new("p")), "/mc", "1.20.1")
-            .with_java(Arc::new(java.clone()));
+        let java = fixed_java();
+        let option = LaunchOption::new(
+            Arc::new(OfflineAccountSource::new("p")),
+            "/mc",
+            "1.20.1",
+            Arc::new(java.clone()),
+        );
         assert_eq!(option.java.select_java(17).await.unwrap(), java);
+        assert!(!option.java.allows_auto_install());
         assert!(format!("{option:?}").contains('p'));
     }
 }

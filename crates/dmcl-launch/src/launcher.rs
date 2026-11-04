@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
-use dmcl_mcmeta::os::{classpath_separator, Arch, Os};
+use dmcl_mcmeta::os::{classpath_separator, Os};
 use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
 use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
@@ -181,32 +181,20 @@ impl GameLauncher {
             .await
     }
 
-    /// 同 [`GameLauncher::gen_args`]，但把「Java 版本 / 架构不匹配」等需要用户确认的警告
-    /// 通过 `ctx` 上报，并**等待前端决定**是否继续。
+    /// 同 [`GameLauncher::gen_args`]，但把需要用户确认的警告通过 `ctx` 上报。
+    ///
+    /// Java 版本 / 架构是否匹配由启动链的「选择 Java」步骤检查；这里只负责拼参数。
     pub async fn gen_args_in(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
-        // Java 路径；已经选好就直接用，否则按配置选一个。版本或架构不匹配时先问用户。
-        let required_major = self.json.required_java_major();
+        // Java 路径；已经选好就直接用，否则按配置选一个。
         let java = match &self.java {
             Some(java) => java.clone(),
-            None => self.option.java.select_java(required_major).await?,
+            None => {
+                self.option
+                    .java
+                    .select_java(self.json.required_java_major())
+                    .await?
+            }
         };
-        let mut mismatches = Vec::new();
-        if java.major != required_major {
-            mismatches.push(format!(
-                "Java 版本不匹配（需要 {required_major}，实际为 {}）",
-                java.major
-            ));
-        }
-        if let Some(host) = Arch::current().filter(|host| *host != java.arch) {
-            mismatches.push(format!(
-                "Java 架构与当前平台不一致（Java 为 {}，平台为 {}）",
-                java.arch.name(),
-                host.name()
-            ));
-        }
-        if !mismatches.is_empty() {
-            ctx.confirm(mismatches.join("；")).await?;
-        }
 
         // natives 目录按运行平台的 os 与所选 java 的 arch 区分
         let natives_directory = natives_dir(&self.option.version_name, Os::current(), java.arch)
@@ -452,7 +440,12 @@ mod tests {
     async fn launcher_with(json: VersionJson, root: PathBuf) -> GameLauncher {
         let source = Arc::new(OfflineAccountSource::new("player"));
         let account = source.login().await.unwrap();
-        let option = LaunchOption::new(source, &root, "1.0");
+        let java = JavaOption {
+            path: PathBuf::from("/usr/bin/java"),
+            major: 17,
+            arch: Arch::X86_64,
+        };
+        let option = LaunchOption::new(source, &root, "1.0", Arc::new(java));
         let version_path = version_dir(&root, "1.0");
         let game_path = if option.version_isolation {
             version_path.clone()
@@ -595,7 +588,16 @@ mod tests {
 
         let source = Arc::new(OfflineAccountSource::new("player"));
         let account = source.login().await.unwrap();
-        let mut option = LaunchOption::new(source, &root, "1.0");
+        let mut option = LaunchOption::new(
+            source,
+            &root,
+            "1.0",
+            Arc::new(JavaOption {
+                path: PathBuf::from("/usr/bin/java"),
+                major: 17,
+                arch: Arch::X86_64,
+            }),
+        );
         option.version_isolation = false;
         let mut launcher = GameLauncher::new(option, account).await.unwrap();
         launcher.java = Some(JavaOption {
