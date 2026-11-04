@@ -194,8 +194,16 @@ pub(crate) async fn run_installer_processors(
     }
     download_planned(options, "安装器依赖库", planned, ctx).await?;
 
-    // 需要哪个 java 由版本 JSON 决定，怎么找到 java 由调用者决定
-    let java = options.java_for(mc_json.required_java_major()).await?;
+    // 需要哪个 java 由版本 JSON 决定，怎么找到 java 由调用者决定；
+    // 找不到时在这里用当前任务上下文下载，进度会进入正在跑的安装任务。
+    let preferred_component = mc_json
+        .java_version
+        .as_ref()
+        .and_then(|java| java.component.as_deref())
+        .filter(|component| !component.is_empty());
+    let java = options
+        .java_for_or_install(mc_json.required_java_major(), preferred_component, ctx)
+        .await?;
 
     for (index, spec) in processors.iter().enumerate() {
         let jar_coord = spec.jar;

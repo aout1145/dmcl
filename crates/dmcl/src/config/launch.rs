@@ -68,7 +68,8 @@ impl Config {
     /// 读取某个实例的 `dmcl.json`，并逐字段覆盖全局 `launch`。
     ///
     /// 文件不存在时直接使用全局 `launch`，**不创建文件**。`instance` 段属于实例元数据，
-    /// 不参与启动配置，由 [`super::instance`] 单独读取。
+    /// 不参与启动配置，由 [`read_instance_category`](crate::config::read_instance_category)
+    /// 单独读取。
     pub async fn load_instance(&self, root: &Path, version_name: &str) -> LoadedInstanceConfig {
         let path = instance_config_path(root, version_name);
         match tokio::fs::read_to_string(&path).await {

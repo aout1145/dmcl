@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::{auto_select_java, JavaOption, JavaSelector};
+use dmcl_launch::{auto_select_java, JavaDetails, JavaOption, JavaSelector};
 
 use super::handle_event;
 use crate::cli::progress::ProgressPrinter;
@@ -32,6 +32,13 @@ impl JavaSelector for ConfigJava {
 
     fn allows_auto_install(&self) -> bool {
         false
+    }
+
+    fn add_installed_java<'a>(
+        &'a self,
+        _details: &'a JavaDetails,
+    ) -> dmcl_task::BoxFuture<'a, Result<()>> {
+        panic!("CLI 的 Java 选择器不支持自动安装")
     }
 }
 

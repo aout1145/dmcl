@@ -17,7 +17,7 @@ dmcl-rs/
     ├── dmcl-task/             # 通用任务链 + 进度事件流（与 MC 无关）
     ├── dmcl-mcmeta/           # MC 元数据文档、下载源、URL 模板、本地目录布局
     ├── dmcl-download/         # 并发 / 分块下载（实现 dmcl-task 的 Task）
-    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge/OptiFine 安装、完整性检查
+    ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge/OptiFine、Java 运行时安装、完整性检查
     ├── dmcl-launch/           # 账号、java、命令行生成、启动
     └── dmcl/                  # 应用：config + cli + gui（GTK4）
 ```

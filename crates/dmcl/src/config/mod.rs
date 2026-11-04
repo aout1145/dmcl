@@ -375,15 +375,23 @@ impl Config {
     /// 配置 + 下载源 → [`InstallOptions`]。
     ///
     /// 安装器 processor 用的 Java 由安装流程自己的 `JavaProvider` 按 `download.java` 选择，
-    /// 与 `launch.java` 无关。
+    /// 与 `launch.java` 无关；`autoselect` 找不到匹配版本时由安装流程下载到官方 runtime
+    /// 目录，下载进度进入安装任务。
     pub fn install_options(&self, source: DownloadSource, root: &Path) -> Result<InstallOptions> {
-        Ok(InstallOptions::new(root.to_path_buf(), source)
+        let mut options = InstallOptions::new(root.to_path_buf(), source)
             .with_download(self.download_options())
             .with_skip_music(self.download.skip_music)
             .with_java(Arc::new(java::InstallJavaProvider::new(
                 self.download.java.clone(),
                 self.javas.clone(),
-            ))))
+            )));
+        if self.download.java.is_auto() {
+            if let Some(runtime_root) = dmcl_launch::official_runtime_root() {
+                options =
+                    options.with_jre_auto_install(dmcl_install::JreAutoInstall::new(runtime_root));
+            }
+        }
+        Ok(options)
     }
 }
 

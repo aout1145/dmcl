@@ -13,6 +13,7 @@
 plan.rs       纯函数规划：这个版本需要哪些文件
 files.rs      按规划构造下载任务并落盘；natives 下载 + 解压
 integrity.rs  完整性检查：完整吗？缺什么？
+jre.rs        Mojang Java 运行时的安装（raw / lzma）
 vanilla.rs    原版元数据落盘、launcher_profiles.json
 loader/       fabric / forge / neoforge / optifine / common / xforge（共用工具）
 spec.rs       顶层任务链 install_task、InstallSpec / LoaderKind
@@ -114,9 +115,37 @@ OptiFine），GUI 用冲突组限制选择。参数追加到 `arguments.game`；
 
 ### 安装参数
 
-`InstallOptions` 包含根目录、`DownloadSource`、`DownloadOptions`、`skip_music` 和
-`Arc<dyn JavaProvider>`。`JavaProvider` 只为 Forge / NeoForge 的安装器 processor 提供
-java（默认 `PathJava` 从 `JAVA_HOME` 或 `PATH` 找），与启动时选游戏 java 是两件事。
+`InstallOptions` 包含根目录、`DownloadSource`、`DownloadOptions`、`skip_music`、
+`Arc<dyn JavaProvider>` 和可选的 `JreAutoInstall`。`JavaProvider` 只负责找**现有** Java
+（默认 `PathJava` 从 `JAVA_HOME` 或 `PATH` 找），与启动时选游戏 java 是两件事。
+找不到匹配版本时，安装流程调用 `InstallOptions::java_for_or_install`，用当前
+`TaskContext` 下载 JRE，所以下载进度会进入正在跑的安装任务。
+
+### Java 运行时安装
+
+`jre.rs` 单独安装 Mojang 的 JRE，**不接在 `install_task` 里**：组件
+（`java-runtime-gamma` …）、平台、目标目录和下载格式都由调用者决定。默认用 lzma，
+没有 lzma 版的文件回退 `raw`；也可以显式选 `JreFileFormat::Raw`。
+
+- 先取产品索引与运行时文件清单（类型在 `dmcl_mcmeta`）；
+- 目标目录按增量缓存处理：已经完整（sha1 / 大小一致）的文件跳过，缺的、坏的重新下载，
+  目录里的其它文件不动；
+- 按清单创建目录、符号链接，并在 Unix 上给 `executable` 文件加可执行位；lzma 先下到
+  目标目录的 `.dmcl-tmp/`，解压成功后清理；
+- 安装失败时只删除入口（`bin/java` / `bin/javaw`，Windows 带 `.exe`，macOS 在
+  `jre.bundle/Contents/Home/bin/` 下），避免半成品被当成可用的 Java；
+- `install_jre_task` 返回安装好的 java 可执行文件路径，`install_jre` 是不带进度界面的
+  底层入口。
+
+需要按版本要求自动挑组件时用 `install_jre_for_major`：优先 `preferred_component`
+（版本 JSON 的 `javaVersion.component`），否则按索引里条目版本号匹配 `required_major`
+且优先非 snapshot 的组件，最后退回 `jre-legacy` 并标记 `fallback`。它把 JRE 装到
+`<runtime_root>/<component>/<Mojang 平台键>/<component>`（`resolve_jre_component` /
+`runtime_dir` 也单独导出）。
+
+安装流程本身用 `InstallOptions::java_for_or_install` 组合这两步：先问
+`JavaProvider` 找现有 Java，失败且配置了 `JreAutoInstall` 时再用当前 `TaskContext`
+调用 `install_jre_for_major`。Java 运行时是跨版本共享的独立组件，装哪个、装到哪由前端决定。
 
 ## 相关文档
 

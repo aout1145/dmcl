@@ -22,14 +22,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
-use dmcl_install::{InstallOptions, IntegrityStatus};
+use anyhow::{anyhow, Result};
+use dmcl_install::{InstallOptions, IntegrityStatus, JreForMajorRequest};
 use dmcl_mcmeta::layout::read_version_json_safe;
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
 use crate::account::{Account, AccountSource};
-use crate::java::JavaOption;
+use crate::java::{official_runtime_root, JavaDetails, JavaOption};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
@@ -114,15 +114,49 @@ impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
     }
 }
 
-/// 通过选择器选好 java；版本 / 架构不匹配时先等用户确认。
+/// 通过选择器选好 java；允许自动安装时先下载匹配的 JRE；版本 / 架构仍不匹配时先等用户确认。
 pub struct SelectJavaTask {
     option: LaunchOption,
+    install: Arc<InstallOptions>,
 }
 
 impl SelectJavaTask {
-    pub fn new(option: LaunchOption) -> Self {
-        Self { option }
+    pub fn new(option: LaunchOption, install: Arc<InstallOptions>) -> Self {
+        Self { option, install }
     }
+
+    /// 下载匹配版本要求的 Mojang JRE，并把它交给选择器（GUI 会写回配置）。
+    async fn auto_install_java(
+        &self,
+        preferred: Option<&str>,
+        required_major: u32,
+        ctx: &TaskContext,
+    ) -> Result<JavaOption> {
+        let runtime_root = official_runtime_root()
+            .ok_or_else(|| anyhow!("无法确定官方启动器的 runtime 目录，不能自动下载 Java"))?;
+        let arch =
+            Arch::current().ok_or_else(|| anyhow!("无法确定当前 CPU 架构，不能自动下载 Java"))?;
+        let mut request =
+            JreForMajorRequest::new(runtime_root, (Os::current(), arch), required_major);
+        if let Some(component) = preferred {
+            request = request.with_preferred_component(component);
+        }
+
+        let installed = dmcl_install::install_jre_for_major(&self.install, &request, ctx).await?;
+        let details = JavaDetails::probe(installed.java).await?;
+        self.option.java.add_installed_java(&details).await?;
+        ctx.log(format!(
+            "已下载 Java {}：{}",
+            details.option.major,
+            details.option.path.display()
+        ));
+        Ok(details.option)
+    }
+}
+
+/// 大版本与当前平台架构都匹配才算合适。
+fn java_is_suitable(java: &JavaOption, required_major: u32) -> bool {
+    java.major == required_major && Arch::current().is_none_or(|host| host == java.arch)
 }
 
 impl Task<IntegrityStatus, JavaOption> for SelectJavaTask {
@@ -135,7 +169,39 @@ impl Task<IntegrityStatus, JavaOption> for SelectJavaTask {
             let json =
                 read_version_json_safe(&self.option.root_path, &self.option.version_name).await?;
             let required_major = json.required_java_major();
-            let java = self.option.java.select_java(required_major).await?;
+            let preferred = json
+                .java_version
+                .as_ref()
+                .and_then(|java| java.component.clone())
+                .filter(|component| !component.is_empty());
+
+            let mut downloaded = false;
+            let mut java = match self.option.java.select_java(required_major).await {
+                Ok(java) => java,
+                Err(err) if !self.option.java.allows_auto_install() => return Err(err),
+                Err(err) => {
+                    ctx.log(format!("没有找到合适的 Java：{err:#}，尝试自动下载"));
+                    downloaded = true;
+                    self.auto_install_java(preferred.as_deref(), required_major, &ctx)
+                        .await?
+                }
+            };
+
+            if !downloaded
+                && self.option.java.allows_auto_install()
+                && !java_is_suitable(&java, required_major)
+            {
+                match self
+                    .auto_install_java(preferred.as_deref(), required_major, &ctx)
+                    .await
+                {
+                    Ok(installed) => java = installed,
+                    Err(err) => ctx.log(format!(
+                        "警告：自动下载 Java 失败，继续使用已选的 Java：{err:#}"
+                    )),
+                }
+            }
+
             ctx.log(format!(
                 "使用 Java {}：{}（{} / {}）",
                 java.major,
@@ -262,7 +328,10 @@ pub fn launch_chain(
             PrepareLaunchFilesTask::new(install.clone(), version_name),
             "检查并补全文件",
         )
-        .then(SelectJavaTask::new(option.clone()), "选择 Java")
+        .then(
+            SelectJavaTask::new(option.clone(), install.clone()),
+            "选择 Java",
+        )
         .then(
             PrepareNativesTask::new(option.clone(), install),
             "解压 natives",
@@ -343,7 +412,7 @@ mod tests {
             .unwrap();
         assert!(integrity.is_complete(), "{:?}", integrity.missing);
 
-        let java = SelectJavaTask::new(option.clone())
+        let java = SelectJavaTask::new(option.clone(), install_options(&root))
             .run(integrity, TaskContext::detached("选择 Java"))
             .await
             .unwrap();
@@ -411,10 +480,11 @@ mod tests {
         );
         let ctx = TaskContext::detached("选择 Java");
         let mut events = ctx.subscribe();
+        let install = install_options(&root);
         let waiting = tokio::spawn({
             let ctx = ctx.clone();
             async move {
-                SelectJavaTask::new(option)
+                SelectJavaTask::new(option, install)
                     .run(IntegrityStatus::default(), ctx)
                     .await
             }

@@ -313,8 +313,9 @@ fn path_hash(path: &Path) -> String {
 
 /// 安装流程用的 Java 提供者：按 `download.java` 选择，自动模式下先读配置、再扫描本机。
 ///
-/// 与启动时的 `launch.java` 无关：安装只需要一个能跑安装器 processor 的 Java。
-/// 扫描结果不写回配置。
+/// 这里只负责找**现有** Java；找不到时由安装流程用
+/// [`dmcl_install::InstallOptions::java_for_or_install`] 下载 JRE，下载进度因此能显示在
+/// 安装任务里。与启动时的 `launch.java` 无关，扫描结果也不写回配置。
 pub(crate) struct InstallJavaProvider {
     choice: JavaChoice,
     configs: JavaConfigs,
@@ -344,15 +345,22 @@ impl JavaProvider for InstallJavaProvider {
                 .filter(|java| java.path.is_file())
                 .map(JavaConfig::option)
                 .collect();
-            if let Some(java) = auto_select_java(required_major, &configured) {
+            if let Some(java) = auto_select_java(required_major, &configured)
+                .filter(|java| java.major == required_major)
+            {
                 return Ok(java.path);
             }
 
             let found = configs_from_details(find_java(&default_java_roots()).await);
             let options: Vec<JavaOption> = found.values().map(JavaConfig::option).collect();
             auto_select_java(required_major, &options)
+                .filter(|java| java.major == required_major)
                 .map(|java| java.path)
-                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中添加 Java 路径"))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "没有找到匹配 Java {required_major} 的可用 Java，请先安装或在配置中添加 Java 路径"
+                    )
+                })
         })
     }
 }
@@ -499,25 +507,17 @@ mod tests {
         let configs = JavaConfigs::from([
             ("eight".to_string(), file_entry(&dir, "eight", 8)),
             ("seventeen".to_string(), file_entry(&dir, "seventeen", 17)),
-            (
-                "missing".to_string(),
-                JavaConfig {
-                    path: dir.join("missing"),
-                    major: 21,
-                    arch: Arch::X86_64,
-                },
-            ),
         ]);
+        // provider 只找现有 Java；自动下载由安装流程的 java_for_or_install 负责。
         let provider = InstallJavaProvider::new(JavaChoice::Auto, configs);
 
         assert_eq!(
             JavaProvider::java_for(&provider, 17).await.unwrap(),
             dir.join("seventeen")
         );
-        // 21 的路径不存在，不能选它；退回仍然存在的最高版本 17。
         assert_eq!(
-            JavaProvider::java_for(&provider, 21).await.unwrap(),
-            dir.join("seventeen")
+            JavaProvider::java_for(&provider, 8).await.unwrap(),
+            dir.join("eight")
         );
 
         std::fs::remove_dir_all(dir).unwrap();

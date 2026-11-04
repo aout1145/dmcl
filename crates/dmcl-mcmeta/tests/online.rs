@@ -5,7 +5,7 @@
 //! ```
 
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
-use dmcl_mcmeta::vanilla::VersionJson;
+use dmcl_mcmeta::vanilla::{current_jre_platform, VersionJson};
 
 #[tokio::test]
 #[ignore = "requires network access"]
@@ -90,4 +90,37 @@ async fn optifine_list_and_latest_can_be_queried() {
             .map(|entry| entry.is_preview()),
         Some(false)
     );
+}
+
+#[tokio::test]
+#[ignore = "requires network access"]
+async fn jre_manifest_points_at_a_runtime_for_the_current_platform() {
+    let source = DownloadSource::official();
+    let manifest = source.fetch_jre_manifest().await.expect("jre manifest");
+    assert!(!manifest.platforms.is_empty());
+
+    let platform = current_jre_platform().expect("当前平台应有 Mojang 提供的运行时");
+    let entry = manifest
+        .runtime("java-runtime-gamma", platform)
+        .expect("java-runtime-gamma");
+    let url = entry.manifest.as_ref().expect("manifest 地址").url.clone();
+    assert!(url.starts_with("${MC_META}/"));
+
+    let runtime = source
+        .fetch_jre_runtime_manifest(&url)
+        .await
+        .expect("runtime manifest");
+    assert!(runtime
+        .files
+        .values()
+        .any(|file| file.executable == Some(true)));
+    for file in runtime.files.values() {
+        let Some(downloads) = &file.downloads else {
+            continue;
+        };
+        for artifact in [&downloads.raw, &downloads.lzma].into_iter().flatten() {
+            let url = artifact.url.as_deref().unwrap_or_default();
+            assert!(url.starts_with("${MC_DATA}/"), "未被模板化: {url}");
+        }
+    }
 }

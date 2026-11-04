@@ -46,6 +46,7 @@ sha2 = "0.11"
 md-5 = "0.11"
 hex = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate"] }
+lzma-rs = "0.3"
 path-clean = "1"
 walkdir = "2"
 uuid = "1"

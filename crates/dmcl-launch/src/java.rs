@@ -118,9 +118,13 @@ pub trait JavaSelector: Send + Sync {
     /// 返回满足 `required_major` 的 Java。
     fn select_java<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>>;
 
-    /// 选择失败，或选中的 Java 与版本要求不匹配时，是否允许启动流程自动下载 Java
-    /// 后重新选择。
+    /// 选择失败，或选中的 Java 与版本要求不匹配时，是否允许启动流程自动下载 Java。
     fn allows_auto_install(&self) -> bool;
+
+    /// 自动下载并探测成功后，把新 Java 交给前端（例如写回配置）。
+    ///
+    /// 不支持自动安装的选择器直接 panic。
+    fn add_installed_java<'a>(&'a self, details: &'a JavaDetails) -> BoxFuture<'a, Result<()>>;
 }
 
 /// 一个已经确定的 Java 可以直接当选择器用。
@@ -132,6 +136,10 @@ impl JavaSelector for JavaOption {
     fn allows_auto_install(&self) -> bool {
         false
     }
+
+    fn add_installed_java<'a>(&'a self, _details: &'a JavaDetails) -> BoxFuture<'a, Result<()>> {
+        panic!("固定的 Java 选择器不支持自动安装")
+    }
 }
 
 /// 本机默认的 java 扫描目录（按平台）。
@@ -142,6 +150,27 @@ pub fn default_java_roots() -> Vec<PathBuf> {
     roots.sort();
     roots.dedup();
     roots
+}
+
+/// 官方启动器存放 Java 运行时的目录。
+///
+/// 自动下载的 JRE 也装在这里；平台环境变量缺失时返回 `None`。
+pub fn official_runtime_root() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let base = env::var_os("APPDATA").filter(|path| !path.is_empty())?;
+        Some(PathBuf::from(base).join(".minecraft").join("runtime"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let base = env::var_os("HOME").filter(|path| !path.is_empty())?;
+        Some(PathBuf::from(base).join("Library/Application Support/minecraft/runtime"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let base = env::var_os("HOME").filter(|path| !path.is_empty())?;
+        Some(PathBuf::from(base).join(".minecraft").join("runtime"))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -162,12 +191,12 @@ fn platform_java_roots() -> Vec<PathBuf> {
         roots.push(home.join(".gradle/jdks"));
         roots.push(home.join(".asdf/installs/java"));
         roots.push(home.join(".local/share/mise/installs/java"));
-        roots.push(home.join(".minecraft/runtime"));
         roots.extend(child_dirs_with_prefix(
             &home.join(".linuxbrew/opt"),
             &["openjdk"],
         ));
     }
+    roots.extend(official_runtime_root());
     roots.extend(child_dirs_with_prefix(
         Path::new("/home/linuxbrew/.linuxbrew/opt"),
         &["openjdk"],
@@ -203,9 +232,6 @@ fn platform_java_roots() -> Vec<PathBuf> {
         roots.extend(VENDORS.iter().map(|vendor| base.join(vendor)));
         roots.extend(child_dirs_with_prefix(&base.join("Microsoft"), &["jdk"]));
     }
-    if let Some(appdata) = env::var_os("APPDATA").filter(|path| !path.is_empty()) {
-        roots.push(PathBuf::from(appdata).join(".minecraft").join("runtime"));
-    }
     if let Some(local) = env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty()) {
         let local = PathBuf::from(local);
         // Microsoft Store 版官方启动器的 LocalCache。
@@ -228,6 +254,7 @@ fn platform_java_roots() -> Vec<PathBuf> {
     if let Some(profile) = env::var_os("USERPROFILE").filter(|path| !path.is_empty()) {
         roots.push(PathBuf::from(profile).join(".jdks"));
     }
+    roots.extend(official_runtime_root());
     if let Some(java_home) = env::var_os("JAVA_HOME").filter(|home| !home.is_empty()) {
         roots.push(PathBuf::from(java_home).join("bin"));
     }
@@ -243,9 +270,9 @@ fn platform_java_roots() -> Vec<PathBuf> {
     if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
         let home = PathBuf::from(home);
         roots.push(home.join("Library/Java/JavaVirtualMachines"));
-        roots.push(home.join("Library/Application Support/minecraft/runtime"));
         roots.push(home.join(".sdkman/candidates/java"));
     }
+    roots.extend(official_runtime_root());
     roots.extend(child_dirs_with_prefix(
         Path::new("/opt/homebrew/opt"),
         &["openjdk"],

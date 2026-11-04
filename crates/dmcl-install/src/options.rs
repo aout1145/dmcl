@@ -4,13 +4,18 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dmcl_download::{DownloadItem, DownloadOptions, DownloadTask};
+use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::source::DownloadSource;
+use dmcl_task::TaskContext;
 
+use crate::jre::{install_jre_for_major, JreAutoInstall, JreForMajorRequest};
 use crate::zip::find_on_path;
 
 /// 运行 Forge / NeoForge 安装器 processor 时需要 java，由调用者提供。
+///
+/// 实现只负责找**现有** Java；找不到时由 [`InstallOptions::java_for_or_install`] 按需下载。
 pub trait JavaProvider: Send + Sync {
     /// 返回满足 `required_major` 的 java 可执行文件。
     fn java_for<'a>(&'a self, required_major: u32) -> dmcl_task::BoxFuture<'a, Result<PathBuf>>;
@@ -58,6 +63,8 @@ pub struct InstallOptions {
     pub skip_music: bool,
     /// 跑安装器 processor 时用哪个 java。
     pub java: Arc<dyn JavaProvider>,
+    /// 找不到匹配 Java 时自动下载 JRE 的设置；`None` 表示不下载。
+    pub jre: Option<JreAutoInstall>,
 }
 
 impl fmt::Debug for InstallOptions {
@@ -67,6 +74,7 @@ impl fmt::Debug for InstallOptions {
             .field("source", &self.source)
             .field("download", &self.download)
             .field("skip_music", &self.skip_music)
+            .field("jre", &self.jre)
             .finish_non_exhaustive()
     }
 }
@@ -79,6 +87,7 @@ impl InstallOptions {
             download: DownloadOptions::default(),
             skip_music: false,
             java: Arc::new(PathJava),
+            jre: None,
         }
     }
 
@@ -102,6 +111,12 @@ impl InstallOptions {
         self.with_java(Arc::new(FixedJava(path.into())))
     }
 
+    /// 允许在找不到匹配 Java 时自动下载 JRE。
+    pub fn with_jre_auto_install(mut self, jre: JreAutoInstall) -> Self {
+        self.jre = Some(jre);
+        self
+    }
+
     /// 只跟"本地有哪些文件"有关的那部分配置。
     pub fn plan(&self) -> crate::plan::PlanContext {
         crate::plan::PlanContext {
@@ -121,6 +136,42 @@ impl InstallOptions {
     /// 跑安装器 processor 时求得 java 路径。
     pub async fn java_for(&self, required_major: u32) -> Result<PathBuf> {
         self.java.java_for(required_major).await
+    }
+
+    /// 先找现有 Java；找不到且配置了自动安装时，用当前任务上下文下载 JRE。
+    ///
+    /// 下载走 [`install_jre_for_major`]，因此进度会进入传进来的任务事件流；
+    /// `preferred_component` 通常是版本 JSON 的 `javaVersion.component`。
+    pub async fn java_for_or_install(
+        &self,
+        required_major: u32,
+        preferred_component: Option<&str>,
+        ctx: &TaskContext,
+    ) -> Result<PathBuf> {
+        match self.java_for(required_major).await {
+            Ok(java) => Ok(java),
+            Err(err) => {
+                let Some(jre) = &self.jre else {
+                    return Err(err);
+                };
+                let arch = Arch::current()
+                    .ok_or_else(|| anyhow!("无法确定当前 CPU 架构，不能自动下载 Java"))?;
+                ctx.log(format!("自动下载 Java {required_major}：{err:#}"));
+                let mut request = JreForMajorRequest::new(
+                    jre.runtime_root.clone(),
+                    (Os::current(), arch),
+                    required_major,
+                )
+                .with_format(jre.format);
+                if let Some(component) =
+                    preferred_component.filter(|component| !component.is_empty())
+                {
+                    request = request.with_preferred_component(component);
+                }
+                let installed = install_jre_for_major(self, &request, ctx).await?;
+                Ok(installed.java)
+            }
+        }
     }
 }
 

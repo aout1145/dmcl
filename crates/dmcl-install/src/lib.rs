@@ -1,4 +1,5 @@
-//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge，以及 OptiFine。
+//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge、OptiFine，
+//! 以及 Mojang 的 Java 运行时。
 //!
 //! 这个 crate 只做"把文件写下去"，不做任何决策：
 //!
@@ -60,6 +61,7 @@
 pub mod files;
 pub mod integrity;
 pub mod io;
+pub mod jre;
 mod loader;
 pub mod options;
 pub mod plan;
@@ -73,6 +75,11 @@ pub use files::{
 };
 pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
 pub use io::{write_json_safe, write_safe};
+pub use jre::{
+    fetch_jre_runtime_manifest, install_jre, install_jre_for_major, install_jre_task,
+    resolve_jre_component, runtime_dir, JreAutoInstall, JreComponent, JreFileFormat,
+    JreForMajorRequest, JreInstallRequest, JreInstalled,
+};
 pub use loader::{fabric, forge, neoforge, optifine};
 pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
 pub use plan::{

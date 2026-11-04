@@ -53,8 +53,12 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
   Java**：版本相等优先，其次最接近的更高版本，再其次最高的更低版本；同一档内优先当前
   平台架构，再按候选顺序；
 - 具体用哪个 Java 由调用者实现的 `JavaSelector` 决定；`allows_auto_install()` 表示选择失败
-  或版本 / 架构不匹配时，是否允许启动流程自动下载 Java 后重选。`JavaOption` 作为固定选择器
-  时返回 `false`。
+  或版本 / 架构不匹配时，是否允许启动流程自动下载 Java。GUI 的 Auto 选择器返回
+  `true`，CLI 与固定选择器返回 `false`。
+- 自动下载走 `dmcl_install::install_jre_for_major`：优先用版本 JSON 的
+  `javaVersion.component`，缺失时按索引里的版本号找匹配大版本的组件，最后退回
+  `jre-legacy` 并记一条警告；装到官方启动器的 `<runtime>/<component>/<平台键>/<component>`。
+  下载并探测成功后调用 `JavaSelector::add_installed_java`（GUI 用它写回配置）。
 
 ### 内存
 
@@ -102,7 +106,8 @@ monitor.wait().await?;
 `launch_chain(option, install)` 把六步串成 `TaskChain<(), GameMonitor>`：
 
 1. **检查并补全文件** —— 复用 `dmcl-install` 的完整性检查；缺件时跑一次安装补全；
-2. **选择 Java** —— 读取版本要求的 Java 大版本，通过选择器选好 Java；版本 / 架构不匹配时
+2. **选择 Java** —— 读取版本要求的 Java 大版本，通过选择器选好 Java；选择失败或版本 /
+   架构不匹配且选择器允许自动安装时，下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时
    先等用户确认；
 3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑 `natives_task`（下载 + 解压到
    `natives_dir`，即 `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；

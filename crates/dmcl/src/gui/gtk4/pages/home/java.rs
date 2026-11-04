@@ -4,7 +4,9 @@
 //! 进 `javas` 后继续启动。写配置失败只影响下次启动，不会阻断本次启动。
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::{auto_select_java, default_java_roots, find_java, JavaOption, JavaSelector};
+use dmcl_launch::{
+    auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption, JavaSelector,
+};
 use dmcl_task::BoxFuture;
 
 use crate::config::{configs_from_details, merge_javas, JavaChoice};
@@ -84,6 +86,19 @@ impl JavaSelector for GuiJavaSelector {
     }
 
     fn allows_auto_install(&self) -> bool {
-        false
+        matches!(self.choice, JavaChoice::Auto)
+    }
+
+    fn add_installed_java<'a>(&'a self, details: &'a JavaDetails) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let found = configs_from_details(vec![details.clone()]);
+            // 写回失败只影响下次启动，不打断本次启动。
+            let _ = config_store::store()
+                .update_async(move |config| {
+                    merge_javas(&mut config.javas, &found);
+                })
+                .await;
+            Ok(())
+        })
     }
 }

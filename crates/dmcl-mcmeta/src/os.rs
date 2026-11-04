@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 compile_error!("dmcl 目前只支持 Windows / macOS / Linux");
 
 /// 操作系统。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Os {
     Windows,
     Linux,
@@ -54,7 +54,7 @@ impl Os {
 ///
 /// 既要给 Minecraft natives 分类器的 `${arch}`（只有 32 / 64），也要给 natives
 /// 目录名一个可读的架构名（`x86_64` 之类）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Arch {
     #[serde(rename = "x86")]
     X86,

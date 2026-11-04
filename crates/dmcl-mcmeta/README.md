@@ -10,7 +10,7 @@ clap 的候选值，供前端复用。
 ## 模块布局
 
 ```text
-vanilla/     version.rs  manifest.rs  asset.rs  rules.rs  urls.rs
+vanilla/     version.rs  manifest.rs  asset.rs  rules.rs  urls.rs  jre.rs
 fabric/      类型 + 地址 + fetch
 forge/       mod.rs + install_profile.rs
 neoforge/    mod.rs + install_profile.rs
@@ -76,6 +76,19 @@ source.resolve("${MC_MAVEN}/a/b.jar");
 `vanilla/rules.rs` 按**标准 Mojang 语义**判定：空规则允许；否则按顺序评估、**最后一条
 命中的规则的 action 决定结果**；一条都不命中则不允许。条件涵盖 `os.name` / `os.arch` /
 `os.version`（正则）/ `os.versionRange`（区间）/ `features`。
+
+### Java 运行时
+
+`vanilla/jre.rs` 描述 Mojang 的两层 JRE 文档：
+
+- `JreManifest` 是产品索引 `all.json`：`平台 → 组件（java-runtime-gamma …）→ 运行时条目`。
+  顶层平台键翻译成 mcmeta 的 `(Os, Arch)`（`windows-x64` → `(Windows, X86_64)`、
+  `linux-i386` → `(Linux, X86)` …），`gamecore` 这类非桌面平台直接忽略；Mojang 没有提供的
+  组合（如 Linux arm64）自然查不到。`current_jre_platform()` 给出本机对应的键。
+- 每个条目指向一份运行时文件清单 `manifest.json`，由 `JreRuntimeManifest` 描述：按相对
+  路径列出目录 / 文件 / 链接，文件带 `raw` 与 `lzma` 两份下载信息和可执行位。
+- `DownloadSource::fetch_jre_manifest` / `fetch_jre_runtime_manifest` 负责取数，并把清单
+  地址与文件下载地址归一成 `${MC_META}` / `${MC_DATA}` 模板。
 
 ### 加载器版本列表
 

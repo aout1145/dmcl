@@ -55,7 +55,8 @@ pub mod prepare;
 
 pub use account::{Account, AccountSource, OfflineAccountSource};
 pub use java::{
-    auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption, JavaSelector,
+    auto_select_java, default_java_roots, find_java, official_runtime_root, JavaDetails,
+    JavaOption, JavaSelector,
 };
 pub use launcher::GameLauncher;
 pub use memory::{auto_max_memory, resolve_memory, system_available_mib};
