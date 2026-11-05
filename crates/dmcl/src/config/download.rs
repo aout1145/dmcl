@@ -26,8 +26,8 @@ pub struct DownloadConfig {
     pub chunk_size_mib: u64,
     /// 单个文件最多并发几块。
     pub max_chunks_per_file: usize,
-    /// 单个文件最多尝试几次。
-    pub max_attempts: u32,
+    /// 单个文件失败后最多重试几次（不含第一次尝试）。
+    pub max_retries: u32,
     /// 安装器 processor 用哪个 Java，或自动选择。
     pub java: JavaChoice,
 }
@@ -41,7 +41,7 @@ impl Default for DownloadConfig {
             chunk_threshold_mib: 8,
             chunk_size_mib: 4,
             max_chunks_per_file: 8,
-            max_attempts: 3,
+            max_retries: 3,
             java: JavaChoice::Auto,
         }
     }
@@ -52,7 +52,7 @@ impl Config {
     pub fn download_source(&self) -> DownloadSource {
         DownloadSource::from_policy(self.download.mirror)
             .with_user_agent(format!("{LAUNCHER_NAME}/{LAUNCHER_VERSION}"))
-            .with_max_attempts(self.download.max_attempts)
+            .with_max_retries(self.download.max_retries)
     }
 
     /// 配置文件里的下载策略 → [`dmcl_download::DownloadOptions`]。
@@ -62,7 +62,7 @@ impl Config {
                 self.download.chunk_threshold_mib.max(1) * MIB,
                 self.download.chunk_size_mib.max(1) * MIB,
             )
-            .with_max_attempts(self.download.max_attempts)
+            .with_max_retries(self.download.max_retries)
             .with_user_agent(DEFAULT_USER_AGENT);
         options.max_chunks_per_file = self.download.max_chunks_per_file.max(1);
         options
@@ -90,13 +90,13 @@ mod tests {
         config.download.chunk_threshold_mib = 2;
         config.download.chunk_size_mib = 1;
         config.download.max_chunks_per_file = 3;
-        config.download.max_attempts = 5;
+        config.download.max_retries = 5;
 
         let download = config.download_options();
         assert_eq!(download.max_connections, 8);
         assert_eq!(download.chunk_threshold, 2 * MIB);
         assert_eq!(download.chunk_size, MIB);
         assert_eq!(download.max_chunks_per_file, 3);
-        assert_eq!(download.max_attempts, 5);
+        assert_eq!(download.max_retries, 5);
     }
 }

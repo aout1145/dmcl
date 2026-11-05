@@ -16,8 +16,8 @@ pub struct DownloadOptions {
     pub chunk_size: u64,
     /// 单个文件最多并发几块（防止一个大文件把连接数吃光）。
     pub max_chunks_per_file: usize,
-    /// 单个文件最多尝试几次（含第一次）。
-    pub max_attempts: u32,
+    /// 单个文件失败后最多重试几次（不含第一次尝试）。
+    pub max_retries: u32,
     /// 单个文件失败后是否继续下载其余文件。
     ///
     /// `false`（默认）时，只要有一个文件失败，任务最后会返回错误；
@@ -33,7 +33,7 @@ impl Default for DownloadOptions {
             chunk_threshold: 8 * 1024 * 1024,
             chunk_size: 4 * 1024 * 1024,
             max_chunks_per_file: 8,
-            max_attempts: 3,
+            max_retries: 3,
             ignore_failures: false,
             user_agent: DEFAULT_USER_AGENT.to_string(),
         }
@@ -61,8 +61,8 @@ impl DownloadOptions {
         self
     }
 
-    pub fn with_max_attempts(mut self, max_attempts: u32) -> Self {
-        self.max_attempts = max_attempts.max(1);
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
         self
     }
 
@@ -82,7 +82,6 @@ impl DownloadOptions {
         options.max_connections = options.max_connections.max(1);
         options.chunk_size = options.chunk_size.max(1);
         options.max_chunks_per_file = options.max_chunks_per_file.max(1);
-        options.max_attempts = options.max_attempts.max(1);
         options
     }
 
@@ -101,10 +100,10 @@ mod tests {
         let options = DownloadOptions::default();
         assert!(options.max_connections >= 1);
         assert!(options.chunk_size >= 1);
-        assert!(options.max_attempts >= 1);
+        assert_eq!(options.max_retries, 3);
         assert!(!options.ignore_failures);
         assert_eq!(DownloadOptions::with_max_connections(0).max_connections, 1);
-        assert_eq!(options.clone().with_max_attempts(0).max_attempts, 1);
+        assert_eq!(options.clone().with_max_retries(0).max_retries, 0);
         assert_eq!(options.clone().without_chunking().chunk_threshold, u64::MAX);
         assert!(options.with_ignore_failures(true).ignore_failures);
     }

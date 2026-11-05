@@ -116,7 +116,7 @@ async fn a_bad_url_is_reported_but_other_files_still_finish() {
     let mut task = DownloadTask::new(
         DownloadOptions::default()
             .without_chunking()
-            .with_max_attempts(1),
+            .with_max_retries(0),
     )
     .with_item(DownloadItem::new([URL.to_string()], &good));
     task.push(DownloadItem::new(

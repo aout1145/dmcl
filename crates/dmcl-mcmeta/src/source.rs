@@ -501,7 +501,7 @@ pub fn resolve_official_urls<T: UrlFields>(value: &mut T) -> usize {
 /// 一个下载源：**镜像优先级列表** + http 客户端 + 单次请求的重试次数。
 ///
 /// * 列表里第一个是首选镜像，请求失败（网络错误 / 404）时轮换到下一个，直到用满
-///   [`DownloadSource::max_attempts`] 次；
+///   [`DownloadSource::max_retries`] 次重试；
 /// * 所有接受 url 的方法都同时接受"模板"与"普通 url"，
 ///   因此可以直接 `source.fetch_json("${MC_META}/mc/game/version_manifest.json")`。
 #[derive(Debug, Clone)]
@@ -509,11 +509,11 @@ pub struct DownloadSource {
     mirrors: Vec<Mirror>,
     client: reqwest::Client,
     user_agent: String,
-    max_attempts: u32,
+    max_retries: u32,
 }
 
-/// 单个请求默认的重试次数（与下载侧 `max_attempts` 默认值一致）。
-const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+/// 单个请求默认的重试次数（与下载侧 `max_retries` 默认值一致）。
+const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// 建立连接的超时。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -560,9 +560,9 @@ impl DownloadSource {
         self
     }
 
-    /// 单次请求的最大尝试次数（至少 1 次）。
-    pub fn with_max_attempts(mut self, attempts: u32) -> Self {
-        self.max_attempts = attempts.max(1);
+    /// 单次请求失败后最多重试几次（不含第一次尝试）。
+    pub fn with_max_retries(mut self, retries: u32) -> Self {
+        self.max_retries = retries;
         self
     }
 
@@ -571,7 +571,7 @@ impl DownloadSource {
             mirrors,
             client: build_client(user_agent),
             user_agent: user_agent.to_string(),
-            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            max_retries: DEFAULT_MAX_RETRIES,
         }
     }
 
@@ -589,9 +589,9 @@ impl DownloadSource {
         &self.user_agent
     }
 
-    /// 单次请求的最大尝试次数。
-    pub fn max_attempts(&self) -> u32 {
-        self.max_attempts
+    /// 单次请求的最大重试次数。
+    pub fn max_retries(&self) -> u32 {
+        self.max_retries
     }
 
     /// 复用的 http 客户端（连接池 / keep-alive）。
@@ -609,7 +609,7 @@ impl DownloadSource {
     pub async fn fetch_meta(&self, url: &str) -> Result<String> {
         let candidates = self.candidates(url);
         let mut last: Option<anyhow::Error> = None;
-        for attempt in 1..=self.max_attempts {
+        for attempt in 1..=self.max_retries.saturating_add(1) {
             let candidate = &candidates[candidate_index(candidates.len(), attempt)];
             match self.fetch_text(candidate).await {
                 Ok(body) => return Ok(body),

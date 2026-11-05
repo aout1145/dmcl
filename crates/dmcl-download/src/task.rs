@@ -246,7 +246,8 @@ impl Downloader<'_> {
         // 最后尝试过的地址（失败上报用）；还没试过就退回首选
         let mut last_url = item.urls.first().cloned().unwrap_or_default();
 
-        for attempt in 1..=self.options.max_attempts {
+        let attempts = self.options.max_retries.saturating_add(1);
+        for attempt in 1..=attempts {
             if let Err(err) = self.ctx.check_cancelled() {
                 self.tracker.rollback_item(&share);
                 return ItemOutcome {
@@ -262,7 +263,9 @@ impl Downloader<'_> {
             if attempt > 1 {
                 self.ctx.log(format!(
                     "{} 重试（{}/{}）",
-                    item.name, attempt, self.options.max_attempts
+                    item.name,
+                    attempt - 1,
+                    self.options.max_retries
                 ));
             }
             // 每次尝试单独记账：失败重试时把这一轮已经上报的字节数减回去，
@@ -283,10 +286,7 @@ impl Downloader<'_> {
                     recorder.discard();
                     // 失败后清掉半成品，下一轮从头来过
                     let _ = tokio::fs::remove_file(item.part_path()).await;
-                    last_error = Some(err.context(format!(
-                        "第 {attempt}/{} 次从 {url} 下载 {} 失败",
-                        self.options.max_attempts, item.name
-                    )));
+                    last_error = Some(err.context(format!("下载 {} 失败", item.name)));
                 }
             }
         }
@@ -981,7 +981,7 @@ mod tests {
     fn the_client_is_built_with_timeouts() {
         // 超时是在客户端构建时写死的；这里只验证构造不会 panic 且拿到默认选项
         let task = DownloadTask::new(DownloadOptions::default());
-        assert_eq!(task.options().max_attempts, 3);
+        assert_eq!(task.options().max_retries, 3);
         let _ = task.client;
     }
 

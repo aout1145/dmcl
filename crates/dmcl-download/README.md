@@ -27,7 +27,7 @@ report.rs   DownloadReport / DownloadFailure
 | 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256 / sha512**（Minecraft 文档给的是 sha1、Fabric 给的是 sha512；也接受 `sha256:…` 前缀或按摘要长度推断）                                                 |
 | 进度         | 已知大小的项按字节、未知大小的项按数量（字节「下载多少算多少」），整体百分比按文件数占比加权；总量按规划大小预填，拿到服务器实际大小（`Content-Length` / `Content-Range`）后修订、失败项回滚；带节流 |
 | 换源重试     | 每个下载项带一串**候选地址**（由 `dmcl-install` 按镜像策略展开）；第 `n` 次尝试轮换一个（A B A…），全失败才记为失败                                                                        |
-| 断点续传     | 不做；失败即整份重来（最多 `max_attempts` 次）                                                                                                                                               |
+| 断点续传     | 不做；失败即整份重来（首次之外最多重试 `max_retries` 次）                                                                                                                                     |
 | 失败处理     | 所有已排队项目都会跑完，失败项进 `DownloadReport`；默认「有失败就报错」，可用 `DownloadOptions::ignore_failures` 改成「只记录不报错」                                                        |
 
 补充说明：
