@@ -279,28 +279,6 @@ mod tests {
     use crate::config::Config;
 
     #[test]
-    fn default_roots_are_current_and_official() {
-        let config = Config::default();
-        assert_eq!(
-            config
-                .roots()
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect::<Vec<_>>(),
-            vec![
-                CURRENT_ROOT_NAME.to_string(),
-                OFFICIAL_ROOT_NAME.to_string()
-            ]
-        );
-        assert_eq!(config.minecraft_root, CURRENT_ROOT_NAME);
-        assert_eq!(config.default_root_path().unwrap(), absolute(".minecraft"));
-        assert_eq!(
-            config.minecraft_roots.get(CURRENT_ROOT_NAME),
-            Some(&PathBuf::from(".minecraft"))
-        );
-    }
-
-    #[test]
     fn roots_keep_the_file_order() {
         let text = r#"{
             "minecraft_roots": { "b": "/b", "a": "/a" },

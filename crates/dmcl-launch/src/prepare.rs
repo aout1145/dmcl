@@ -345,7 +345,6 @@ pub fn launch_chain(
 mod tests {
     use super::*;
     use crate::account::OfflineAccountSource;
-    use crate::java::JavaDetails;
     use dmcl_mcmeta::source::DownloadSource;
     use dmcl_task::TaskEvent;
     use std::sync::Arc;
@@ -360,19 +359,11 @@ mod tests {
 
     /// 找一个能用的 java 可执行文件；本机没有就返回 `None`（跳过测试）。
     async fn any_java() -> Option<JavaOption> {
-        for candidate in [
-            "/usr/bin/java",
-            "/lib/jvm/java-27-openjdk/bin/java",
-            "/lib/jvm/java-8-openjdk/jre/bin/java",
-        ] {
-            let path = PathBuf::from(candidate);
-            if let Ok(java) = JavaDetails::probe(path).await {
-                if java.is_usable() {
-                    return Some(java.option);
-                }
-            }
-        }
-        None
+        crate::find_java(&crate::default_java_roots())
+            .await
+            .into_iter()
+            .next()
+            .map(|details| details.option)
     }
 
     /// 完整跑一遍：检查（空版本即完整）→ 选 java → 解压 natives → 登录 → 生成参数。

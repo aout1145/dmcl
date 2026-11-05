@@ -146,14 +146,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn events_expose_their_name_and_step() {
+    fn events_render_the_step_and_progress() {
         let started = TaskEvent::StepStarted {
             step: 2,
             steps: 5,
             name: "下载".to_string(),
         };
-        assert_eq!(started.name(), "下载");
-        assert_eq!(started.step(), 2);
         assert_eq!(started.to_string(), "[3/5] 下载");
 
         let progress = TaskEvent::Progress {

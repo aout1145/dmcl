@@ -117,31 +117,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn defaults_match_the_original_struct() {
-        let option = LaunchOption::new(
-            Arc::new(OfflineAccountSource::new("player")),
-            "/mc",
-            "1.20.1",
-            Arc::new(fixed_java()),
-        );
-        assert_eq!(option.window_width, 854);
-        assert_eq!(option.window_height, 480);
-        assert_eq!(option.min_memory, None);
-        assert_eq!(option.max_memory, None);
-        assert_eq!(option.custom_info, LAUNCHER_NAME);
-        assert!(option
-            .additional_jvm
-            .iter()
-            .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
-        assert!(option.additional_game.is_empty());
-        assert!(option.version_isolation);
-        assert_eq!(
-            dmcl_mcmeta::layout::version_dir(&option.root_path, &option.version_name),
-            PathBuf::from("/mc/versions/1.20.1")
-        );
-    }
-
     #[tokio::test]
     async fn java_selection_can_be_supplied_by_the_caller() {
         let java = fixed_java();

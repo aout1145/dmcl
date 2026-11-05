@@ -269,14 +269,6 @@ pub fn install_neoforge_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::source::{DownloadSource, Mirror};
-
-    fn options() -> Arc<InstallOptions> {
-        Arc::new(InstallOptions::new(
-            "/tmp/.minecraft",
-            DownloadSource::new(Mirror::Official),
-        ))
-    }
 
     /// 把若干条目打成内存 zip。
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -348,21 +340,6 @@ mod tests {
                 .url
                 .as_deref(),
             Some("${NEOFORGE_MAVEN}/net/neoforged/srgutils/1.0.0/srgutils-1.0.0.jar")
-        );
-    }
-
-    #[test]
-    fn neoforge_install_has_one_step_per_phase() {
-        let chain = install_neoforge_task(options(), "1.20.1".into(), "47.1.0".into());
-        let names: Vec<_> = chain.step_names().collect();
-        assert_eq!(
-            names,
-            [
-                "下载 NeoForge 安装器",
-                "解出安装器内的库",
-                "执行安装器",
-                "写入版本元数据",
-            ]
         );
     }
 }

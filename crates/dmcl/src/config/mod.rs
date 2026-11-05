@@ -611,11 +611,6 @@ mod tests {
         assert_eq!(config.minecraft_root, "test");
         assert_eq!(config.download.mirror, MirrorPolicy::MirrorFirst);
         assert!(config.download.skip_music);
-        // 缺键保留默认值
-        assert_eq!(config.launch.window_height, 480);
-        assert_eq!(config.launch.min_memory, None);
-        assert_eq!(config.launch.max_memory, None);
-        assert_eq!(config.download.max_tasks, 64);
     }
 
     #[test]

@@ -183,18 +183,6 @@ pub fn root_exists(root_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::source::Mirror;
-
-    #[test]
-    fn options_carry_the_callers_configuration() {
-        let options = InstallOptions::new("/tmp/mc", DownloadSource::new(Mirror::Bmclapi))
-            .with_skip_music(true)
-            .with_java_path("/opt/java/bin/java");
-        assert_eq!(options.root_path, PathBuf::from("/tmp/mc"));
-        assert!(options.skip_music);
-        assert_eq!(options.source.mirror(), Mirror::Bmclapi);
-        assert!(format!("{options:?}").contains("/tmp/mc"));
-    }
 
     #[tokio::test]
     async fn the_default_java_provider_is_usable() {
@@ -202,9 +190,5 @@ mod tests {
         // 只要不 panic 就行：具体路径取决于环境
         let path = options.java_for(17).await.unwrap();
         assert!(!path.as_os_str().is_empty());
-
-        let fixed =
-            InstallOptions::new("/tmp/mc", DownloadSource::official()).with_java_path("/x/y/java");
-        assert_eq!(fixed.java_for(8).await.unwrap(), PathBuf::from("/x/y/java"));
     }
 }

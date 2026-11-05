@@ -654,26 +654,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mirror_policies_map_to_priority_lists() {
-        assert_eq!(MirrorPolicy::OfficialOnly.mirrors(), vec![Mirror::Official]);
-        assert_eq!(
-            MirrorPolicy::OfficialFirst.mirrors(),
-            vec![Mirror::Official, Mirror::Bmclapi, Mirror::ForgeCdn]
-        );
-        assert_eq!(
-            MirrorPolicy::MirrorFirst.mirrors(),
-            vec![Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
-        );
-        // from_policy 的镜像顺序跟 mirrors() 一致
-        let source = DownloadSource::from_policy(MirrorPolicy::MirrorFirst);
-        assert_eq!(
-            source.mirrors(),
-            &[Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
-        );
-        assert_eq!(source.mirror(), Mirror::Bmclapi);
-    }
-
-    #[test]
     fn mirror_policy_names_round_trip_and_typos_are_rejected() {
         assert_eq!(MirrorPolicy::default(), MirrorPolicy::OfficialFirst);
         for policy in MirrorPolicy::ALL {

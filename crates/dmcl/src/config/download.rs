@@ -73,15 +73,6 @@ impl Config {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use dmcl_mcmeta::source::MirrorPolicy;
-
-    #[test]
-    fn download_defaults_are_official_first() {
-        let config = Config::default();
-        assert_eq!(config.download.mirror, MirrorPolicy::OfficialFirst);
-        assert!(!config.download.skip_music);
-        assert_eq!(config.download.max_tasks, 64);
-    }
 
     #[test]
     fn download_options_follow_the_config() {

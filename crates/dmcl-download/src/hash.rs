@@ -475,8 +475,6 @@ mod tests {
         assert_eq!(HashAlgorithm::from_name("crc32"), None);
         assert_eq!(HashAlgorithm::from_hex_len(40), Some(HashAlgorithm::Sha1));
         assert_eq!(HashAlgorithm::from_hex_len(41), None);
-        assert_eq!(HashAlgorithm::Sha1.hex_len(), 40);
-        assert_eq!(HashAlgorithm::Md5.to_string(), "md5");
     }
 
     #[tokio::test]

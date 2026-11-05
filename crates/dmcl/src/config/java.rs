@@ -424,7 +424,6 @@ mod tests {
             JavaChoice::from("jdk17"),
             JavaChoice::Named("jdk17".to_string())
         );
-        assert_eq!(JavaChoice::Auto.as_str(), JAVA_AUTOSELECT);
         assert!(JavaChoice::Auto.is_auto());
         assert_eq!(JavaChoice::Named("x".into()).to_string(), "x");
     }

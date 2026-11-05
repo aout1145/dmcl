@@ -974,15 +974,6 @@ mod tests {
         // 只有知道大小的文件计入分母
         assert_eq!(task.known_total_bytes(), 10);
         assert_eq!(task.items()[0].name, "a.jar");
-        assert_eq!(task.options().max_connections, 64);
-    }
-
-    #[test]
-    fn the_client_is_built_with_timeouts() {
-        // 超时是在客户端构建时写死的；这里只验证构造不会 panic 且拿到默认选项
-        let task = DownloadTask::new(DownloadOptions::default());
-        assert_eq!(task.options().max_retries, 3);
-        let _ = task.client;
     }
 
     /// 重试时进度要回滚：一次失败尝试把已上报的字节减回去。

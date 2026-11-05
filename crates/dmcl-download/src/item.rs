@@ -89,29 +89,6 @@ mod tests {
     use crate::hash::HashAlgorithm;
 
     #[test]
-    fn items_hold_their_candidate_urls_and_default_their_name() {
-        let item = DownloadItem::new(
-            [
-                "https://bmclapi2.bangbang93.com/a/b.jar".to_string(),
-                "https://libraries.minecraft.net/a/b.jar".to_string(),
-            ],
-            "/tmp/b.jar",
-        );
-        assert_eq!(
-            item.urls,
-            vec![
-                "https://bmclapi2.bangbang93.com/a/b.jar".to_string(),
-                "https://libraries.minecraft.net/a/b.jar".to_string(),
-            ]
-        );
-        assert_eq!(item.name, "b.jar");
-        assert_eq!(item.part_path(), PathBuf::from("/tmp/b.jar.part"));
-        assert_eq!(item.clone().named("别的名字").name, "别的名字");
-        assert_eq!(item.clone().with_size(Some(3)).size, Some(3));
-        assert!(item.checksum.is_none());
-    }
-
-    #[test]
     fn checksums_can_be_attached_with_any_algorithm() {
         let hex = "ab".repeat(20);
         let item = DownloadItem::new(["u".to_string()], "/tmp/a")

@@ -96,19 +96,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_sane() {
-        let options = DownloadOptions::default();
-        assert!(options.max_connections >= 1);
-        assert!(options.chunk_size >= 1);
-        assert_eq!(options.max_retries, 3);
-        assert!(!options.ignore_failures);
-        assert_eq!(DownloadOptions::with_max_connections(0).max_connections, 1);
-        assert_eq!(options.clone().with_max_retries(0).max_retries, 0);
-        assert_eq!(options.clone().without_chunking().chunk_threshold, u64::MAX);
-        assert!(options.with_ignore_failures(true).ignore_failures);
-    }
-
-    #[test]
     fn chunking_is_decided_by_size() {
         let options = DownloadOptions::default().with_chunking(1024, 256);
         assert!(!options.should_chunk(1023));

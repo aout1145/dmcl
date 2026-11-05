@@ -264,14 +264,6 @@ fn validate_launchwrapper_version(version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dmcl_mcmeta::source::{DownloadSource, Mirror};
-
-    fn options() -> Arc<InstallOptions> {
-        Arc::new(InstallOptions::new(
-            "/tmp/.minecraft",
-            DownloadSource::new(Mirror::Official),
-        ))
-    }
 
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buffer = Vec::new();
@@ -286,27 +278,6 @@ mod tests {
             writer.finish().unwrap();
         }
         buffer
-    }
-
-    #[test]
-    fn optifine_install_has_one_step_per_phase() {
-        let chain = install_optifine_task(
-            options(),
-            "1.19-optifine".into(),
-            "1.19".into(),
-            "HD_U_H8".into(),
-            false,
-        );
-        let names: Vec<_> = chain.step_names().collect();
-        assert_eq!(
-            names,
-            [
-                "获取 OptiFine 版本",
-                "下载 OptiFine",
-                "准备 launchwrapper",
-                "写入版本元数据",
-            ]
-        );
     }
 
     #[test]

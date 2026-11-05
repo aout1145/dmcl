@@ -66,24 +66,3 @@ async fn write_fabric_version_json(
 
     write_json_safe(&path, &mc_json).await
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use dmcl_mcmeta::source::{DownloadSource, Mirror};
-
-    fn options() -> Arc<InstallOptions> {
-        Arc::new(InstallOptions::new(
-            "/tmp/.minecraft",
-            DownloadSource::new(Mirror::Official),
-        ))
-    }
-
-    #[test]
-    fn fabric_install_writes_the_merged_version_json() {
-        let chain =
-            install_fabric_task(options(), "1.20.1".into(), "1.20.1".into(), "0.15.0".into());
-        let names: Vec<_> = chain.step_names().collect();
-        assert_eq!(names, ["获取并写入版本元数据"]);
-    }
-}

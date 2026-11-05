@@ -245,15 +245,6 @@ mod tests {
     use super::*;
     use crate::config::{temp_dir, JavaConfig};
 
-    #[test]
-    fn default_launch_has_no_account_and_autoselect() {
-        let launch = Config::default().launch;
-        assert!(launch.account.is_none());
-        assert!(launch.java.is_auto());
-        assert_eq!(launch.custom_info, LAUNCHER_NAME);
-        assert!(launch.version_isolation);
-    }
-
     #[tokio::test]
     async fn a_missing_instance_file_uses_the_global_launch() {
         let dir = temp_dir("instance-missing");

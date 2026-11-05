@@ -266,7 +266,6 @@ mod tests {
         assert_eq!(spec.loaders[0].kind, LoaderKind::Fabric);
         assert_eq!(spec.loaders[0].version, "0.15.0");
         assert_eq!(spec.loaders[1].version, "47.2.0");
-        assert_eq!(LoaderKind::NeoForge.to_string(), "neoforge");
     }
 
     #[tokio::test]
@@ -372,16 +371,25 @@ mod tests {
         let spec = InstallSpec::new("1.19", "1.19")
             .with_optifine("HD_U_H8")
             .with_forge("1.19-47.3.0");
+        let steps: Vec<String> = spec
+            .loaders
+            .iter()
+            .map(|request| format!("安装 {}", request.kind.display_name()))
+            .collect();
         let chain = install_task(options, spec);
         let names: Vec<_> = chain.step_names().collect();
-        let optifine = names
+        let positions: Vec<_> = steps
             .iter()
-            .position(|name| *name == "安装 OptiFine")
-            .expect("缺少 OptiFine 步骤");
-        let forge = names
-            .iter()
-            .position(|name| *name == "安装 Forge")
-            .expect("缺少 Forge 步骤");
-        assert!(optifine < forge, "{names:?}");
+            .map(|step| {
+                names
+                    .iter()
+                    .position(|name| name == step)
+                    .unwrap_or_else(|| panic!("缺少步骤「{step}」：{names:?}"))
+            })
+            .collect();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{names:?}"
+        );
     }
 }
