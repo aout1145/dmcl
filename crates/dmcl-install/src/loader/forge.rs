@@ -10,13 +10,13 @@ use dmcl_mcmeta::forge::{forge_installer_url, InstallProfile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::vanilla::VersionJson;
-use dmcl_task::{task_fn_io, TaskChain, TaskContext};
+use dmcl_task::{task_fn, task_fn_io, Task, TaskChain, TaskContext};
 
 use crate::io::{write_json_safe, write_safe};
 use crate::loader::common::finish_version_json;
 use crate::loader::xforge::{
     download_installer, extract_maven_entries, installer_temp_path, run_installer_processors,
-    Installer, ProcessorSpec, ProfileInputs,
+    select_installer_java, Installer, InstallerWithJava, ProcessorSpec, ProfileInputs,
 };
 use crate::options::InstallOptions;
 use crate::plan::base_name;
@@ -32,8 +32,26 @@ pub async fn install_forge(
     let installer = forge_installer(forge_version);
     download_installer(options, &installer, ctx).await?;
     extract_forge_libraries(options, forge_version, &installer.path, ctx).await?;
-    run_forge_installer(options, version_name, forge_version, &installer.path, ctx).await?;
+    if forge_installer_needs_java(&installer.path).await? {
+        let java = select_installer_java(options, version_name, ctx).await?;
+        run_forge_installer(
+            options,
+            version_name,
+            forge_version,
+            &installer.path,
+            &java,
+            ctx,
+        )
+        .await?;
+    }
     write_installer_version_json(options, version_name, &installer.path).await
+}
+
+/// 老式 Forge 安装器没有 `data/client.lzma`，不需要跑 processor，也就不需要 Java。
+async fn forge_installer_needs_java(installer: &Path) -> Result<bool> {
+    let bytes = tokio::fs::read(installer).await?;
+    let mut zip = open_archive(bytes)?;
+    Ok(zip_has_entry(&mut zip, "data/client.lzma"))
 }
 
 fn forge_installer(version: &str) -> Installer {
@@ -79,6 +97,7 @@ async fn run_forge_installer(
     version_name: &str,
     forge_version: &str,
     installer: &Path,
+    java: &Path,
     ctx: &TaskContext,
 ) -> Result<()> {
     let bytes = tokio::fs::read(installer).await?;
@@ -108,7 +127,16 @@ async fn run_forge_installer(
         data: &data,
         processors: &processors,
     };
-    run_installer_processors(options, version_name, forge_version, inputs, &mut zip, ctx).await
+    run_installer_processors(
+        options,
+        version_name,
+        forge_version,
+        java,
+        inputs,
+        &mut zip,
+        ctx,
+    )
+    .await
 }
 
 fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<InstallProfile> {
@@ -209,19 +237,63 @@ pub fn install_forge_task(
                     let options = options.clone();
                     let version_name = version_name.clone();
                     async move {
-                        run_forge_installer(
-                            &options,
-                            &version_name,
-                            &installer.version,
-                            &installer.path,
-                            &ctx,
-                        )
-                        .await?;
+                        // 经典式安装器没有 processor：不构建「选择 Java → 运行安装器」子链。
+                        if !forge_installer_needs_java(&installer.path).await? {
+                            return Ok(installer);
+                        }
+                        let chain =
+                            TaskChain::new(format!("执行 Forge 安装器：{}", installer.version))
+                                .then(
+                                    task_fn({
+                                        let options = options.clone();
+                                        let version_name = version_name.clone();
+                                        let installer = installer.clone();
+                                        move |ctx| {
+                                            let options = options.clone();
+                                            let version_name = version_name.clone();
+                                            let installer = installer.clone();
+                                            async move {
+                                                let java = select_installer_java(
+                                                    &options,
+                                                    &version_name,
+                                                    &ctx,
+                                                )
+                                                .await?;
+                                                Ok(InstallerWithJava { installer, java })
+                                            }
+                                        }
+                                    }),
+                                    "选择 Java",
+                                )
+                                .then(
+                                    task_fn_io({
+                                        let options = options.clone();
+                                        let version_name = version_name.clone();
+                                        move |input: InstallerWithJava, ctx: TaskContext| {
+                                            let options = options.clone();
+                                            let version_name = version_name.clone();
+                                            async move {
+                                                run_forge_installer(
+                                                    &options,
+                                                    &version_name,
+                                                    &input.installer.version,
+                                                    &input.installer.path,
+                                                    &input.java,
+                                                    &ctx,
+                                                )
+                                                .await?;
+                                                Ok(())
+                                            }
+                                        }
+                                    }),
+                                    "运行安装器",
+                                );
+                        Task::<(), ()>::run(&chain, (), ctx.child("执行安装器")).await?;
                         Ok(installer)
                     }
                 }
             }),
-            "运行安装器",
+            "执行安装器",
         )
         .then(
             task_fn_io({
@@ -319,7 +391,7 @@ mod tests {
             [
                 "下载 Forge 安装器",
                 "解出安装器内的库",
-                "运行安装器",
+                "执行安装器",
                 "写入版本元数据",
             ]
         );

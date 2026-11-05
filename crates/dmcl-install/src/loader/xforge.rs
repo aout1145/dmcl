@@ -25,6 +25,7 @@ use crate::plan::{base_name, plan_libraries, PlannedFile};
 use crate::zip::{main_class_of, open_archive, zip_read_entry};
 
 /// 安装 Forge / NeoForge 时在步骤之间传递的中间值。
+#[derive(Clone)]
 pub(crate) struct Installer {
     /// 安装器对应的加载器版本号。
     pub(crate) version: String,
@@ -34,6 +35,12 @@ pub(crate) struct Installer {
     pub(crate) file_name: String,
     /// 安装器落地的临时路径。
     pub(crate) path: PathBuf,
+}
+
+/// 安装器 + 已经选好的 java，供动态子链在「选择 Java」和「运行安装器」之间传递。
+pub(crate) struct InstallerWithJava {
+    pub(crate) installer: Installer,
+    pub(crate) java: PathBuf,
 }
 
 /// 安装器临时路径：`<tmp>/dmcl-installer-<label>/<file_name>`。
@@ -109,11 +116,31 @@ pub(crate) struct ProfileInputs<'a> {
     pub processors: &'a [ProcessorSpec<'a>],
 }
 
+/// 读取版本 JSON，选出（必要时下载）安装器 processor 要用的 Java。
+pub(crate) async fn select_installer_java(
+    options: &InstallOptions,
+    version_name: &str,
+    ctx: &TaskContext,
+) -> Result<PathBuf> {
+    let mc_json = read_version_json(&version_json_path(&options.root_path, version_name)).await?;
+    let preferred = mc_json
+        .java_version
+        .as_ref()
+        .and_then(|java| java.component.as_deref())
+        .filter(|component| !component.is_empty());
+    options
+        .java_for_or_install(mc_json.required_java_major(), preferred, ctx)
+        .await
+}
+
 /// 下载安装器声明的库，解出 `client.lzma`，然后依次执行客户端侧的 processor。
+///
+/// `java` 由调用方在单独的「选择 Java」步骤里准备好，这里不再重复选择。
 pub(crate) async fn run_installer_processors(
     options: &InstallOptions,
     version_name: &str,
     loader_label: &str,
+    java: &Path,
     inputs: ProfileInputs<'_>,
     zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
     ctx: &TaskContext,
@@ -193,17 +220,6 @@ pub(crate) async fn run_installer_processors(
         }
     }
     download_planned(options, "安装器依赖库", planned, ctx).await?;
-
-    // 需要哪个 java 由版本 JSON 决定，怎么找到 java 由调用者决定；
-    // 找不到时在这里用当前任务上下文下载，进度会进入正在跑的安装任务。
-    let preferred_component = mc_json
-        .java_version
-        .as_ref()
-        .and_then(|java| java.component.as_deref())
-        .filter(|component| !component.is_empty());
-    let java = options
-        .java_for_or_install(mc_json.required_java_major(), preferred_component, ctx)
-        .await?;
 
     for (index, spec) in processors.iter().enumerate() {
         let jar_coord = spec.jar;

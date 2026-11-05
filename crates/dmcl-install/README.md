@@ -89,6 +89,10 @@ if !status.is_complete() {
 - **NeoForge** —— 只有现代式（spec 1）；**别给它加 Forge 的经典式**（`install` /
   `versionInfo`）分支。
 
+Forge / NeoForge 的「执行安装器」步骤会在运行时检查安装器内容，按需构建
+`选择 Java → 运行安装器` 子链：需要 processor 时才出现这两步；经典式 Forge 安装器没有
+processor，就不构建子链。JRE 下载进度因此只在实际需要 Java 时进入子链的「选择 Java」步骤。
+
 `read_installer_version_json` 的查找顺序：`json` 指向的条目 →（仅 Forge）内联
 `versionInfo` →（兜底）`install.filePath` 指向的内嵌 jar。
 
