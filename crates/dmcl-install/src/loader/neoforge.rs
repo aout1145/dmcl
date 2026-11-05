@@ -116,7 +116,10 @@ async fn run_neoforge_installer(
 
 fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<InstallProfile> {
     let bytes = zip_read_entry(zip, "install_profile.json")?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let mut profile: InstallProfile = serde_json::from_slice(&bytes)?;
+    // 安装包里的库地址是具体 url，归一成模板后才能按镜像展开候选。
+    profile.templatize_urls();
+    Ok(profile)
 }
 
 /// 从安装包里取出它自带的版本 JSON。
@@ -322,6 +325,29 @@ mod tests {
         assert_eq!(
             read_installer_version_json(&mut zip).unwrap().id.as_deref(),
             Some("custom")
+        );
+    }
+
+    #[test]
+    fn installer_profile_urls_are_templatized() {
+        let installer = zip_of(&[(
+            "install_profile.json",
+            br#"{"libraries":[{"name":"net.neoforged:srgutils:1.0.0",
+                "downloads":{"artifact":{"url":"https://maven.neoforged.net/releases/net/neoforged/srgutils/1.0.0/srgutils-1.0.0.jar"}}}]}"#,
+        )]);
+        let mut zip = open_archive(installer).unwrap();
+        let profile = read_install_profile(&mut zip).unwrap();
+        assert_eq!(
+            profile.libraries[0]
+                .downloads
+                .as_ref()
+                .unwrap()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
+            Some("${NEOFORGE_MAVEN}/net/neoforged/srgutils/1.0.0/srgutils-1.0.0.jar")
         );
     }
 
