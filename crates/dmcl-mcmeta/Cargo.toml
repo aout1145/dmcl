@@ -17,10 +17,3 @@ anyhow.workspace = true
 regex.workspace = true
 os_info.workspace = true
 version-compare.workspace = true
-
-# `--mirror <official|bmclapi>` 的候选值由 clap 生成；只有前端需要它。
-clap = { workspace = true, optional = true }
-
-[features]
-default = []
-clap = ["dep:clap"]

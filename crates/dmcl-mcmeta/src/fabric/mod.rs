@@ -7,7 +7,7 @@ use serde::Deserialize;
 use version_compare::{compare, Cmp};
 
 use crate::json::JsonMap;
-use crate::source::{DownloadSource, Root};
+use crate::source::{templatize_urls, DownloadSource, Root, UrlFields};
 use crate::vanilla::version::{Library, VersionJson};
 
 /// `meta.fabricmc.net/v2/versions/loader/<mcver>` 的一项。
@@ -20,6 +20,12 @@ pub struct FabricLoaderEntry {
     /// Fabric 自己的启动元信息（启动器可选使用）。
     #[serde(default, rename = "launcherMeta")]
     pub launcher_meta: FabricLauncherMeta,
+}
+
+impl UrlFields for FabricLoaderEntry {
+    fn for_each_url_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+        self.launcher_meta.for_each_url_mut(f);
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -72,6 +78,12 @@ pub struct FabricLauncherMeta {
     pub main_class: Option<FabricMainClass>,
 }
 
+impl UrlFields for FabricLauncherMeta {
+    fn for_each_url_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+        self.libraries.for_each_url_mut(f);
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct FabricLibraries {
     #[serde(default)]
@@ -84,6 +96,21 @@ pub struct FabricLibraries {
     pub development: Vec<Library>,
     #[serde(flatten)]
     pub extra: JsonMap,
+}
+
+impl UrlFields for FabricLibraries {
+    fn for_each_url_mut(&mut self, f: &mut dyn FnMut(&mut String)) {
+        for libraries in [
+            &mut self.client,
+            &mut self.common,
+            &mut self.server,
+            &mut self.development,
+        ] {
+            for library in libraries {
+                library.for_each_url_mut(f);
+            }
+        }
+    }
 }
 
 /// `launcherMeta.mainClass` —— 新版是 `{client, server}`，老版只有一个字符串。
@@ -143,6 +170,9 @@ impl DownloadSource {
     pub async fn fetch_fabric_loaders(&self, mc_version: &str) -> Result<Vec<FabricLoaderEntry>> {
         let mut list: Vec<FabricLoaderEntry> =
             self.fetch_json(&fabric_loader_list_url(mc_version)).await?;
+        for entry in &mut list {
+            templatize_urls(entry);
+        }
         list.sort_by(|a, b| {
             compare(&b.loader.version, &a.loader.version)
                 .ok()
@@ -183,6 +213,39 @@ mod tests {
         .unwrap();
         assert!(list[0].loader.is_stable());
         assert!(!list[1].loader.is_stable());
+    }
+
+    #[test]
+    fn fabric_loader_list_urls_are_templatized() {
+        let mut list: Vec<FabricLoaderEntry> = serde_json::from_str(
+            r#"[{"launcherMeta":{"libraries":{
+                "client":[{"name":"a:a:1","url":"https://maven.fabricmc.net/"}],
+                "common":[{"name":"b:b:1","downloads":{"artifact":{"url":"https://maven.fabricmc.net/b.jar"}}}],
+                "server":[],
+                "development":[{"name":"c:c:1","url":"https://meta.fabricmc.net/"}]
+            }}}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(templatize_urls(&mut list[0]), 3);
+        let libraries = &list[0].launcher_meta.libraries;
+        assert_eq!(libraries.client[0].url.as_deref(), Some("${FABRIC_MAVEN}/"));
+        assert_eq!(
+            libraries.common[0]
+                .downloads
+                .as_ref()
+                .unwrap()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
+            Some("${FABRIC_MAVEN}/b.jar")
+        );
+        assert_eq!(
+            libraries.development[0].url.as_deref(),
+            Some("${FABRIC_META}/")
+        );
     }
 
     #[test]

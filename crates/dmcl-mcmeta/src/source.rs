@@ -13,6 +13,9 @@
 //! [`Mirror`] 决定换成官方地址还是镜像地址，于是"下什么"和"从哪儿下"彻底分开：
 //! 安装流程只跟模板打交道，换镜像不需要改一行安装逻辑。
 //!
+//! 一个镜像可以只覆盖部分下载根（例如 ForgeCDN 只镜像 `${NEOFORGE_MAVEN}`）。
+//! 展开候选地址时会跳过不覆盖该根的镜像，因此部分镜像不会把官方地址提前。
+//!
 //! 识别不出来的地址（第三方仓库等）保持原样，也就是**不可镜像**。
 
 use std::fmt;
@@ -32,62 +35,14 @@ pub const DEFAULT_USER_AGENT: &str = concat!("dmcl/", env!("CARGO_PKG_VERSION"))
 
 /// 使用哪个镜像源。
 ///
-/// 类型化之后，`--mirror` 的候选值由 clap 生成，代码里不再到处拿字符串比较。
-///
-/// `dmcl.json` 里写错的值会**直接报错**（见 `FromStr`），不会静默退化。
+/// 镜像可以只覆盖部分下载根（见 [`Root::mirror_bases`]），例如 ForgeCDN 只镜像
+/// NeoForge 的 maven 仓库。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Mirror {
     #[default]
     Official,
     Bmclapi,
-}
-
-impl Mirror {
-    /// 全部镜像，按"官方优先"排列。
-    pub const ALL: [Mirror; 2] = [Mirror::Official, Mirror::Bmclapi];
-
-    /// 配置文件与命令行里使用的名字。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Mirror::Official => "official",
-            Mirror::Bmclapi => "bmclapi",
-        }
-    }
-}
-
-impl fmt::Display for Mirror {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for Mirror {
-    type Err = anyhow::Error;
-
-    /// 不认识的值直接报错（配置文件写错时能立刻发现）。
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "official" => Ok(Mirror::Official),
-            "bmclapi" => Ok(Mirror::Bmclapi),
-            other => Err(anyhow!(
-                "不认识的镜像源：{other}（可选 official / bmclapi）"
-            )),
-        }
-    }
-}
-
-impl Serialize for Mirror {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for Mirror {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        raw.parse().map_err(serde::de::Error::custom)
-    }
+    ForgeCdn,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,11 +82,18 @@ impl MirrorPolicy {
     }
 
     /// 展开成镜像优先级列表（靠前的先试）。
+    ///
+    /// 部分镜像不覆盖的根会被跳过（见 [`resolve_url_candidates`]），所以
+    /// `ForgeCdn` 排在官方之前也不会影响 `${NEOFORGE_MAVEN}` 以外的地址。
     pub fn mirrors(self) -> Vec<Mirror> {
         match self {
             MirrorPolicy::OfficialOnly => vec![Mirror::Official],
-            MirrorPolicy::OfficialFirst => Mirror::ALL.to_vec(),
-            MirrorPolicy::MirrorFirst => Mirror::ALL.iter().rev().copied().collect(),
+            MirrorPolicy::OfficialFirst => {
+                vec![Mirror::Official, Mirror::Bmclapi, Mirror::ForgeCdn]
+            }
+            MirrorPolicy::MirrorFirst => {
+                vec![Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
+            }
         }
     }
 }
@@ -248,23 +210,35 @@ impl Root {
         }
     }
 
-    /// `mirror` 下该根的 base url；该镜像没有对应地址时回落到官方地址
-    /// （也就是"这个根不被镜像"）。
-    pub fn bases(self, mirror: Mirror) -> &'static [&'static str] {
+    /// `mirror` 真正镜像的该根的 base url；`None` 表示该镜像不镜像这个根。
+    ///
+    /// 需要"解析出一个可用地址"时用 [`Root::bases`]（它会回落官方）。
+    pub fn mirror_bases(self, mirror: Mirror) -> Option<&'static [&'static str]> {
         match mirror {
-            Mirror::Official => self.official_bases(),
+            Mirror::Official => Some(self.official_bases()),
             Mirror::Bmclapi => match self {
-                Root::McMeta => &["https://bmclapi2.bangbang93.com"],
-                Root::McMaven => &["https://bmclapi2.bangbang93.com/maven"],
-                Root::McAssets => &["https://bmclapi2.bangbang93.com/assets"],
-                Root::ForgeMaven => &["https://bmclapi2.bangbang93.com/maven"],
-                Root::NeoForgeMaven => &["https://bmclapi2.bangbang93.com/maven"],
-                Root::FabricMeta => &["https://bmclapi2.bangbang93.com/fabric-meta"],
-                Root::FabricMaven => &["https://bmclapi2.bangbang93.com/maven"],
+                Root::McMeta => Some(&["https://bmclapi2.bangbang93.com"]),
+                Root::McMaven => Some(&["https://bmclapi2.bangbang93.com/maven"]),
+                Root::McAssets => Some(&["https://bmclapi2.bangbang93.com/assets"]),
+                Root::ForgeMaven => Some(&["https://bmclapi2.bangbang93.com/maven"]),
+                Root::NeoForgeMaven => Some(&["https://bmclapi2.bangbang93.com/maven"]),
+                Root::FabricMeta => Some(&["https://bmclapi2.bangbang93.com/fabric-meta"]),
+                Root::FabricMaven => Some(&["https://bmclapi2.bangbang93.com/maven"]),
                 // bmclapi 不镜像这两个根（不改写）
-                Root::McData | Root::McLauncher => self.official_bases(),
+                Root::McData | Root::McLauncher => None,
+            },
+            // ForgeCDN 只镜像 NeoForge 的 maven 仓库，其他根一律不覆盖。
+            Mirror::ForgeCdn => match self {
+                Root::NeoForgeMaven => Some(&["https://neoforged.forgecdn.net/releases"]),
+                _ => None,
             },
         }
+    }
+
+    /// `mirror` 下该根的 base url；该镜像不镜像这个根时回落到官方地址。
+    pub fn bases(self, mirror: Mirror) -> &'static [&'static str] {
+        self.mirror_bases(mirror)
+            .unwrap_or_else(|| self.official_bases())
     }
 
     /// `mirror` 下的主 base url。
@@ -296,8 +270,11 @@ pub fn is_templated(url: &str) -> bool {
 pub fn templatize_url(url: &str) -> String {
     let mut best: Option<(usize, &'static str)> = None;
     for root in Root::ALL {
-        for mirror in Mirror::ALL {
-            for base in root.bases(mirror) {
+        for mirror in [Mirror::Official, Mirror::Bmclapi, Mirror::ForgeCdn] {
+            let Some(bases) = root.mirror_bases(mirror) else {
+                continue;
+            };
+            for base in bases {
                 if !base.is_empty() && url.starts_with(base) {
                     let better = match best {
                         None => true,
@@ -317,7 +294,10 @@ pub fn templatize_url(url: &str) -> String {
 }
 
 /// 把模板里的占位符换成 `mirror` 下的真实 base。
-pub fn resolve_url(url: &str, mirror: Mirror) -> String {
+///
+/// 这是内部实现：下载地址一律通过 [`resolve_url_candidates`] 生成，写盘地址通过
+/// [`resolve_official_urls`] 生成官方地址。
+fn resolve_with_mirror(url: &str, mirror: Mirror) -> String {
     let mut out = url.to_string();
     if !is_templated(&out) {
         return out;
@@ -331,17 +311,36 @@ pub fn resolve_url(url: &str, mirror: Mirror) -> String {
     out
 }
 
+/// `mirror` 是否覆盖 `url` 模板里出现的所有下载根。
+///
+/// 普通 url（不含占位符）视为不需要任何镜像，因此总返回 `true`。
+fn mirror_covers(mirror: Mirror, url: &str) -> bool {
+    Root::ALL
+        .into_iter()
+        .filter(|root| url.contains(root.placeholder()))
+        .all(|root| root.mirror_bases(mirror).is_some())
+}
+
 /// 按镜像优先级把模板展开成候选 url（保序去重）。
+///
+/// 不覆盖模板里所有下载根的镜像会被跳过；一个都不覆盖时回落到官方地址。
+/// 这样部分镜像（例如只镜像 NeoForge 的 ForgeCDN）不会把其他根的官方地址提前。
 pub fn resolve_url_candidates(url: &str, mirrors: &[Mirror]) -> Vec<String> {
+    if !is_templated(url) {
+        return vec![url.to_string()];
+    }
     let mut out: Vec<String> = Vec::new();
     for mirror in mirrors {
-        let resolved = resolve_url(url, *mirror);
+        if !mirror_covers(*mirror, url) {
+            continue;
+        }
+        let resolved = resolve_with_mirror(url, *mirror);
         if !out.contains(&resolved) {
             out.push(resolved);
         }
     }
     if out.is_empty() {
-        out.push(url.to_string());
+        out.push(resolve_with_mirror(url, Mirror::Official));
     }
     out
 }
@@ -397,11 +396,6 @@ impl UrlTemplate {
             .collect()
     }
 
-    /// 解析成 `mirror` 下的真实链接。
-    pub fn resolve(&self, mirror: Mirror) -> String {
-        resolve_url(&self.0, mirror)
-    }
-
     /// 按镜像优先级展开成候选链接。
     pub fn candidates(&self, mirrors: &[Mirror]) -> Vec<String> {
         resolve_url_candidates(&self.0, mirrors)
@@ -454,7 +448,7 @@ impl<'de> Deserialize<'de> for UrlTemplate {
 
 /// 一个文档结构体里所有"下载地址"字段的遍历。
 ///
-/// 有了它，[`templatize_urls`] / [`resolve_urls`] 就能对所有文档类型通用，
+/// 有了它，[`templatize_urls`] / [`resolve_official_urls`] 就能对所有文档类型通用，
 /// 新增字段时只需要在 `for_each_url_mut` 里补一行，不会漏。
 pub trait UrlFields {
     /// 对每个 url 字段调用一次 `f`（可以就地改写）。
@@ -482,14 +476,16 @@ pub fn templatize_urls<T: UrlFields>(value: &mut T) -> usize {
     changed
 }
 
-/// 把文档里所有 url 模板解析成 `mirror` 下的真实链接，返回改写的个数。
-pub fn resolve_urls<T: UrlFields>(value: &mut T, mirror: Mirror) -> usize {
+/// 把文档里所有 url 模板解析成**官方**地址，返回改写的个数。
+///
+/// 写盘用的文档必须指向官方地址（镜像只在下载时使用），因此这里不接受 `Mirror`。
+pub fn resolve_official_urls<T: UrlFields>(value: &mut T) -> usize {
     let mut changed = 0;
     value.for_each_url_mut(&mut |url| {
         if !is_templated(url) {
             return;
         }
-        let resolved = resolve_url(url, mirror);
+        let resolved = resolve_with_mirror(url, Mirror::Official);
         if resolved != *url {
             *url = resolved;
             changed += 1;
@@ -603,11 +599,6 @@ impl DownloadSource {
         &self.client
     }
 
-    /// 用首选镜像解析模板。
-    pub fn resolve(&self, url: impl AsRef<str>) -> String {
-        resolve_url(url.as_ref(), self.mirror())
-    }
-
     /// 按优先级展开成候选链接。
     pub fn candidates(&self, url: impl AsRef<str>) -> Vec<String> {
         resolve_url_candidates(url.as_ref(), &self.mirrors)
@@ -663,38 +654,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mirror_names_round_trip_and_typos_are_rejected() {
-        assert_eq!(Mirror::Official.as_str(), "official");
-        assert_eq!(Mirror::Bmclapi.to_string(), "bmclapi");
-        assert_eq!("bmclapi".parse::<Mirror>().unwrap(), Mirror::Bmclapi);
-        // 配置里写错的值直接报错
-        assert!("typo".parse::<Mirror>().is_err());
-        assert!(serde_json::from_str::<Mirror>("\"typo\"").is_err());
-        assert_eq!(
-            serde_json::to_string(&Mirror::Bmclapi).unwrap(),
-            "\"bmclapi\""
-        );
-        assert_eq!(
-            serde_json::from_str::<Mirror>("\"bmclapi\"").unwrap(),
-            Mirror::Bmclapi
-        );
-        assert_eq!(Mirror::default(), Mirror::Official);
-    }
-
-    #[test]
     fn mirror_policies_map_to_priority_lists() {
         assert_eq!(MirrorPolicy::OfficialOnly.mirrors(), vec![Mirror::Official]);
         assert_eq!(
             MirrorPolicy::OfficialFirst.mirrors(),
-            vec![Mirror::Official, Mirror::Bmclapi]
+            vec![Mirror::Official, Mirror::Bmclapi, Mirror::ForgeCdn]
         );
         assert_eq!(
             MirrorPolicy::MirrorFirst.mirrors(),
-            vec![Mirror::Bmclapi, Mirror::Official]
+            vec![Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
         );
         // from_policy 的镜像顺序跟 mirrors() 一致
         let source = DownloadSource::from_policy(MirrorPolicy::MirrorFirst);
-        assert_eq!(source.mirrors(), &[Mirror::Bmclapi, Mirror::Official]);
+        assert_eq!(
+            source.mirrors(),
+            &[Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
+        );
         assert_eq!(source.mirror(), Mirror::Bmclapi);
     }
 
@@ -757,6 +732,64 @@ mod tests {
             templatize_url("https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"),
             "${MC_META}/mc/game/version_manifest.json"
         );
+        assert_eq!(
+            templatize_url("https://neoforged.forgecdn.net/releases/net/neoforged/neoforge/a.jar"),
+            "${NEOFORGE_MAVEN}/net/neoforged/neoforge/a.jar"
+        );
+    }
+
+    #[test]
+    fn forgecdn_only_covers_the_neoforge_maven_root() {
+        assert_eq!(
+            resolve_url_candidates("${NEOFORGE_MAVEN}/a.jar", &[Mirror::ForgeCdn]),
+            vec!["https://neoforged.forgecdn.net/releases/a.jar".to_string()]
+        );
+        // 不覆盖的根回落到官方
+        assert_eq!(
+            resolve_url_candidates("${MC_MAVEN}/a.jar", &[Mirror::ForgeCdn]),
+            vec!["https://libraries.minecraft.net/a.jar".to_string()]
+        );
+
+        // MirrorFirst 是 [bmclapi, forgecdn, official]，ForgeCDN 只影响 NeoForge
+        let mirrors = MirrorPolicy::MirrorFirst.mirrors();
+        assert_eq!(
+            resolve_url_candidates("${NEOFORGE_MAVEN}/a.jar", &mirrors),
+            vec![
+                "https://bmclapi2.bangbang93.com/maven/a.jar".to_string(),
+                "https://neoforged.forgecdn.net/releases/a.jar".to_string(),
+                "https://maven.neoforged.net/releases/a.jar".to_string(),
+            ]
+        );
+        assert_eq!(
+            resolve_url_candidates("${MC_MAVEN}/a.jar", &mirrors),
+            vec![
+                "https://bmclapi2.bangbang93.com/maven/a.jar".to_string(),
+                "https://libraries.minecraft.net/a.jar".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn partial_mirrors_do_not_promote_the_official_url() {
+        // 即使部分镜像排在前面，候选里也不会出现“官方地址先于覆盖该根的镜像”
+        let candidates = resolve_url_candidates(
+            "${MC_MAVEN}/a.jar",
+            &[Mirror::ForgeCdn, Mirror::Bmclapi, Mirror::Official],
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                "https://bmclapi2.bangbang93.com/maven/a.jar".to_string(),
+                "https://libraries.minecraft.net/a.jar".to_string(),
+            ]
+        );
+
+        // 没有任何镜像覆盖时回落官方
+        let candidates = resolve_url_candidates("${MC_DATA}/x", &[Mirror::ForgeCdn]);
+        assert_eq!(
+            candidates,
+            vec!["https://piston-data.mojang.com/x".to_string()]
+        );
     }
 
     #[test]
@@ -770,22 +803,22 @@ mod tests {
     fn templates_resolve_per_mirror() {
         let template = "${MC_MAVEN}/a/b.jar";
         assert_eq!(
-            resolve_url(template, Mirror::Official),
-            "https://libraries.minecraft.net/a/b.jar"
+            resolve_url_candidates(template, &[Mirror::Official]),
+            vec!["https://libraries.minecraft.net/a/b.jar".to_string()]
         );
         assert_eq!(
-            resolve_url(template, Mirror::Bmclapi),
-            "https://bmclapi2.bangbang93.com/maven/a/b.jar"
+            resolve_url_candidates(template, &[Mirror::Bmclapi]),
+            vec!["https://bmclapi2.bangbang93.com/maven/a/b.jar".to_string()]
         );
-        // 不被镜像的根在两个镜像下相同
+        // 不被镜像的根回落到官方
         assert_eq!(
-            resolve_url("${MC_DATA}/v1/objects/x/client.jar", Mirror::Bmclapi),
-            "https://piston-data.mojang.com/v1/objects/x/client.jar"
+            resolve_url_candidates("${MC_DATA}/v1/objects/x/client.jar", &[Mirror::Bmclapi]),
+            vec!["https://piston-data.mojang.com/v1/objects/x/client.jar".to_string()]
         );
         // 不含占位符时原样返回
         assert_eq!(
-            resolve_url("https://example.com/a.jar", Mirror::Bmclapi),
-            "https://example.com/a.jar"
+            resolve_url_candidates("https://example.com/a.jar", &[Mirror::Bmclapi]),
+            vec!["https://example.com/a.jar".to_string()]
         );
     }
 
@@ -820,8 +853,8 @@ mod tests {
         assert_eq!(template.as_str(), "${MC_ASSETS}/ab/cdef");
         assert_eq!(template.roots(), vec![Root::McAssets]);
         assert_eq!(
-            template.resolve(Mirror::Bmclapi),
-            "https://bmclapi2.bangbang93.com/assets/ab/cdef"
+            template.candidates(&[Mirror::Bmclapi]),
+            vec!["https://bmclapi2.bangbang93.com/assets/ab/cdef".to_string()]
         );
         assert!(template.is_templated());
         assert!(!UrlTemplate::new("https://example.com/a.jar").is_templated());
@@ -837,6 +870,32 @@ mod tests {
         let source = DownloadSource::with_priority([Mirror::Bmclapi, Mirror::Bmclapi]).unwrap();
         assert_eq!(source.mirrors().len(), 1);
         assert_eq!(source.mirrors(), &[Mirror::Bmclapi]);
+    }
+
+    #[test]
+    fn candidates_skip_mirrors_that_do_not_cover_the_root() {
+        let source =
+            DownloadSource::with_priority([Mirror::ForgeCdn, Mirror::Bmclapi, Mirror::Official])
+                .unwrap();
+        assert_eq!(
+            source.candidates("${NEOFORGE_MAVEN}/a.jar"),
+            vec![
+                "https://neoforged.forgecdn.net/releases/a.jar".to_string(),
+                "https://bmclapi2.bangbang93.com/maven/a.jar".to_string(),
+                "https://maven.neoforged.net/releases/a.jar".to_string(),
+            ]
+        );
+        assert_eq!(
+            source.candidates("${MC_MAVEN}/a.jar"),
+            vec![
+                "https://bmclapi2.bangbang93.com/maven/a.jar".to_string(),
+                "https://libraries.minecraft.net/a.jar".to_string(),
+            ]
+        );
+        assert_eq!(
+            source.candidates("${MC_DATA}/x"),
+            vec!["https://piston-data.mojang.com/x".to_string()]
+        );
     }
 
     #[test]
@@ -866,9 +925,11 @@ mod tests {
             .iter()
             .any(|url| url == "${MC_META}/v1/packages/x/1.json"));
 
-        assert_eq!(resolve_urls(&mut version, Mirror::Bmclapi), 4);
+        // 写盘前统一解析回官方地址
+        assert_eq!(resolve_official_urls(&mut version), 4);
         let urls = urls_of(&version);
-        assert!(urls.contains(&"https://bmclapi2.bangbang93.com/maven/a.jar".to_string()));
+        assert!(urls.contains(&"https://libraries.minecraft.net/a.jar".to_string()));
+        assert!(urls.contains(&"https://files.minecraftforge.net/maven/".to_string()));
         // 不可镜像的地址保持原样
         assert!(
             urls.contains(&"https://piston-data.mojang.com/v1/objects/x/client.jar".to_string())

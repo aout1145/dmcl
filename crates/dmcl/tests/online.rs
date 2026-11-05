@@ -110,7 +110,7 @@ async fn mirror_policy_reaches_the_source_mirrors() {
     config.download.mirror = MirrorPolicy::MirrorFirst;
     assert_eq!(
         config.download_source().mirrors(),
-        &[Mirror::Bmclapi, Mirror::Official]
+        &[Mirror::Bmclapi, Mirror::ForgeCdn, Mirror::Official]
     );
 
     // 配置里的策略也确实能取到版本列表。

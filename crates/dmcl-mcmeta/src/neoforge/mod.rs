@@ -118,8 +118,11 @@ mod tests {
     fn neoforge_version_list_url_is_bmclapi_only() {
         let url = neoforge_version_list_url("1.21.1");
         assert_eq!(url, "https://bmclapi2.bangbang93.com/neoforge/list/1.21.1");
-        // 不含占位符 ⇒ 不可镜像：解析到官方镜像也原样，不会指向 piston-meta
+        // 不含占位符 ⇒ 不可镜像：候选列表里只有它自己，不会指向 piston-meta
         assert!(!crate::source::is_templated(&url));
-        assert_eq!(crate::source::resolve_url(&url, Mirror::Official), url);
+        assert_eq!(
+            crate::source::resolve_url_candidates(&url, &[Mirror::Official]),
+            vec![url]
+        );
     }
 }

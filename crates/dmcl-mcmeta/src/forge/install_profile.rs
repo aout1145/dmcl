@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::json::JsonMap;
 use crate::macros::string_enum;
-use crate::source::{resolve_urls, templatize_urls, Mirror, UrlFields};
+use crate::source::{resolve_official_urls, templatize_urls, UrlFields};
 use crate::vanilla::version::{Library, VersionJson};
 
 string_enum! {
@@ -231,9 +231,9 @@ impl InstallProfile {
         templatize_urls(self)
     }
 
-    /// 把 url 模板解析成 `mirror` 下的真实链接。
-    pub fn resolve_urls(&mut self, mirror: Mirror) -> usize {
-        resolve_urls(self, mirror)
+    /// 把 url 模板解析成官方地址。
+    pub fn resolve_official_urls(&mut self) -> usize {
+        resolve_official_urls(self)
     }
 }
 

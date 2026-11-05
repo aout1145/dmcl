@@ -28,7 +28,7 @@ gtk4 = ["dep:relm4", "dep:sysinfo", "dep:notify"]
 
 [dependencies]
 dmcl-task.workspace = true
-dmcl-mcmeta = { workspace = true, features = ["clap"] }
+dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
 dmcl-install.workspace = true
 dmcl-launch.workspace = true

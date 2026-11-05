@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::json::JsonMap;
-use crate::source::{resolve_urls, templatize_urls, Mirror, UrlFields};
+use crate::source::{resolve_official_urls, templatize_urls, UrlFields};
 use crate::vanilla::rules::Rule;
 
 // ---------------------------------------------------------------------------
@@ -450,9 +450,9 @@ impl VersionJson {
         templatize_urls(self)
     }
 
-    /// 把 url 模板解析成 `mirror` 下的真实链接，返回改写的字段个数。
-    pub fn resolve_urls(&mut self, mirror: Mirror) -> usize {
-        resolve_urls(self, mirror)
+    /// 把 url 模板解析成官方地址，返回改写的字段个数。
+    pub fn resolve_official_urls(&mut self) -> usize {
+        resolve_official_urls(self)
     }
 
     /// 模板化的副本（从磁盘读出的文档要先过这一步才能被镜像）。
@@ -461,9 +461,9 @@ impl VersionJson {
         self
     }
 
-    /// 解析成具体镜像链接的副本（写回磁盘时用官方源，保证文件可移植）。
-    pub fn resolved(mut self, mirror: Mirror) -> Self {
-        self.resolve_urls(mirror);
+    /// 解析成官方地址的副本（写回磁盘时用，保证文件可移植）。
+    pub fn resolved_official(mut self) -> Self {
+        self.resolve_official_urls();
         self
     }
 

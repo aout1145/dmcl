@@ -22,8 +22,11 @@ async fn version_manifest_is_fetched_and_templatized() {
             "未被模板化: {}",
             entry.url
         );
-        // 模板能被解析回官方地址
-        assert!(source.resolve(&entry.url).starts_with("https://"));
+        // 模板能展开成可用的候选地址
+        assert!(source
+            .candidates(&entry.url)
+            .iter()
+            .all(|url| url.starts_with("https://")));
     }
 }
 
@@ -41,17 +44,15 @@ async fn a_version_json_round_trips_through_templates() {
 
     // 官方下载地址已经变成模板……
     let templated = serde_json::to_value(&version).unwrap();
-    assert!(templated["libraries"][0]["downloads"]["artifact"]["url"]
+    let template = templated["libraries"][0]["downloads"]["artifact"]["url"]
         .as_str()
-        .unwrap_or_default()
-        .starts_with("${MC_"));
+        .expect("artifact url");
+    assert!(template.starts_with("${MC_"));
 
-    // ……而解析回官方源之后与镜像源不同（说明镜像确实生效）
-    let mirrored = version.clone().resolved(Mirror::Bmclapi);
-    assert_ne!(
-        serde_json::to_string(&version).unwrap(),
-        serde_json::to_string(&mirrored).unwrap()
-    );
+    // ……按镜像展开的候选地址与官方不同（说明镜像确实生效）
+    let official = DownloadSource::official().candidates(template);
+    let mirrored = DownloadSource::new(Mirror::Bmclapi).candidates(template);
+    assert_ne!(official[0], mirrored[0]);
 }
 
 #[tokio::test]
@@ -61,6 +62,39 @@ async fn fabric_loader_list_can_be_queried() {
     let loaders = source.fetch_fabric_loaders("1.20.1").await.expect("fabric");
     assert!(!loaders.is_empty());
     assert!(loaders.iter().any(|entry| entry.loader.is_stable()));
+    // launcherMeta 里属于 Fabric 仓库的库地址已经归一成模板；
+    // 其他第三方仓库（如 Maven Central）不属于任何下载根，保持原样。
+    let urls: Vec<&str> = loaders
+        .iter()
+        .flat_map(|entry| {
+            let libraries = &entry.launcher_meta.libraries;
+            libraries
+                .client
+                .iter()
+                .chain(&libraries.common)
+                .chain(&libraries.server)
+                .chain(&libraries.development)
+        })
+        .flat_map(|library| {
+            [
+                library.url.as_deref(),
+                library
+                    .downloads
+                    .as_ref()
+                    .and_then(|downloads| downloads.artifact.as_ref())
+                    .and_then(|artifact| artifact.url.as_deref()),
+            ]
+        })
+        .flatten()
+        .collect();
+    assert!(
+        urls.iter().any(|url| url.starts_with("${FABRIC_")),
+        "{urls:?}"
+    );
+    assert!(
+        urls.iter().all(|url| !url.contains("fabricmc.net")),
+        "{urls:?}"
+    );
 }
 
 #[tokio::test]

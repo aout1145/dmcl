@@ -780,7 +780,6 @@ name = "dmcl-mcmeta"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "clap",
  "os_info",
  "path-clean",
  "regex",

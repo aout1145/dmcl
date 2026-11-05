@@ -68,10 +68,10 @@ mod tests {
     }
 
     #[test]
-    fn resolved_urls_point_at_the_expected_mirror() {
+    fn candidate_urls_point_at_the_expected_mirror() {
         assert_eq!(
-            DownloadSource::new(Mirror::Bmclapi).resolve(maven_library_url("a.jar")),
-            "https://bmclapi2.bangbang93.com/maven/a.jar"
+            DownloadSource::new(Mirror::Bmclapi).candidates(maven_library_url("a.jar")),
+            vec!["https://bmclapi2.bangbang93.com/maven/a.jar".to_string()]
         );
     }
 }

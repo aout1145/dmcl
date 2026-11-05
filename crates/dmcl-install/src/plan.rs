@@ -4,7 +4,7 @@
 //! 虚拟资源目录、跳过音乐这些判断都能被穷举单测覆盖。
 //!
 //! 产出的 [`PlannedFile::url`] 仍然是**模板**，真正下载时才由
-//! [`dmcl_mcmeta::source::DownloadSource::resolve`] 解析成具体镜像地址。
+//! [`dmcl_mcmeta::source::DownloadSource::candidates`] 展开成候选地址。
 
 use std::path::{Path, PathBuf};
 

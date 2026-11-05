@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_mcmeta::layout::{absolute, version_json_path};
-use dmcl_mcmeta::source::Mirror;
 use dmcl_task::{task_fn, TaskChain};
 
 use crate::io::{write_json_safe, write_safe};
@@ -86,7 +85,7 @@ pub async fn download_vanilla(
 
     let mut json = options.source.fetch_version_json_by_id(version_id).await?;
     json.id = Some(version_name.to_string());
-    json.resolve_urls(Mirror::Official);
+    json.resolve_official_urls();
 
     write_json_safe(version_json_path(&options.root_path, version_name), &json).await
 }

@@ -4,8 +4,7 @@
 它**不把文件写到磁盘上**，也不读配置文件；根目录、镜像、并发度等一律由调用者传入。
 
 `dmcl-mcmeta` 是 workspace 最底层的叶子 crate，不依赖其他成员 crate。外部依赖主要是
-`serde` / `serde_json` / `reqwest` / `tokio`；可选的 `clap` feature 让 `Mirror` 直接作为
-clap 的候选值，供前端复用。
+`serde` / `serde_json` / `reqwest` / `tokio`。
 
 ## 模块布局
 
@@ -50,8 +49,9 @@ ${MC_MAVEN}/net/sf/jopt-simple/…/jopt-simple-5.0.4.jar
 
 ```rust
 let source = DownloadSource::from_policy(MirrorPolicy::MirrorFirst);
-source.resolve("${MC_MAVEN}/a/b.jar");
-// → https://bmclapi2.bangbang93.com/maven/a/b.jar
+source.candidates("${MC_MAVEN}/a/b.jar");
+// → ["https://bmclapi2.bangbang93.com/maven/a/b.jar",
+//    "https://libraries.minecraft.net/a/b.jar"]
 ```
 
 要点：
@@ -59,11 +59,17 @@ source.resolve("${MC_MAVEN}/a/b.jar");
 - 归一化选**最长前缀**匹配（否则 bmclapi 的站点根会把 `/maven` 之类的更具体的根吞掉）；
 - 一个根可以有**多个等价官域**（Forge 的 `files.minecraftforge.net/maven` 与
   `maven.minecraftforge.net` 是同一个仓库，都归一成 `${FORGE_MAVEN}`）；
-- 识别不出的 host 原样保留 = 不可镜像；
-- `UrlFields` trait 统一遍历文档里的 url 字段，`templatize_urls` / `resolve_urls`
-  对任何文档类型都通用，新增字段不会漏改；
+- 一个镜像可以只覆盖**部分根**：`Root::mirror_bases` 返回 `None` 表示该镜像不镜像这个
+  根。例如 ForgeCDN（`neoforged.forgecdn.net/releases`）只映射 `${NEOFORGE_MAVEN}`；
+  展开候选地址时会跳过不覆盖该根的镜像，所以部分镜像不会把官方地址提前到其他镜像前面；
+- 识别不出的 host 原样保留 = 不可镜像；Fabric loader 列表里 `launcherMeta` 的库地址
+  同样参与归一化，Maven Central 之类的第三方仓库保持原样；
+- `UrlFields` trait 统一遍历文档里的 url 字段，`templatize_urls` / `resolve_official_urls`
+  对任何文档类型都通用，新增字段不会漏改；下载地址统一走 `resolve_url_candidates`，
+  写盘时只解析回官方地址；
 - 用哪种镜像由 `MirrorPolicy` 决定：`official-only`（仅官方）、`official-first`
-  （官方优先，默认）、`mirror-first`（镜像优先）；各域取 meta 统一走 `fetch_meta(url)`
+  （官方优先，默认）、`mirror-first`（镜像优先，顺序是 bmclapi → ForgeCDN → 官方）；
+  各域取 meta 统一走 `fetch_meta(url)`
   —— 内部按镜像优先级展开候选、轮换重试（A B A …）直到用满重试次数，
   `fetch_json` 就是它的 JSON 版：
   `source.fetch_json("${MC_META}/mc/game/version_manifest.json").await?`。
