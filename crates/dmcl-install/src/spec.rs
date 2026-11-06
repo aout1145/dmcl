@@ -4,16 +4,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
+use dmcl_download::DownloadReport;
+use dmcl_game::{ensure_client_jar, ensure_files, resolve_version, ResolvedVersion, VersionRef};
 use dmcl_mcmeta::layout::version_dir;
-use dmcl_task::{task_fn, BoxFuture, Task, TaskChain, TaskContext};
+use dmcl_task::{task_fn, task_fn_io, BoxFuture, Task, TaskChain, TaskContext};
 
 use crate::fabric::install_fabric_task;
-use crate::files::{client_jar_task, game_files_task};
 use crate::forge::install_forge_task;
 use crate::neoforge::install_neoforge_task;
 use crate::optifine::install_optifine_task;
 use crate::options::InstallOptions;
-use crate::vanilla::vanilla_metadata_task;
+use crate::vanilla::download_vanilla;
 
 /// 一种模组加载器，或叠加在原版 / Forge 上的 OptiFine。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,11 +152,21 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
     name
 }
 
+/// 一次安装的产出。
+#[derive(Debug, Clone)]
+pub struct InstallOutcome {
+    pub version: VersionRef,
+    pub report: DownloadReport,
+}
+
 /// 占用版本目录：已存在就直接报错，不存在则创建它。
 ///
 /// 删除动作由安装链在**这一步成功之后**通过 `on_rollback` 登记；因此版本已存在时
 /// 回滚不会生效，也就不会误删用户已有的版本。
-fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(), ()> + 'static {
+fn create_version_dir(
+    root_path: PathBuf,
+    version_name: String,
+) -> impl Task<(), VersionRef> + 'static {
     task_fn(move |_ctx| {
         let root_path = root_path.clone();
         let version_name = version_name.clone();
@@ -167,7 +178,7 @@ fn create_version_dir(root_path: PathBuf, version_name: String) -> impl Task<(),
                     .with_context(|| format!("无法创建 {}", parent.display()))?;
             }
             match tokio::fs::create_dir(&dir).await {
-                Ok(()) => Ok(()),
+                Ok(()) => Ok(VersionRef::new(root_path, version_name)),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::bail!("版本「{version_name}」已存在：{}", dir.display())
                 }
@@ -202,6 +213,77 @@ fn remove_version_dir_rollback(
     }
 }
 
+/// 获取原版元数据并落盘，然后读回解析好的版本。
+fn vanilla_metadata_step(
+    options: Arc<InstallOptions>,
+    version_id: String,
+) -> impl Task<VersionRef, ResolvedVersion> + 'static {
+    task_fn_io(move |reference: VersionRef, ctx: TaskContext| {
+        let options = options.clone();
+        let version_id = version_id.clone();
+        async move {
+            ctx.log(format!("查询版本列表并保存 {}.json", reference.name));
+            download_vanilla(&options, &version_id, &reference.name).await?;
+            ctx.log(format!("{}.json 已写入", reference.name));
+            resolve_version(&reference).await
+        }
+    })
+}
+
+/// 确保客户端 jar 就位（加载器 processor 之前需要）。
+fn ensure_client_jar_step(
+    options: Arc<InstallOptions>,
+) -> impl Task<ResolvedVersion, ResolvedVersion> + 'static {
+    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
+        let options = options.clone();
+        async move {
+            ensure_client_jar(&version, &options.game, &ctx).await?;
+            Ok(version)
+        }
+    })
+}
+
+/// 运行一个加载器的安装子链，然后重新读回它更新后的版本 JSON。
+fn loader_step(
+    options: Arc<InstallOptions>,
+    request: LoaderRequest,
+    mc_version: String,
+    all_loaders: Vec<LoaderRequest>,
+) -> impl Task<ResolvedVersion, ResolvedVersion> + 'static {
+    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
+        let options = options.clone();
+        let request = request.clone();
+        let mc_version = mc_version.clone();
+        let all_loaders = all_loaders.clone();
+        async move {
+            let chain = request.task(
+                options,
+                version.reference.name.clone(),
+                mc_version,
+                &all_loaders,
+            );
+            Task::<(), ()>::run(&chain, (), ctx).await?;
+            resolve_version(&version.reference).await
+        }
+    })
+}
+
+/// 补齐版本需要的全部文件，并产出安装结果。
+fn materialize_step(
+    options: Arc<InstallOptions>,
+) -> impl Task<ResolvedVersion, InstallOutcome> + 'static {
+    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
+        let options = options.clone();
+        async move {
+            let report = ensure_files(&version, &options.game, &ctx).await?;
+            Ok(InstallOutcome {
+                version: version.reference,
+                report,
+            })
+        }
+    })
+}
+
 /// 完整的安装链：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
 ///
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
@@ -210,7 +292,10 @@ fn remove_version_dir_rollback(
 /// 安装是「版本级原子」的：先占用 `versions/<version_name>`，目录已存在时直接报错
 /// （不会碰已有版本）；只有占用成功后才会走到 `on_rollback` 登记删除动作，之后任何一步
 /// 失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
-pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChain<(), ()> {
+pub fn install_task(
+    options: Arc<InstallOptions>,
+    spec: InstallSpec,
+) -> TaskChain<(), InstallOutcome> {
     // 加载器的先后顺序由调用方决定；这里不额外调整顺序或检查组合兼容性。
     let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
         .then(
@@ -222,40 +307,49 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskChai
             spec.version_name.clone(),
         ))
         .then(
-            vanilla_metadata_task(
-                options.clone(),
-                spec.version_id.clone(),
-                spec.version_name.clone(),
-            ),
+            vanilla_metadata_step(options.clone(), spec.version_id.clone()),
             "获取版本 json",
         )
-        .then(
-            client_jar_task(options.clone(), spec.version_name.clone()),
-            "下载客户端 jar",
-        );
+        .then(ensure_client_jar_step(options.clone()), "下载客户端 jar");
 
     for request in &spec.loaders {
         chain = chain.then(
-            request.task(
+            loader_step(
                 options.clone(),
-                spec.version_name.clone(),
+                request.clone(),
                 spec.version_id.clone(),
-                &spec.loaders,
+                spec.loaders.clone(),
             ),
             format!("安装 {}", request.kind.display_name()),
         );
     }
 
-    chain.then(
-        game_files_task(options, spec.version_name.clone()),
-        "下载游戏文件",
-    )
+    chain.then(materialize_step(options), "下载游戏文件")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dmcl_game::GameFilesOptions;
+    use dmcl_java::{JavaOption, JreAutoInstall};
+    use dmcl_mcmeta::os::Arch;
     use dmcl_mcmeta::source::{DownloadSource, Mirror};
+
+    fn options(root: impl Into<PathBuf>) -> Arc<InstallOptions> {
+        let root = root.into();
+        let java = Arc::new(JavaOption {
+            path: PathBuf::from("/nonexistent/java"),
+            major: 17,
+            arch: Arch::X86_64,
+        });
+        let jre = JreAutoInstall::new(root.join("runtime"));
+        Arc::new(InstallOptions::new(
+            root,
+            GameFilesOptions::new(DownloadSource::new(Mirror::Official)),
+            java,
+            jre,
+        ))
+    }
 
     #[test]
     fn specs_collect_loader_requests_in_order() {
@@ -281,7 +375,9 @@ mod tests {
             )
             .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
             .then(
-                dmcl_task::task_fn(|_ctx| async move { Err::<(), _>(anyhow::anyhow!("故意失败")) }),
+                dmcl_task::task_fn_io(|_version: VersionRef, _ctx| async move {
+                    Err::<(), _>(anyhow::anyhow!("故意失败"))
+                }),
                 "会失败的一步",
             );
         chain.run(()).await.unwrap_err();
@@ -303,7 +399,7 @@ mod tests {
             )
             .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
             .then(
-                dmcl_task::task_fn(|_ctx| async move { Ok(()) }),
+                dmcl_task::task_fn_io(|_version: VersionRef, _ctx| async move { Ok(()) }),
                 "成功的一步",
             );
         chain.run(()).await.unwrap();
@@ -320,10 +416,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("1.0.json"), "{}").await.unwrap();
 
-        let options = Arc::new(InstallOptions::new(
-            &root,
-            DownloadSource::new(Mirror::Official),
-        ));
+        let options = options(root.clone());
         let err = install_task(options, InstallSpec::new("1.0", "1.0"))
             .run(())
             .await
@@ -364,10 +457,7 @@ mod tests {
 
     #[test]
     fn loaders_keep_the_callers_order() {
-        let options = Arc::new(InstallOptions::new(
-            "/tmp/.minecraft",
-            DownloadSource::new(Mirror::Official),
-        ));
+        let options = options("/tmp/.minecraft");
         let spec = InstallSpec::new("1.19", "1.19")
             .with_optifine("HD_U_H8")
             .with_forge("1.19-47.3.0");

@@ -1,10 +1,7 @@
 //! 原版：版本 JSON 落盘 + `launcher_profiles.json`。
 
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use dmcl_mcmeta::layout::{absolute, version_json_path};
-use dmcl_task::{task_fn, TaskChain};
 
 use crate::io::{write_json_safe, write_safe};
 use crate::options::InstallOptions;
@@ -83,33 +80,15 @@ pub async fn download_vanilla(
 ) -> Result<()> {
     generate_launcher_profiles(&options.root_path).await?;
 
-    let mut json = options.source.fetch_version_json_by_id(version_id).await?;
+    let mut json = options
+        .game
+        .source
+        .fetch_version_json_by_id(version_id)
+        .await?;
     json.id = Some(version_name.to_string());
     json.resolve_official_urls();
 
     write_json_safe(version_json_path(&options.root_path, version_name), &json).await
-}
-
-/// 取原版元数据的任务链（一个步骤）。
-pub fn vanilla_metadata_task(
-    options: Arc<InstallOptions>,
-    version_id: String,
-    version_name: String,
-) -> TaskChain<(), ()> {
-    TaskChain::new(format!("获取 {version_id} 的版本元数据")).then(
-        task_fn(move |ctx| {
-            let options = options.clone();
-            let version_id = version_id.clone();
-            let version_name = version_name.clone();
-            async move {
-                ctx.log(format!("查询版本列表并保存 {version_name}.json"));
-                download_vanilla(&options, &version_id, &version_name).await?;
-                ctx.log(format!("{version_name}.json 已写入"));
-                Ok(())
-            }
-        }),
-        "获取版本元数据",
-    )
 }
 
 #[cfg(test)]

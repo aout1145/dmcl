@@ -125,7 +125,7 @@ Java 页第一次显示时才在后台执行 `JavaDetails::probe`：探测完成
 
 页面只管理可用的 Java，不提供选择默认 Java 的入口；默认 Java 在「全局游戏选项」里选。
 
-「搜索已安装的 Java」在后台调用 `dmcl_launch::find_java`，结果按路径去重后合并进 `javas`：
+「搜索已安装的 Java」在后台调用 `dmcl_java::find_java`，结果按路径去重后合并进 `javas`：
 已有条目保留名字、只刷新 `major` / `arch`，新条目用扫描生成的名字（`类型-平台-架构-版本-短哈希`）。
 合并规则是 `config/java.rs` 的 `merge_javas`，CLI 的 `search-java`、界面与主页启动时的自动
 扫描共用。

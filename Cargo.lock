@@ -710,7 +710,9 @@ dependencies = [
  "dialoguer",
  "dirs",
  "dmcl-download",
+ "dmcl-game",
  "dmcl-install",
+ "dmcl-java",
  "dmcl-launch",
  "dmcl-mcmeta",
  "dmcl-task",
@@ -741,14 +743,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "dmcl-install"
+name = "dmcl-game"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "dmcl-download",
  "dmcl-mcmeta",
  "dmcl-task",
- "lzma-rs",
+ "serde_json",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "dmcl-install"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "dmcl-download",
+ "dmcl-game",
+ "dmcl-java",
+ "dmcl-mcmeta",
+ "dmcl-task",
  "serde",
  "serde_json",
  "tokio",
@@ -756,12 +772,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "dmcl-launch"
+name = "dmcl-java"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "dmcl-download",
- "dmcl-install",
+ "dmcl-mcmeta",
+ "dmcl-task",
+ "lzma-rs",
+ "serde_json",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
+name = "dmcl-launch"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "dmcl-game",
+ "dmcl-java",
  "dmcl-mcmeta",
  "dmcl-task",
  "md-5",
@@ -772,7 +802,6 @@ dependencies = [
  "tokio",
  "uuid",
  "version-compare",
- "walkdir",
 ]
 
 [[package]]

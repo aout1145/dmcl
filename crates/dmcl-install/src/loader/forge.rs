@@ -6,12 +6,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use dmcl_game::base_name;
 use dmcl_mcmeta::forge::{forge_installer_url, InstallProfile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::vanilla::VersionJson;
 use dmcl_task::{task_fn, task_fn_io, Task, TaskChain, TaskContext};
 
+use crate::archive::{has_entry, open_archive, read_entry};
 use crate::io::{write_json_safe, write_safe};
 use crate::loader::common::finish_version_json;
 use crate::loader::xforge::{
@@ -19,8 +21,6 @@ use crate::loader::xforge::{
     select_installer_java, Installer, InstallerWithJava, ProcessorSpec, ProfileInputs,
 };
 use crate::options::InstallOptions;
-use crate::plan::base_name;
-use crate::zip::{open_archive, zip_has_entry, zip_read_entry};
 
 /// 顺序跑各阶段（薄封装）。
 pub async fn install_forge(
@@ -51,7 +51,7 @@ pub async fn install_forge(
 async fn forge_installer_needs_java(installer: &Path) -> Result<bool> {
     let bytes = tokio::fs::read(installer).await?;
     let mut zip = open_archive(bytes)?;
-    Ok(zip_has_entry(&mut zip, "data/client.lzma"))
+    Ok(has_entry(&mut zip, "data/client.lzma"))
 }
 
 fn forge_installer(version: &str) -> Installer {
@@ -75,13 +75,13 @@ async fn extract_forge_libraries(
     let bytes = tokio::fs::read(installer).await?;
     let mut zip = open_archive(bytes)?;
 
-    if zip_has_entry(&mut zip, "maven/") {
+    if has_entry(&mut zip, "maven/") {
         extract_maven_entries(&mut zip, &libraries, ctx).await?;
-    } else if !zip_has_entry(&mut zip, "version.json") {
+    } else if !has_entry(&mut zip, "version.json") {
         // 老版 Forge：安装包根目录下只有一个 install_profile.json
         let profile = read_install_profile(&mut zip)?;
         let entry = profile.file_path().unwrap_or("").to_string();
-        let bytes = zip_read_entry(&mut zip, &entry)?;
+        let bytes = read_entry(&mut zip, &entry)?;
         let target = libraries.join(lib_name_to_path(&format!(
             "net.minecraftforge:forge:{forge_version}"
         )));
@@ -102,7 +102,7 @@ async fn run_forge_installer(
 ) -> Result<()> {
     let bytes = tokio::fs::read(installer).await?;
     let mut zip = open_archive(bytes)?;
-    if !zip_has_entry(&mut zip, "data/client.lzma") {
+    if !has_entry(&mut zip, "data/client.lzma") {
         return Ok(());
     }
     let profile = read_install_profile(&mut zip)?;
@@ -140,7 +140,7 @@ async fn run_forge_installer(
 }
 
 fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<InstallProfile> {
-    let bytes = zip_read_entry(zip, "install_profile.json")?;
+    let bytes = read_entry(zip, "install_profile.json")?;
     let mut profile: InstallProfile = serde_json::from_slice(&bytes)?;
     // 安装包里的库地址是具体 url，归一成模板后才能按镜像展开候选。
     profile.templatize_urls();
@@ -158,15 +158,15 @@ fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Re
     let version_entry = profile.version_json_entry().to_string();
     let inner_entry = profile.file_path().unwrap_or("").to_string();
 
-    let mut json: VersionJson = if zip_has_entry(zip, &version_entry) {
-        serde_json::from_slice(&zip_read_entry(zip, &version_entry)?)?
+    let mut json: VersionJson = if has_entry(zip, &version_entry) {
+        serde_json::from_slice(&read_entry(zip, &version_entry)?)?
     } else if let Some(version_info) = profile.version_info {
         // 经典安装器：profile 就内联在 versionInfo 里，且地址是 https。
         *version_info
     } else {
-        let inner = zip_read_entry(zip, &inner_entry)?;
+        let inner = read_entry(zip, &inner_entry)?;
         let mut inner_zip = open_archive(inner)?;
-        serde_json::from_slice(&zip_read_entry(&mut inner_zip, "version.json")?)?
+        serde_json::from_slice(&read_entry(&mut inner_zip, "version.json")?)?
     };
     // 安装包里的地址是具体 url，归一到模板后写盘时才能再解析成官方地址
     json.templatize_urls();

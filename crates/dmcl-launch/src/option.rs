@@ -1,13 +1,12 @@
 //! 启动参数。
 
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use dmcl_install::PlanContext;
+use dmcl_game::VersionRef;
+use dmcl_java::{JavaInstalledHook, JavaResolver};
 
 use crate::account::AccountSource;
-use crate::java::JavaSelector;
 
 /// 启动器名字（替换 `${launcher_name}`）。
 pub const LAUNCHER_NAME: &str = "dmcl";
@@ -17,15 +16,13 @@ pub const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 启动一个版本所需要的全部信息。
 ///
-/// 账户来源用 `Arc<dyn AccountSource>`（而不是裸接口引用）保存，结构体因此仍是
-/// `Send + Sync`，可以交给 GUI 的另一个线程；java 选择器同样由调用者传入。
+/// 账户来源与 Java 解析都由调用者通过 `Arc<dyn …>` 传入，结构体因此仍是
+/// `Send + Sync`，可以交给 GUI 的另一个线程。
 #[derive(Clone)]
 pub struct LaunchOption {
     pub account_source: Arc<dyn AccountSource>,
-    /// `.minecraft` 根目录（绝对路径）。
-    pub root_path: PathBuf,
-    /// 版本目录的**名字**，不是路径。
-    pub version_name: String,
+    /// 要启动的版本。
+    pub version: VersionRef,
     /// 是否为每个版本使用独立的游戏目录（`versions/<版本名>`）。
     ///
     /// 关闭后游戏进程的工作目录和 `${game_directory}` 都改用根目录。
@@ -39,18 +36,17 @@ pub struct LaunchOption {
     pub custom_info: String,
     pub additional_jvm: Vec<String>,
     pub additional_game: Vec<String>,
-    /// 怎么选 java：由调用者提供的选择器决定。
-    pub java: Arc<dyn JavaSelector>,
-    /// 跳过 `*.ogg` 资源（完整性检查时也要一致，否则会把音乐报成缺失）。
-    pub skip_music: bool,
+    /// 怎么找 java：由调用者提供的解析器决定。
+    pub java: Arc<dyn JavaResolver>,
+    /// 自动安装 JRE 并探测成功后调用；CLI / 无配置写回时为 `None`。
+    pub java_installed_hook: Option<Arc<dyn JavaInstalledHook>>,
 }
 
 impl fmt::Debug for LaunchOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LaunchOption")
             .field("account", &self.account_source.name())
-            .field("root_path", &self.root_path)
-            .field("version_name", &self.version_name)
+            .field("version", &self.version)
             .field("window_width", &self.window_width)
             .field("window_height", &self.window_height)
             .field("min_memory", &self.min_memory)
@@ -63,14 +59,13 @@ impl LaunchOption {
     /// 除必填项外，其余字段取各自的默认值。
     pub fn new(
         account_source: Arc<dyn AccountSource>,
-        root_path: impl Into<PathBuf>,
-        version_name: impl Into<String>,
-        java: Arc<dyn JavaSelector>,
+        version: VersionRef,
+        java: Arc<dyn JavaResolver>,
+        java_installed_hook: Option<Arc<dyn JavaInstalledHook>>,
     ) -> Self {
         Self {
             account_source,
-            root_path: root_path.into(),
-            version_name: version_name.into(),
+            version,
             version_isolation: true,
             window_width: 854,
             window_height: 480,
@@ -83,21 +78,7 @@ impl LaunchOption {
             ],
             additional_game: Vec::new(),
             java,
-            skip_music: false,
-        }
-    }
-
-    /// 指定本地文件布局相关的配置（与安装流程保持一致）。
-    pub fn with_local_layout(mut self, skip_music: bool) -> Self {
-        self.skip_music = skip_music;
-        self
-    }
-
-    /// 完整性检查用的规划上下文。
-    pub fn plan(&self) -> PlanContext {
-        PlanContext {
-            root_path: self.root_path.clone(),
-            skip_music: self.skip_music,
+            java_installed_hook,
         }
     }
 }
@@ -106,8 +87,9 @@ impl LaunchOption {
 mod tests {
     use super::*;
     use crate::account::OfflineAccountSource;
-    use crate::java::JavaOption;
+    use dmcl_java::JavaOption;
     use dmcl_mcmeta::os::Arch;
+    use std::path::PathBuf;
 
     fn fixed_java() -> JavaOption {
         JavaOption {
@@ -118,16 +100,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn java_selection_can_be_supplied_by_the_caller() {
+    async fn java_resolution_can_be_supplied_by_the_caller() {
         let java = fixed_java();
         let option = LaunchOption::new(
             Arc::new(OfflineAccountSource::new("p")),
-            "/mc",
-            "1.20.1",
+            VersionRef::new("/mc", "1.20.1"),
             Arc::new(java.clone()),
+            None,
         );
-        assert_eq!(option.java.select_java(17).await.unwrap(), java);
-        assert!(!option.java.allows_auto_install());
+        assert_eq!(option.java.resolve(17).await.unwrap(), java);
         assert!(format!("{option:?}").contains('p'));
     }
 }

@@ -1,24 +1,30 @@
 //! 安装 Mojang 的 Java 运行时（JRE）。
 //!
-//! 调用者决定装哪个组件、哪个平台、装到哪个目录，以及下载 `raw` 还是 `lzma`：
+//! 调用者通过 [`JreInstallRequest`] 指定 runtime 根目录、平台、必须匹配的 Java 大版本、
+//! 可选的组件名，以及下载 `raw` 还是 `lzma`：
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//! use dmcl_install::{install_jre_task, InstallOptions, JreFileFormat, JreInstallRequest};
+//! use dmcl_download::DownloadOptions;
+//! use dmcl_java::{
+//!     install_jre, JavaRuntimeOptions, JreFileFormat, JreInstallRequest,
+//! };
 //! use dmcl_mcmeta::os::{Arch, Os};
 //! use dmcl_mcmeta::source::DownloadSource;
 //!
 //! # async fn run() -> anyhow::Result<()> {
-//! let options = Arc::new(InstallOptions::new("/tmp/.minecraft", DownloadSource::official()));
+//! let options = JavaRuntimeOptions {
+//!     source: DownloadSource::official(),
+//!     download: DownloadOptions::default(),
+//! };
 //! let request = JreInstallRequest::new(
-//!     "java-runtime-gamma",
+//!     "/tmp/.minecraft/runtime",
 //!     (Os::current(), Arch::X86_64),
-//!     "/tmp/.minecraft/runtime/gamma",
+//!     17,
 //! )
+//! .with_component("java-runtime-gamma")
 //! .with_format(JreFileFormat::Lzma);
 //!
-//! // 任务链最后返回安装好的 java 可执行文件路径。
-//! let java = install_jre_task(options, request).run(()).await?;
+//! let installed = install_jre(&options, &request, &dmcl_task::TaskContext::detached("JRE")).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -32,17 +38,15 @@
 //! [`JreFileFormat::Raw`]。
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_download::{files_ok, Checksum, FileCheck};
+use dmcl_download::{files_ok, Checksum, DownloadItem, DownloadReport, DownloadTask, FileCheck};
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{jre_platform_key, JreFileType, JreManifest, JreRuntimeManifest};
-use dmcl_task::{task_fn, task_fn_io, TaskChain, TaskContext};
+use dmcl_task::TaskContext;
 
-use crate::files::download_planned;
-use crate::options::InstallOptions;
-use crate::plan::{base_name, PlannedFile};
+use crate::probe::major_version_of;
+use crate::runtime::JavaRuntimeOptions;
 
 /// 运行时文件用 lzma 压缩版还是原始文件下载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -79,28 +83,37 @@ impl JreAutoInstall {
 /// 一次 JRE 安装请求。
 #[derive(Debug, Clone)]
 pub struct JreInstallRequest {
-    /// Mojang 的组件名，例如 `java-runtime-gamma`。
-    pub component: String,
+    /// 官方启动器的 runtime 根目录。
+    pub runtime_root: PathBuf,
     /// 目标平台。
     pub platform: (Os, Arch),
-    /// 安装目录，由调用者决定。
-    pub target_dir: PathBuf,
+    /// 必须匹配的 Java 大版本。
+    pub major: u32,
+    /// 可选：填了就只在这个组件里找 `major`。
+    ///
+    /// - `None`：按 `major` 在所有组件里选；
+    /// - `Some(name)`：只检查 `name` 这个组件。
+    ///
+    /// 两种情况都要求组件实际提供 `major`；找不到直接报错。
+    pub component: Option<String>,
     /// 下载格式。
     pub format: JreFileFormat,
 }
 
 impl JreInstallRequest {
-    pub fn new(
-        component: impl Into<String>,
-        platform: (Os, Arch),
-        target_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(runtime_root: impl Into<PathBuf>, platform: (Os, Arch), major: u32) -> Self {
         Self {
-            component: component.into(),
+            runtime_root: runtime_root.into(),
             platform,
-            target_dir: target_dir.into(),
+            major,
+            component: None,
             format: JreFileFormat::default(),
         }
+    }
+
+    pub fn with_component(mut self, component: impl Into<String>) -> Self {
+        self.component = Some(component.into());
+        self
     }
 
     pub fn with_format(mut self, format: JreFileFormat) -> Self {
@@ -109,51 +122,11 @@ impl JreInstallRequest {
     }
 }
 
-/// 按 major 安装时的组件选择结果。
+/// 组件选择结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JreComponent {
     /// Mojang 的组件名，例如 `java-runtime-gamma`。
     pub name: String,
-    /// 没有组件能匹配要求的大版本，退回了 `jre-legacy`。
-    pub fallback: bool,
-}
-
-/// 按「组件缺失时按 major 挑」安装 JRE 的请求。
-#[derive(Debug, Clone)]
-pub struct JreForMajorRequest {
-    /// 官方启动器的 runtime 根目录（调用者决定）。
-    pub runtime_root: PathBuf,
-    pub platform: (Os, Arch),
-    /// 版本 JSON 的 `javaVersion.component`；没有就按 major 挑。
-    pub preferred_component: Option<String>,
-    pub required_major: u32,
-    pub format: JreFileFormat,
-}
-
-impl JreForMajorRequest {
-    pub fn new(
-        runtime_root: impl Into<PathBuf>,
-        platform: (Os, Arch),
-        required_major: u32,
-    ) -> Self {
-        Self {
-            runtime_root: runtime_root.into(),
-            platform,
-            preferred_component: None,
-            required_major,
-            format: JreFileFormat::default(),
-        }
-    }
-
-    pub fn with_preferred_component(mut self, component: impl Into<String>) -> Self {
-        self.preferred_component = Some(component.into());
-        self
-    }
-
-    pub fn with_format(mut self, format: JreFileFormat) -> Self {
-        self.format = format;
-        self
-    }
 }
 
 /// 安装完成的 JRE。
@@ -163,8 +136,14 @@ pub struct JreInstalled {
     pub component: String,
     /// 安装好的 java 可执行文件。
     pub java: PathBuf,
-    /// 组件是按 `jre-legacy` 兜底选的。
-    pub fallback: bool,
+}
+
+/// 已解析出组件名和目标目录之后，真正下载并展开时用的请求。
+struct JreManifestInstall {
+    component: String,
+    platform: (Os, Arch),
+    target_dir: PathBuf,
+    format: JreFileFormat,
 }
 
 /// 官方启动器的 runtime 目录布局：
@@ -177,12 +156,14 @@ pub fn runtime_dir(runtime_root: &Path, component: &str, platform: (Os, Arch)) -
 
 /// 从已经取到的产品索引里选组件。
 ///
-/// 顺序：`preferred`（版本 JSON 的 `component`）→ 条目版本号匹配 `required_major`
-/// 且优先非 snapshot 的组件 → `jre-legacy` 兜底。
+/// - `component = Some(name)`：只看该组件，且它必须实际提供 `required_major`；
+/// - `component = None`：按 `required_major` 在所有组件里选，优先非 snapshot。
+///
+/// 两种情况都没有 `jre-legacy` 兜底；找不到直接报错。
 pub fn resolve_jre_component(
     index: &JreManifest,
     platform: (Os, Arch),
-    preferred: Option<&str>,
+    component: Option<&str>,
     required_major: u32,
 ) -> Result<JreComponent> {
     let components = index
@@ -190,16 +171,24 @@ pub fn resolve_jre_component(
         .get(&platform)
         .ok_or_else(|| missing_runtime("Java", platform))?;
 
-    if let Some(preferred) = preferred.filter(|name| !name.is_empty()) {
-        if components
-            .get(preferred)
-            .is_some_and(|entries| !entries.is_empty())
-        {
-            return Ok(JreComponent {
-                name: preferred.to_string(),
-                fallback: false,
-            });
+    if let Some(name) = component.filter(|name| !name.is_empty()) {
+        let entries = components
+            .get(name)
+            .filter(|entries| !entries.is_empty())
+            .ok_or_else(|| missing_runtime(name, platform))?;
+        let major = entries
+            .first()
+            .and_then(|entry| entry.version.as_ref())
+            .and_then(|version| major_version_of(&version.name))
+            .ok_or_else(|| anyhow!("{name} 的运行时条目没有可识别的大版本号"))?;
+        if major != required_major {
+            return Err(anyhow!(
+                "{name} 提供的是 Java {major}，不是要求的 Java {required_major}"
+            ));
         }
+        return Ok(JreComponent {
+            name: name.to_string(),
+        });
     }
 
     let mut snapshot = None;
@@ -220,43 +209,19 @@ pub fn resolve_jre_component(
         if name.ends_with("-snapshot") {
             snapshot.get_or_insert_with(|| name.clone());
         } else {
-            return Ok(JreComponent {
-                name: name.clone(),
-                fallback: false,
-            });
+            return Ok(JreComponent { name: name.clone() });
         }
     }
 
     if let Some(name) = snapshot {
-        return Ok(JreComponent {
-            name,
-            fallback: false,
-        });
+        return Ok(JreComponent { name });
     }
 
-    Ok(JreComponent {
-        name: "jre-legacy".to_string(),
-        fallback: true,
-    })
-}
-
-fn major_version_of(version: &str) -> Option<u32> {
-    let mut parts = version.split('.');
-    let first = leading_digits(parts.next()?)?;
-    if first == 1 {
-        leading_digits(parts.next()?)
-    } else {
-        Some(first)
-    }
-}
-
-fn leading_digits(text: &str) -> Option<u32> {
-    let digits: String = text.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
-    }
+    Err(anyhow!(
+        "Mojang 没有提供匹配 Java {required_major} 的运行时（{} / {}）",
+        platform.0.mc_name(),
+        platform.1.name()
+    ))
 }
 
 fn runtime_manifest_url<'a>(
@@ -282,33 +247,26 @@ fn runtime_manifest_url<'a>(
         .ok_or_else(|| anyhow!("{component} 的运行时条目不包含清单地址"))
 }
 
-/// 按组件 / major 安装 JRE 到官方 runtime 布局，返回安装结果。
+/// 安装 JRE 到官方 runtime 布局，返回安装结果。
 ///
-/// 和 [`install_jre`] 的区别：组件名可以不给，先按 `required_major` 从索引里挑；
-/// 目标目录也按 `<runtime_root>/<component>/<平台键>/<component>` 算好。
-pub async fn install_jre_for_major(
-    options: &InstallOptions,
-    request: &JreForMajorRequest,
+/// `major` 是强制要求；`component` 可选，填了就是硬过滤条件。
+pub async fn install_jre(
+    options: &JavaRuntimeOptions,
+    request: &JreInstallRequest,
     ctx: &TaskContext,
 ) -> Result<JreInstalled> {
     let index = options.source.fetch_jre_manifest().await?;
     let component = resolve_jre_component(
         &index,
         request.platform,
-        request.preferred_component.as_deref(),
-        request.required_major,
+        request.component.as_deref(),
+        request.major,
     )?;
-    if component.fallback {
-        ctx.log(format!(
-            "警告：没有匹配 Java {} 的 Mojang 运行时，退回 {}",
-            request.required_major, component.name
-        ));
-    }
 
     let url = runtime_manifest_url(&index, &component.name, request.platform)?;
     let manifest = options.source.fetch_jre_runtime_manifest(url).await?;
     let target_dir = runtime_dir(&request.runtime_root, &component.name, request.platform)?;
-    let install = JreInstallRequest {
+    let install = JreManifestInstall {
         component: component.name.clone(),
         platform: request.platform,
         target_dir,
@@ -319,13 +277,12 @@ pub async fn install_jre_for_major(
     Ok(JreInstalled {
         component: component.name,
         java,
-        fallback: component.fallback,
     })
 }
 
 /// 取产品索引里该组件 / 平台的运行时文件清单。
 pub async fn fetch_jre_runtime_manifest(
-    options: &InstallOptions,
+    options: &JavaRuntimeOptions,
     component: &str,
     platform: (Os, Arch),
 ) -> Result<JreRuntimeManifest> {
@@ -342,55 +299,72 @@ fn missing_runtime(component: &str, platform: (Os, Arch)) -> anyhow::Error {
     )
 }
 
-/// 安装一个 JRE 到请求里的目标目录，返回 java 可执行文件路径。
-///
-/// 这是底层入口；需要进度事件时用 [`install_jre_task`]。
-pub async fn install_jre(
-    options: &InstallOptions,
-    request: &JreInstallRequest,
-    ctx: &TaskContext,
-) -> Result<PathBuf> {
-    let manifest =
-        fetch_jre_runtime_manifest(options, &request.component, request.platform).await?;
-    install_jre_manifest(options, &manifest, request, ctx).await
+/// 一个规划好的 JRE 文件下载项。
+#[derive(Debug, Clone)]
+struct JreFileDownload {
+    url: String,
+    save_to: PathBuf,
+    checksum: Option<Checksum>,
+    size: Option<u64>,
+    name: String,
 }
 
-/// JRE 安装任务链：取运行时清单 → 下载并展开。
-pub fn install_jre_task(
-    options: Arc<InstallOptions>,
-    request: JreInstallRequest,
-) -> TaskChain<(), PathBuf> {
-    let fetch_options = options.clone();
-    let fetch_component = request.component.clone();
-    let fetch_platform = request.platform;
+/// 跑一批 JRE 文件下载，并检查结果。
+///
+/// `dmcl-java` 不依赖 `dmcl-game`，所以这里直接构造 [`DownloadItem`]。
+async fn download_jre_planned(
+    options: &JavaRuntimeOptions,
+    name: &str,
+    planned: Vec<JreFileDownload>,
+    ctx: &TaskContext,
+) -> Result<DownloadReport> {
+    if planned.is_empty() {
+        return Ok(DownloadReport::default());
+    }
+    let items: Vec<DownloadItem> = planned
+        .into_iter()
+        .map(|file| {
+            DownloadItem::new(options.source.candidates(&file.url), &file.save_to)
+                .with_checksum(file.checksum)
+                .with_size(file.size)
+                .named(file.name)
+        })
+        .collect();
+    let mut task =
+        DownloadTask::new(options.download.clone()).with_client(options.source.client().clone());
+    task.extend(items);
+    let report = task.execute(ctx).await?;
+    if !report.is_success() {
+        anyhow::bail!(
+            "{name}: {} 个文件下载失败：\n{}",
+            report.failed.len(),
+            report.failure_summary(5)
+        );
+    }
+    Ok(report)
+}
 
-    TaskChain::new(format!("安装 Java 运行时：{}", request.component))
-        .then(
-            task_fn(move |_ctx| {
-                let options = fetch_options.clone();
-                let component = fetch_component.clone();
-                async move { fetch_jre_runtime_manifest(&options, &component, fetch_platform).await }
-            }),
-            "获取运行时清单",
-        )
-        .then(
-            task_fn_io(move |manifest, ctx| {
-                let options = options.clone();
-                let request = request.clone();
-                async move { install_jre_manifest(&options, &manifest, &request, &ctx).await }
-            }),
-            "下载并展开运行时",
-        )
+/// 路径的最后一段（用于进度显示）。
+fn base_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 /// 下载 + 展开一份已经取到的文件清单。
 async fn install_jre_manifest(
-    options: &InstallOptions,
+    options: &JavaRuntimeOptions,
     manifest: &JreRuntimeManifest,
-    request: &JreInstallRequest,
+    request: &JreManifestInstall,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
     // 规划阶段只看文档、不写盘；这里失败时目标目录还是原样，不需要清理入口。
+    ctx.log(format!(
+        "安装 Java 运行时：{}（{} / {}）",
+        request.component,
+        request.platform.0.mc_name(),
+        request.platform.1.name()
+    ));
     let plan = plan_jre_files(manifest, &request.target_dir, request.format)?;
     match install_jre_plan(options, &plan, request, ctx).await {
         Ok(java) => Ok(java),
@@ -403,9 +377,9 @@ async fn install_jre_manifest(
 }
 
 async fn install_jre_plan(
-    options: &InstallOptions,
+    options: &JavaRuntimeOptions,
     plan: &JrePlan,
-    request: &JreInstallRequest,
+    request: &JreManifestInstall,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
     let target = &request.target_dir;
@@ -447,7 +421,7 @@ async fn install_jre_plan(
             planned.push(download.clone());
         }
     }
-    download_planned(options, "Java 运行时", planned, ctx).await?;
+    download_jre_planned(options, "Java 运行时", planned, ctx).await?;
 
     for (position, file) in plan.files.iter().enumerate() {
         if !file.compressed || done[position] {
@@ -503,7 +477,7 @@ struct PlannedJreFile {
     final_checksum: Option<Checksum>,
     final_size: Option<u64>,
     /// 需要下载时用哪份数据。
-    download: Option<PlannedFile>,
+    download: Option<JreFileDownload>,
     /// 下载项是不是 lzma 压缩包。
     compressed: bool,
 }
@@ -599,7 +573,7 @@ fn plan_jre_file(
         executable: entry.executable.unwrap_or(false),
         final_checksum: raw.sha1.clone().map(Checksum::sha1),
         final_size: raw.size,
-        download: Some(PlannedFile {
+        download: Some(JreFileDownload {
             url: artifact.url.clone().unwrap_or_default(),
             save_to,
             checksum: artifact.sha1.clone().map(Checksum::sha1),
@@ -781,8 +755,9 @@ fn create_symlink(_path: &Path, _target: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
-    use dmcl_download::{hash_bytes, HashAlgorithm};
+    use dmcl_download::{hash_bytes, DownloadOptions, HashAlgorithm};
     use dmcl_mcmeta::source::DownloadSource;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -790,10 +765,25 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("dmcl-install-jre-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("dmcl-java-jre-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    fn runtime_options() -> JavaRuntimeOptions {
+        JavaRuntimeOptions {
+            source: DownloadSource::official(),
+            download: DownloadOptions::default().with_max_retries(0),
+        }
+    }
+
+    fn manifest_install(dir: &Path) -> JreManifestInstall {
+        JreManifestInstall {
+            component: "test".to_string(),
+            platform: (Os::Linux, Arch::X86_64),
+            target_dir: dir.to_path_buf(),
+            format: JreFileFormat::Lzma,
+        }
     }
 
     fn manifest(json: &str) -> JreRuntimeManifest {
@@ -934,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn components_are_chosen_by_preferred_then_major_then_fallback() {
+    fn components_are_chosen_by_major_without_a_legacy_fallback() {
         let index: JreManifest = serde_json::from_str(
             r#"{
                 "linux": {
@@ -951,29 +941,28 @@ mod tests {
 
         let delta = resolve_jre_component(&index, platform, None, 21).unwrap();
         assert_eq!(delta.name, "java-runtime-delta");
-        assert!(!delta.fallback);
 
         // snapshot 不是稳定组件的对手
         let gamma = resolve_jre_component(&index, platform, None, 17).unwrap();
         assert_eq!(gamma.name, "java-runtime-gamma");
 
+        // 版本号匹配到 jre-legacy 也算正常选择
         let legacy = resolve_jre_component(&index, platform, None, 8).unwrap();
         assert_eq!(legacy.name, "jre-legacy");
-        assert!(!legacy.fallback, "按版本号匹配到 jre-legacy 不算兜底");
 
-        // 显式 preferred 优先，即使 major 对不上
-        let preferred =
-            resolve_jre_component(&index, platform, Some("java-runtime-delta"), 8).unwrap();
-        assert_eq!(preferred.name, "java-runtime-delta");
+        // 显式组件必须真的提供要求的大版本
+        let explicit =
+            resolve_jre_component(&index, platform, Some("java-runtime-delta"), 21).unwrap();
+        assert_eq!(explicit.name, "java-runtime-delta");
+        assert!(resolve_jre_component(&index, platform, Some("java-runtime-delta"), 8).is_err());
+        assert!(resolve_jre_component(&index, platform, Some("nope"), 21).is_err());
 
-        // 空 preferred 当作没给
+        // 空组件名当作没给
         let empty = resolve_jre_component(&index, platform, Some(""), 17).unwrap();
         assert_eq!(empty.name, "java-runtime-gamma");
 
-        // 没有任何组件匹配才退回 jre-legacy
-        let fallback = resolve_jre_component(&index, platform, None, 30).unwrap();
-        assert_eq!(fallback.name, "jre-legacy");
-        assert!(fallback.fallback);
+        // 没有任何组件匹配时直接报错，不退回 jre-legacy
+        assert!(resolve_jre_component(&index, platform, None, 30).is_err());
     }
 
     #[test]
@@ -1152,8 +1141,8 @@ mod tests {
         );
         let manifest = manifest(&json);
         let dir = temp_dir("install");
-        let options = InstallOptions::new(&dir, DownloadSource::official());
-        let request = JreInstallRequest::new("test", (Os::Linux, Arch::X86_64), &dir);
+        let options = runtime_options();
+        let request = manifest_install(&dir);
         let ctx = TaskContext::detached("测试");
 
         let java = install_jre_manifest(&options, &manifest, &request, &ctx)
@@ -1218,8 +1207,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::write(dir.join("bin/java"), b"old").unwrap();
 
-        let options = InstallOptions::new(&dir, DownloadSource::official());
-        let request = JreInstallRequest::new("test", (Os::Linux, Arch::X86_64), &dir);
+        let options = runtime_options();
+        let request = manifest_install(&dir);
         let err = install_jre_manifest(
             &options,
             &manifest,

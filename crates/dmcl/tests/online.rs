@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use dmcl::config::{AccountConfig, Config};
-use dmcl_launch::{GameLauncher, JavaOption};
+use dmcl_game::{check_integrity, resolve_version, VersionRef};
+use dmcl_java::JavaOption;
+use dmcl_launch::GameLauncher;
 
 const VERSION: &str = "1.7.10";
 
@@ -49,7 +51,7 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .install_options(source, &root)
         .expect("install_options");
     assert_eq!(install.root_path, root);
-    assert_eq!(install.download.max_connections, 8);
+    assert_eq!(install.game.download.max_connections, 8);
 
     // 原版元数据落盘（CLI 的 install 第一步）
     dmcl_install::download_vanilla(&install, VERSION, VERSION)
@@ -66,7 +68,12 @@ async fn the_whole_chain_runs_from_a_config_document() {
         arch: dmcl_mcmeta::os::Arch::X86_64,
     };
     let option = config
-        .launch_option(&config.launch, VERSION, &root, Arc::new(java))
+        .launch_option(
+            &config.launch,
+            VersionRef::new(&root, VERSION),
+            Arc::new(java),
+            None,
+        )
         .expect("launch_option");
     assert_eq!(option.account_source.name(), "player");
     let account = option.account_source.login().await.expect("login");
@@ -75,7 +82,10 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .expect("GameLauncher");
 
     // 只装了元数据，完整性检查必须报告缺件，并且给出可用来修复的模板地址
-    let status = dmcl_install::check_integrity(&install.plan(), VERSION)
+    let version = resolve_version(&VersionRef::new(&root, VERSION))
+        .await
+        .expect("resolve_version");
+    let status = check_integrity(&version, &install.game)
         .await
         .expect("check_integrity");
     assert!(!status.is_complete());

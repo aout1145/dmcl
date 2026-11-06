@@ -1,17 +1,17 @@
 # dmcl-launch
 
-账号、Java 探测 / 扫描 / 自动选择、命令行生成、启动与状态监控。
+账号、命令行生成、启动与状态监控。
 
-在 workspace 内依赖 `dmcl-install`（完整性检查与 natives）、`dmcl-mcmeta`（版本文档、
-目录布局、平台信息）、`dmcl-download` 和 `dmcl-task`。它**不读全局配置**：账户来源、
-根目录、版本名、窗口 / 内存、版本隔离、Java 选择器全部通过 `LaunchOption` 由调用者传入。
+在 workspace 内依赖 `dmcl-game`（版本解析、完整性 / 补全、natives）、`dmcl-java`（Java
+解析与 JRE 自动安装）、`dmcl-mcmeta`（版本文档、目录布局、平台信息）和 `dmcl-task`。
+它**不依赖 `dmcl-install`**，也**不读全局配置**：账户来源、版本引用、窗口 / 内存、
+版本隔离、Java 解析器、JRE 安装位置全部通过 `LaunchOption` / `launch_chain` 由调用者传入。
 
 ## 模块布局
 
 ```text
 account.rs   Account（登录快照）与 AccountSource（登录 / 刷新）
 microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
-java.rs      JavaOption / JavaDetails、JavaSelector、扫描与自动选择
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
 option.rs    LaunchOption
@@ -44,21 +44,17 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 
 ### Java 选择
 
-这里只认识 `JavaOption` / `JavaDetails`，不依赖配置表或 `IndexMap`；具体用哪个 Java 由
-调用者实现的 `JavaSelector` 决定。
+这里只使用 `dmcl_java::JavaResolver` 与 `JavaOption`，不依赖配置表或 `IndexMap`；
+具体用哪个 Java 由调用者实现解析器决定。
 
-- `default_java_roots()` 按平台给出常见安装目录、官方启动器的 Java 运行目录与 `JAVA_HOME`；
-- `find_java(roots)` 只返回扫描结果（扫不到就是空列表）；
-- `auto_select_java(required_major, &options)` 只按缓存的 `major` / `arch` 选择、**不执行
-  Java**：版本相等优先，其次最接近的更高版本，再其次最高的更低版本；同一档内优先当前
-  平台架构，再按候选顺序；
-- 具体用哪个 Java 由调用者实现的 `JavaSelector` 决定；`allows_auto_install()` 表示选择失败
-  或版本 / 架构不匹配时，是否允许启动流程自动下载 Java。GUI 的 Auto 选择器返回
-  `true`，CLI 与固定选择器返回 `false`。
-- 自动下载走 `dmcl_install::install_jre_for_major`：优先用版本 JSON 的
-  `javaVersion.component`，缺失时按索引里的版本号找匹配大版本的组件，最后退回
-  `jre-legacy` 并记一条警告；装到官方启动器的 `<runtime>/<component>/<平台键>/<component>`。
-  下载并探测成功后调用 `JavaSelector::add_installed_java`（GUI 用它写回配置）。
+启动链在选择 Java 时：
+
+- 先调用 `JavaResolver::resolve(required_major)`；找不到或版本 / 架构不匹配，且传入了
+  `JreAutoInstall`（即允许自动下载）时，用版本 JSON 的 `javaVersion.component` 与
+  `required_major` 调 `dmcl_java::install_jre`；
+- 下载并探测成功后调用 `JavaInstalledHook::on_installed`（GUI 用它写回配置）；
+  CLI 与安装流程不设置 hook；
+- 仍然不匹配时通过任务事件询问用户是否继续。
 
 ### 内存
 
@@ -76,20 +72,19 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 
 安装文件、库和资源的路径不受影响，仍然来自根目录与版本目录。
 
-### 启动与安装解耦
+### 启动与文件物化解耦
 
 `GameLauncher` 只负责拼命令行，起进程由 `LaunchTask` 完成；文件完整性由
-`dmcl_install::check_integrity` 负责，**是否修复交给调用者**。想要「缺了就补」的一站式
+`dmcl_game::check_integrity` 负责，**是否修复交给调用者**。想要「缺了就补」的一站式
 流程时，用 `launch_chain`。
 
 ```rust
-// 完整性检查在 dmcl-install：只回答"完整吗？缺什么？"，不下载任何东西
-let status = dmcl_install::check_integrity(&install_options.plan(), version).await?;
+// 文件物化在 dmcl-game：只回答"完整吗？缺什么？"，不下载任何东西
+let resolved = dmcl_game::resolve_version(&option.version).await?;
+let status = dmcl_game::check_integrity(&resolved, &game).await?;
 if !status.is_complete() {
-    // 由调用者决定：跑一次 dmcl-install 补全（已存在的文件会被跳过）
-    game_files_task(install_options, version)
-        .run_with((), |event| printer.handle(event))
-        .await?;
+    // 由调用者决定：补全（已存在的文件会被跳过）
+    dmcl_game::ensure_files(&resolved, &game, &ctx).await?;
 }
 
 // dmcl-launch 只负责拼参数，起进程走任务链；账户由登录源产出
@@ -97,20 +92,21 @@ let account = option.account_source.login().await?;
 let mut launcher = GameLauncher::new(option.clone(), account).await?;
 let _command = launcher.generate_command().await?; // 展示 / 复制用
 
-let mut monitor = launch_chain(option, install).run(()).await?;
+let mut monitor = launch_chain(option, game, None).run(()).await?;
 monitor.wait().await?;
 ```
 
 ### 一站式启动链
 
-`launch_chain(option, install)` 把六步串成 `TaskChain<(), GameMonitor>`：
+`launch_chain(option, game, jre)` 把六步串成 `TaskChain<(), GameMonitor>`：
 
-1. **检查并补全文件** —— 复用 `dmcl-install` 的完整性检查；缺件时跑一次安装补全；
-2. **选择 Java** —— 读取版本要求的 Java 大版本，通过选择器选好 Java；选择失败或版本 /
-   架构不匹配且选择器允许自动安装时，下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时
-   先等用户确认；
-3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑 `natives_task`（下载 + 解压到
-   `natives_dir`，即 `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
+1. **检查并补全文件** —— `resolve_version` + `dmcl_game::check_integrity`；缺件时
+   `ensure_files`，产出 `ResolvedVersion`；
+2. **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动
+   安装时下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时先等用户确认；
+3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑
+   `dmcl_game::ensure_natives`（下载 + 解压到 `natives_dir`，即
+   `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
 4. **登录** —— 让 `AccountSource` 产出可用会话；失败就中止，不会继续生成参数或启动；
 5. **生成启动参数** —— 只在文件齐备、Java 选好、账户可用后才拼，且复用同一个 Java；
 6. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
@@ -123,5 +119,6 @@ monitor.wait().await?;
 ## 相关文档
 
 - 总体结构与依赖关系：[ARCHITECTURE.md](../../ARCHITECTURE.md)
-- 完整性检查与 natives 下载：[crates/dmcl-install/README.md](../dmcl-install/README.md)
+- 版本规划、完整性检查与 natives：[crates/dmcl-game/README.md](../dmcl-game/README.md)
+- Java 探测与 JRE 安装：[crates/dmcl-java/README.md](../dmcl-java/README.md)
 - 任务链与事件流：[crates/dmcl-task/README.md](../dmcl-task/README.md)

@@ -1,90 +1,100 @@
-//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge、OptiFine，
-//! 以及 Mojang 的 Java 运行时。
+//! 在磁盘上装出一个可玩的 Minecraft 版本：原版、Fabric、Forge、NeoForge、OptiFine。
 //!
-//! 这个 crate 只做"把文件写下去"，不做任何决策：
+//! 这个 crate 只做「把版本装起来」，不做任何决策：
 //!
 //! * 装什么、从哪儿下 → 来自 [`dmcl_mcmeta`]（元数据 + [`dmcl_mcmeta::source::DownloadSource`]）；
 //! * 怎么并发下 → 来自 [`dmcl_download`]；
+//! * 这个版本应该有哪些文件、怎么补齐 → 来自 [`dmcl_game`]；
+//! * 安装器 processor 用哪个 Java、缺 Java 时怎么装 → 来自 [`dmcl_java`]；
 //! * 进度怎么报、任务怎么串 → 来自 [`dmcl_task`]；
 //! * 配置（`.`minecraft` 路径、镜像、并发度、是否跳过音乐）→ 由调用者通过
 //!   [`InstallOptions`] 传入，**这个 crate 不读任何配置文件**。
 //!
-//! # 两种用法
+//! # 用法
 //!
 //! 直接拿现成的任务链（cli 走这条）：
 //!
 //! ```no_run
 //! use std::sync::Arc;
+//! use dmcl_game::GameFilesOptions;
 //! use dmcl_install::{install_task, InstallOptions, InstallSpec, LoaderKind};
+//! use dmcl_java::{JavaOption, JreAutoInstall};
+//! use dmcl_mcmeta::os::Arch;
 //! use dmcl_mcmeta::source::{DownloadSource, Mirror};
 //!
 //! # async fn run() -> anyhow::Result<()> {
-//! let options = Arc::new(InstallOptions::new("/tmp/.minecraft", DownloadSource::new(Mirror::Bmclapi)));
+//! let game = GameFilesOptions::new(DownloadSource::new(Mirror::Bmclapi));
+//! let java = Arc::new(JavaOption {
+//!     path: "/usr/bin/java".into(),
+//!     major: 17,
+//!     arch: Arch::X86_64,
+//! });
+//! let options = Arc::new(InstallOptions::new(
+//!     "/tmp/.minecraft",
+//!     game,
+//!     java,
+//!     JreAutoInstall::new("/tmp/.minecraft/runtime"),
+//! ));
 //! let spec = InstallSpec::new("1.20.1", "1.20.1")
 //!     .with_loader(LoaderKind::Fabric, "0.15.0");
 //!
 //! install_task(options, spec)
 //!     .run_with((), |event| println!("{event}"))
 //!     .await
+//!     .map(|_| ())
 //! # }
 //! ```
 //!
 //! 或者自己拼链条（gui 想自定义步骤时）：
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//! use dmcl_install::{files::game_files_task, vanilla::vanilla_metadata_task, InstallOptions};
+//! use dmcl_game::{ensure_files, resolve_version, VersionRef};
 //! use dmcl_mcmeta::source::{DownloadSource, Mirror};
-//! use dmcl_task::TaskChain;
+//! use dmcl_install::InstallOptions;
+//! use dmcl_java::{JavaOption, JreAutoInstall};
+//! use dmcl_mcmeta::os::Arch;
+//! use dmcl_task::TaskContext;
+//! use std::sync::Arc;
 //!
 //! # async fn run() -> anyhow::Result<()> {
-//! let options = Arc::new(InstallOptions::new("/tmp/.minecraft", DownloadSource::new(Mirror::Official)));
-//! let chain = TaskChain::new("安装")
-//!     .then(vanilla_metadata_task(options.clone(), "1.20.1".into(), "1.20.1".into()), "获取版本元数据")
-//!     .then(game_files_task(options.clone(), "1.20.1".into()), "下载游戏文件");
-//! chain.run(()).await
+//! let java = Arc::new(JavaOption {
+//!     path: "/usr/bin/java".into(),
+//!     major: 17,
+//!     arch: Arch::X86_64,
+//! });
+//! let options = InstallOptions::new(
+//!     "/tmp/.minecraft",
+//!     dmcl_game::GameFilesOptions::new(DownloadSource::new(Mirror::Official)),
+//!     java,
+//!     JreAutoInstall::new("/tmp/.minecraft/runtime"),
+//! );
+//! let version = resolve_version(&VersionRef::new("/tmp/.minecraft", "1.20.1")).await?;
+//! ensure_files(&version, &options.game, &TaskContext::detached("游戏文件")).await?;
+//! # Ok(())
 //! # }
 //! ```
 //!
 //! # 设计要点
 //!
-//! * 把「这个版本需要哪些文件」的**规划**（[`plan`]，纯函数、可单测）与**下载**
-//!   （[`files`]，构造 [`dmcl_download::DownloadTask`]）分开；
-//! * natives 的解压归这里做 —— 它本质上就是「把文件铺好」，这样 `dmcl-launch`
-//!   就不需要 zip 代码；
+//! * 「这个版本由哪些文件组成」与「缺了什么」由 [`dmcl_game`] 负责，安装器只负责
+//!   原版元数据、加载器与版本目录的原子性；
 //! * [`install_task`] 是**版本级原子**的：版本目录已存在就直接报错；只有占用成功后才走到
 //!   `on_rollback` 登记中止回滚，失败或被取消时删掉本次新建的 `versions/<名称>`，共享的
 //!   `libraries/` / `assets/` 作为校验缓存保留；
 //! * Forge / NeoForge 的 processor 用 [`dmcl_task::CommandTask`] 跑，
 //!   因此安装器的输出会作为日志事件流出来。
 
-pub mod files;
-pub mod integrity;
+mod archive;
 pub mod io;
-pub mod jre;
 mod loader;
 pub mod options;
-pub mod plan;
 pub mod spec;
 pub mod vanilla;
-pub mod zip;
 
-pub use files::{
-    download_game_files, download_planned, ensure_asset_index, extract_natives, game_files_task,
-    natives_task,
-};
-pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
 pub use io::{write_json_safe, write_safe};
-pub use jre::{
-    fetch_jre_runtime_manifest, install_jre, install_jre_for_major, install_jre_task,
-    resolve_jre_component, runtime_dir, JreAutoInstall, JreComponent, JreFileFormat,
-    JreForMajorRequest, JreInstallRequest, JreInstalled,
-};
 pub use loader::{fabric, forge, neoforge, optifine};
-pub use options::{FixedJava, InstallOptions, JavaProvider, PathJava};
-pub use plan::{
-    native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_game_files,
-    plan_libraries, plan_native_jars, plan_natives, PlanContext, PlannedFile,
+pub use options::InstallOptions;
+pub use spec::{
+    default_version_name, install_task, InstallOutcome, InstallSpec, LoaderKind, LoaderRequest,
 };
-pub use spec::{default_version_name, install_task, InstallSpec, LoaderKind, LoaderRequest};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};

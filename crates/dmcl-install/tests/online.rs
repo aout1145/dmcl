@@ -10,7 +10,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dmcl_install::{download_planned, plan_libraries, resolve_jre_component, InstallOptions};
+use dmcl_game::{download_planned, plan_libraries, resolve_version, GameFilesOptions, VersionRef};
+use dmcl_install::InstallOptions;
+use dmcl_java::{resolve_jre_component, JavaOption, JavaRuntimeOptions, JreAutoInstall};
+use dmcl_mcmeta::os::Arch;
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
 use dmcl_mcmeta::vanilla::current_jre_platform;
 use dmcl_task::TaskContext;
@@ -24,10 +27,22 @@ fn work_dir(tag: &str) -> PathBuf {
 }
 
 fn options(root: PathBuf) -> Arc<InstallOptions> {
-    Arc::new(
-        InstallOptions::new(root, DownloadSource::official())
-            .with_download(dmcl_download::DownloadOptions::with_max_connections(8)),
-    )
+    let game = GameFilesOptions::new(DownloadSource::official())
+        .with_download(dmcl_download::DownloadOptions::with_max_connections(8));
+    let java = Arc::new(JavaOption {
+        path: PathBuf::from("/nonexistent/java"),
+        major: 17,
+        arch: Arch::X86_64,
+    });
+    let jre = JreAutoInstall::new(root.join("runtime"));
+    Arc::new(InstallOptions::new(root, game, java, jre))
+}
+
+fn runtime_options() -> JavaRuntimeOptions {
+    JavaRuntimeOptions {
+        source: DownloadSource::official(),
+        download: dmcl_download::DownloadOptions::with_max_connections(8),
+    }
 }
 
 #[tokio::test]
@@ -71,14 +86,15 @@ async fn planning_holds_for_a_real_version_json() {
         .await
         .expect("download_vanilla");
 
-    let json = dmcl_mcmeta::layout::read_version_json_safe(&options.root_path, VERSION)
+    let json = resolve_version(&VersionRef::new(&options.root_path, VERSION))
         .await
-        .unwrap();
-    let planned = plan_libraries(&options.plan(), &json);
+        .unwrap()
+        .json;
+    let planned = plan_libraries(&options.version(VERSION), &json);
     assert!(!planned.is_empty());
 
     for file in &planned {
-        let item = file.clone().into_item(&options);
+        let item = file.clone().into_item(&options.game);
         // 规划出来的地址必须是可用的具体链接
         assert!(
             item.urls.iter().all(|url| url.starts_with("https://")),
@@ -90,9 +106,9 @@ async fn planning_holds_for_a_real_version_json() {
         // 1.7.10 有 linux natives，必须规划到解压清单里
     }
     // 客户端 jar 也在计划里
-    let client = dmcl_install::plan_client_jar(&options.plan(), &json, VERSION).unwrap();
+    let client = dmcl_game::plan_client_jar(&options.version(VERSION), &json).unwrap();
     assert!(client
-        .into_item(&options)
+        .into_item(&options.game)
         .urls
         .iter()
         .all(|url| url.starts_with("https://")));
@@ -107,17 +123,19 @@ async fn a_few_planned_libraries_really_download() {
         .await
         .expect("download_vanilla");
 
-    let json = dmcl_mcmeta::layout::read_version_json_safe(&options.root_path, VERSION)
+    let json = resolve_version(&VersionRef::new(&options.root_path, VERSION))
         .await
-        .unwrap();
+        .unwrap()
+        .json;
     // 挑几个小文件，避免测试太重
-    let small: Vec<_> = plan_libraries(&options.plan(), &json)
+    let small: Vec<_> = plan_libraries(&options.version(VERSION), &json)
         .into_iter()
         .take(3)
         .collect();
 
+    let game = options.game.clone();
     let report = download_planned(
-        &options,
+        &game,
         "库文件",
         small.clone(),
         &TaskContext::detached("测试"),
@@ -134,7 +152,7 @@ async fn a_few_planned_libraries_really_download() {
     }
 
     // 再跑一次：应当全部被跳过（sha1 一致）
-    let again = download_planned(&options, "库文件", small, &TaskContext::detached("测试"))
+    let again = download_planned(&game, "库文件", small, &TaskContext::detached("测试"))
         .await
         .unwrap();
     assert_eq!(again.skipped, 3);
@@ -168,10 +186,7 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
     .await
     .unwrap();
 
-    let options = Arc::new(InstallOptions::new(
-        root.clone(),
-        DownloadSource::official(),
-    ));
+    let options = options(root.clone());
     dmcl_install::optifine::install_optifine_task(
         options,
         version_name.to_string(),
@@ -217,14 +232,12 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
 #[tokio::test]
 #[ignore = "requires network access"]
 async fn the_jre_runtime_manifest_can_be_resolved_for_this_platform() {
-    let root = work_dir("jre-manifest");
-    let options = options(root);
+    let options = runtime_options();
     let platform = current_jre_platform().expect("当前平台应有 Mojang 提供的运行时");
 
-    let manifest =
-        dmcl_install::fetch_jre_runtime_manifest(&options, "java-runtime-gamma", platform)
-            .await
-            .expect("运行时清单");
+    let manifest = dmcl_java::fetch_jre_runtime_manifest(&options, "java-runtime-gamma", platform)
+        .await
+        .expect("运行时清单");
 
     assert!(!manifest.files.is_empty());
     let java = if cfg!(target_os = "macos") {
@@ -245,15 +258,13 @@ async fn jre_components_can_be_resolved_from_the_real_index() {
     let platform = current_jre_platform().expect("当前平台应有 Mojang 提供的运行时");
 
     let component = resolve_jre_component(&index, platform, None, 17).expect("Java 17 组件");
-    assert!(!component.fallback);
     assert!(component.name.starts_with("java-runtime-"));
 
     let legacy = resolve_jre_component(&index, platform, None, 8).expect("Java 8 组件");
     assert_eq!(legacy.name, "jre-legacy");
-    assert!(!legacy.fallback, "匹配到 jre-legacy 不算兜底");
 
-    // Mojang 目前没有 Java 99；应当退回 jre-legacy 并标记 fallback。
-    let fallback = resolve_jre_component(&index, platform, None, 99).expect("兜底组件");
-    assert_eq!(fallback.name, "jre-legacy");
-    assert!(fallback.fallback);
+    // 显式组件必须实际提供要求的版本。
+    assert!(resolve_jre_component(&index, platform, Some(&component.name), 8).is_err());
+    // Mojang 目前没有 Java 99；不退回 jre-legacy。
+    assert!(resolve_jre_component(&index, platform, None, 99).is_err());
 }

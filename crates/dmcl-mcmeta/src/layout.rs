@@ -140,20 +140,6 @@ pub async fn read_version_json(path: &Path) -> Result<VersionJson> {
     Ok(json)
 }
 
-/// 读版本 JSON，并解析 `inheritsFrom`。
-pub async fn read_version_json_safe(root_path: &Path, version_name: &str) -> Result<VersionJson> {
-    let path = version_json_path(root_path, version_name);
-    let mut json = read_version_json(&path).await?;
-
-    if let Some(orig) = json.inherits_from.clone() {
-        // 若基于另一个版本，则合并两者
-        let mut orijson = read_version_json(&version_json_path(root_path, &orig)).await?;
-        orijson.merge(&json)?;
-        json = orijson;
-    }
-    Ok(json)
-}
-
 fn fnv1a64(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.as_bytes() {

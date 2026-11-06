@@ -30,7 +30,9 @@ gtk4 = ["dep:relm4", "dep:sysinfo", "dep:notify"]
 dmcl-task.workspace = true
 dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
+dmcl-game.workspace = true
 dmcl-install.workspace = true
+dmcl-java.workspace = true
 dmcl-launch.workspace = true
 
 tokio.workspace = true

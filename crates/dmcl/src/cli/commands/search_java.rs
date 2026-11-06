@@ -1,7 +1,7 @@
 //! `search-java` —— 扫描本机 Java，合并进全局配置并保存。
 
 use anyhow::Result;
-use dmcl_launch::{default_java_roots, find_java};
+use dmcl_java::{default_java_roots, find_java};
 
 use crate::config::{configs_from_details, merge_javas, Config};
 

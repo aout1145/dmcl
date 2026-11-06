@@ -1,78 +1,36 @@
 //! `launch` —— 检查完整性、补全文件、生成参数、启动。
 //!
-//! 这里同时放着 CLI 的 Java 选择器 [`ConfigJava`]：只认全局配置里的 `javas`，不扫描、
-//! 不下载。
+//! 这里同时放着 CLI 的 Java 解析器 [`ConfigJavaResolver`]：只认全局配置里的 `javas`，
+//! 不扫描、不下载。
 
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
-use dmcl_launch::{auto_select_java, JavaDetails, JavaOption, JavaSelector};
+use anyhow::Result;
+use dmcl_game::VersionRef;
+use dmcl_java::JavaResolver;
 
 use super::handle_event;
 use crate::cli::progress::ProgressPrinter;
-use crate::config::{ensure_java_path, Config, JavaChoice, JavaConfig, JavaConfigs};
+use crate::config::{resolve_from_config, Config, JavaChoice, JavaConfigs};
 
-/// 只认配置的 Java 选择器：不会扫描本机，也不会自动安装。
+/// 只认配置的 Java 解析器：不会扫描本机，也不会自动安装。
 ///
-/// 只服务于 `launch`：安装流程有独立的 JavaProvider，按版本要求自动选择，与这里的
-/// `launch.java` 无关。
-pub(crate) struct ConfigJava {
+/// 只服务于 `launch`：安装流程有独立的 `InstallJavaResolver`，按版本要求自动选择，
+/// 与这里的 `launch.java` 无关。
+pub(crate) struct ConfigJavaResolver {
     pub(crate) choice: JavaChoice,
     pub(crate) configs: JavaConfigs,
 }
 
-impl JavaSelector for ConfigJava {
-    fn select_java<'a>(
+impl JavaResolver for ConfigJavaResolver {
+    fn resolve<'a>(
         &'a self,
         required_major: u32,
-    ) -> dmcl_task::BoxFuture<'a, Result<JavaOption>> {
-        Box::pin(async move { select_java(required_major, &self.choice, &self.configs).await })
-    }
-
-    fn allows_auto_install(&self) -> bool {
-        false
-    }
-
-    fn add_installed_java<'a>(
-        &'a self,
-        _details: &'a JavaDetails,
-    ) -> dmcl_task::BoxFuture<'a, Result<()>> {
-        panic!("CLI 的 Java 选择器不支持自动安装")
-    }
-}
-
-/// 按配置里的选择挑一个 Java；只读缓存的 `major` / `arch`，不执行 Java。
-///
-/// 自动选择只看 `javas` 里路径仍然存在的条目，不会扫描本机；没有可用条目时提示用户
-/// 先执行 `dmcl search-java`。
-async fn select_java(
-    required_major: u32,
-    choice: &JavaChoice,
-    configs: &JavaConfigs,
-) -> Result<JavaOption> {
-    match choice {
-        JavaChoice::Named(name) => {
-            let java = configs
-                .get(name)
-                .ok_or_else(|| anyhow!("Java 配置项不存在：{name}"))?;
-            ensure_java_path(name, java)?;
-            Ok(java.option())
-        }
-        JavaChoice::Auto => {
-            let options: Vec<JavaOption> = configs
-                .values()
-                .filter(|java| java.path.is_file())
-                .map(JavaConfig::option)
-                .collect();
-            if options.is_empty() {
-                return Err(anyhow!(
-                    "配置中没有可用的 Java，请先执行 dmcl search-java 扫描本机 Java"
-                ));
-            }
-            auto_select_java(required_major, &options)
-                .ok_or_else(|| anyhow!("未找到合适的 Java，请先执行 dmcl search-java"))
-        }
+    ) -> dmcl_task::BoxFuture<'a, Result<dmcl_java::JavaOption>> {
+        Box::pin(async move {
+            resolve_from_config(required_major, &self.choice, &self.configs, false).await
+        })
     }
 }
 
@@ -86,15 +44,16 @@ pub(crate) async fn run(vername: &str, config: &Config, root_path: &Path) -> Res
         return Err(error.clone().into());
     }
     let launch = loaded.launch;
-    let java = Arc::new(ConfigJava {
+    let java = Arc::new(ConfigJavaResolver {
         choice: launch.java.clone(),
         configs: config.javas.clone(),
     });
-    let option = config.launch_option(&launch, vername, root_path, java)?;
-    let install = Arc::new(config.install_options(config.download_source(), root_path)?);
+    let version = VersionRef::new(root_path.to_path_buf(), vername);
+    let option = config.launch_option(&launch, version, java, None)?;
+    let game = Arc::new(config.game_files_options(config.download_source()));
 
     let mut printer = ProgressPrinter::new();
-    let mut monitor = dmcl_launch::launch_chain(option, install)
+    let mut monitor = dmcl_launch::launch_chain(option, game, None)
         .run_with((), |event| handle_event(&mut printer, event))
         .await?;
     printer.finish();
@@ -116,10 +75,10 @@ mod tests {
         dir
     }
 
-    fn file_entry(dir: &Path, name: &str, major: u32) -> JavaConfig {
+    fn file_entry(dir: &Path, name: &str, major: u32) -> crate::config::JavaConfig {
         let path = dir.join(name);
         std::fs::write(&path, b"").unwrap();
-        JavaConfig {
+        crate::config::JavaConfig {
             path,
             major,
             arch: Arch::X86_64,
@@ -136,12 +95,18 @@ mod tests {
             ("twentyone".to_string(), file_entry(&dir, "twentyone", 21)),
         ]);
 
-        let selected = select_java(17, &JavaChoice::Auto, &configs).await.unwrap();
+        let auto = ConfigJavaResolver {
+            choice: JavaChoice::Auto,
+            configs: configs.clone(),
+        };
+        let selected = JavaResolver::resolve(&auto, 17).await.unwrap();
         assert_eq!(selected.path, dir.join("seventeen"));
 
-        let selected = select_java(8, &JavaChoice::Named("twentyone".into()), &configs)
-            .await
-            .unwrap();
+        let named = ConfigJavaResolver {
+            choice: JavaChoice::Named("twentyone".into()),
+            configs,
+        };
+        let selected = JavaResolver::resolve(&named, 8).await.unwrap();
         assert_eq!(selected.path, dir.join("twentyone"));
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -154,7 +119,7 @@ mod tests {
         let configs = JavaConfigs::from([
             (
                 "missing".to_string(),
-                JavaConfig {
+                crate::config::JavaConfig {
                     path: dir.join("missing"),
                     major: 21,
                     arch: Arch::X86_64,
@@ -162,9 +127,13 @@ mod tests {
             ),
             ("valid".to_string(), valid.clone()),
         ]);
+        let resolver = ConfigJavaResolver {
+            choice: JavaChoice::Auto,
+            configs,
+        };
 
         // 21 的路径不存在，只能选仍然存在的 17
-        let selected = select_java(21, &JavaChoice::Auto, &configs).await.unwrap();
+        let selected = JavaResolver::resolve(&resolver, 21).await.unwrap();
         assert_eq!(selected.path, valid.path);
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -176,7 +145,7 @@ mod tests {
         let missing = dir.join("java");
         let configs = JavaConfigs::from([(
             "gone".to_string(),
-            JavaConfig {
+            crate::config::JavaConfig {
                 path: missing.clone(),
                 major: 17,
                 arch: Arch::X86_64,
@@ -185,14 +154,22 @@ mod tests {
 
         // 空表与「全部路径失效」都只认配置，不扫描本机。
         for configs in [&JavaConfigs::new(), &configs] {
-            let err = select_java(17, &JavaChoice::Auto, configs)
+            let resolver = ConfigJavaResolver {
+                choice: JavaChoice::Auto,
+                configs: configs.clone(),
+            };
+            let err = JavaResolver::resolve(&resolver, 17)
                 .await
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("dmcl search-java"), "{err}");
         }
 
-        let err = select_java(17, &JavaChoice::Named("gone".into()), &configs)
+        let named = ConfigJavaResolver {
+            choice: JavaChoice::Named("gone".into()),
+            configs,
+        };
+        let err = JavaResolver::resolve(&named, 17)
             .await
             .unwrap_err()
             .to_string();
@@ -204,7 +181,11 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_named_java_is_reported_even_without_entries() {
-        let err = select_java(17, &JavaChoice::Named("nope".into()), &JavaConfigs::new())
+        let resolver = ConfigJavaResolver {
+            choice: JavaChoice::Named("nope".into()),
+            configs: JavaConfigs::new(),
+        };
+        let err = JavaResolver::resolve(&resolver, 17)
             .await
             .unwrap_err()
             .to_string();
@@ -216,12 +197,12 @@ mod tests {
     async fn config_java_converts_to_the_launch_types() {
         let dir = temp_java_dir("java-config-java");
         let configs = JavaConfigs::from([("jdk".to_string(), file_entry(&dir, "jdk", 17))]);
-        let java = ConfigJava {
+        let java = ConfigJavaResolver {
             choice: JavaChoice::Named("jdk".into()),
             configs,
         };
 
-        let option = JavaSelector::select_java(&java, 17).await.unwrap();
+        let option = JavaResolver::resolve(&java, 17).await.unwrap();
         assert_eq!(option.path, dir.join("jdk"));
         assert_eq!(option.major, 17);
         assert_eq!(option.arch, Arch::X86_64);

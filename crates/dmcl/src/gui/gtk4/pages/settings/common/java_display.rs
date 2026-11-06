@@ -2,7 +2,7 @@
 //!
 //! Java 管理页和游戏设置页共用同一套标题 / 摘要格式，避免两处显示不一致。
 
-use dmcl_launch::JavaDetails;
+use dmcl_java::JavaDetails;
 
 /// 标题：JDK / JRE + 完整版本。
 pub(crate) fn details_title(details: &JavaDetails) -> String {
@@ -32,7 +32,7 @@ pub(crate) fn java_summary(details: &JavaDetails) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use dmcl_launch::{JavaDetails, JavaOption};
+    use dmcl_java::{JavaDetails, JavaOption};
     use dmcl_mcmeta::os::Arch;
 
     use super::{details_title, java_summary};

@@ -1,0 +1,19 @@
+[package]
+name = "dmcl-java"
+description = "Java probing, selection and Mojang JRE installation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+dmcl-task.workspace = true
+dmcl-mcmeta.workspace = true
+dmcl-download.workspace = true
+
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+walkdir.workspace = true
+lzma-rs.workspace = true

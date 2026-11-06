@@ -5,18 +5,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use dmcl_game::{base_name, download_planned, PlannedFile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::optifine::OptiFineVersionEntry;
 use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
 use dmcl_task::{task_fn, task_fn_io, TaskChain, TaskContext};
 
-use crate::files::download_planned;
+use crate::archive::{has_entry, open_archive, read_entry};
 use crate::io::{write_json_safe, write_safe};
 use crate::loader::common::finish_version_json;
 use crate::options::InstallOptions;
-use crate::plan::{base_name, PlannedFile};
-use crate::zip::{open_archive, zip_has_entry, zip_read_entry};
 
 /// OptiFine 的库坐标前缀。
 const OPTIFINE_LIBRARY: &str = "optifine:OptiFine";
@@ -42,7 +41,11 @@ pub fn install_optifine_task(
                     let mc_version = mc_version.clone();
                     let optifine_version = optifine_version.clone();
                     async move {
-                        let listing = options.source.fetch_optifine_versions(&mc_version).await?;
+                        let listing = options
+                            .game
+                            .source
+                            .fetch_optifine_versions(&mc_version)
+                            .await?;
                         let entry = listing
                             .into_iter()
                             .find(|entry| entry.version() == optifine_version)
@@ -82,7 +85,7 @@ pub fn install_optifine_task(
                             jar.entry.filename.clone()
                         };
                         download_planned(
-                            &options,
+                            &options.game,
                             "OptiFine",
                             vec![PlannedFile {
                                 url: jar.entry.download_url(),
@@ -118,7 +121,7 @@ pub fn install_optifine_task(
                         validate_launchwrapper_version(&version)?;
 
                         let inner = format!("launchwrapper-of-{version}.jar");
-                        let bytes = zip_read_entry(&mut archive, &inner)?;
+                        let bytes = read_entry(&mut archive, &inner)?;
                         let target = libraries_dir(&options.root_path).join(lib_name_to_path(
                             &format!("{LAUNCHWRAPPER_LIBRARY}:of-{version}"),
                         ));
@@ -226,8 +229,8 @@ fn append_game_tweak(json: &mut VersionJson, tweaker: &str) {
 fn launchwrapper_version_from_archive(
     archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
 ) -> Result<String> {
-    if zip_has_entry(archive, "launchwrapper-of.txt") {
-        let text = zip_read_entry(archive, "launchwrapper-of.txt")?;
+    if has_entry(archive, "launchwrapper-of.txt") {
+        let text = read_entry(archive, "launchwrapper-of.txt")?;
         let version = String::from_utf8_lossy(&text).trim().to_string();
         if !version.is_empty() {
             return Ok(version);

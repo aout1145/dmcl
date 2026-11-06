@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use dmcl_launch::{default_java_roots, find_java, JavaDetails};
+use dmcl_java::{default_java_roots, find_java, JavaDetails};
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::Arch;
 use relm4::adw;

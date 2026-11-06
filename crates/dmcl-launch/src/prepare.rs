@@ -1,9 +1,9 @@
 //! 启动流程：检查并补全 → 选择 Java → 解压 natives → 登录 → 生成参数 → 启动。
 //!
-//! * [`PrepareLaunchFilesTask`]（`Task<(), IntegrityStatus>`）——「检查文件完整性；缺件时跑
-//!   一次 `dmcl-install` 补全」，产出完整性检查结果；
-//! * [`SelectJavaTask`]（`Task<IntegrityStatus, JavaOption>`）——读取版本要求的 Java 大版本，
-//!   通过选择器选好 java；版本 / 架构不匹配时先等用户确认；
+//! * [`PrepareLaunchFilesTask`]（`Task<(), ResolvedVersion>`）——「读取版本、检查文件完整性；
+//!   缺件时补全」，产出已解析的版本；
+//! * [`SelectJavaTask`]（`Task<ResolvedVersion, JavaOption>`）——读取版本要求的 Java 大版本，
+//!   通过解析器选好 java；允许自动安装时下载 JRE；版本 / 架构不匹配时先等用户确认；
 //! * [`PrepareNativesTask`]（`Task<JavaOption, JavaOption>`）——按当前平台的 os 与已选 java
 //!   的 arch 下载 + 解压 natives；
 //! * [`LoginTask`]（`Task<JavaOption, (Account, JavaOption)>`）——让账户来源产出一个可用
@@ -23,13 +23,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_install::{InstallOptions, IntegrityStatus, JreForMajorRequest};
-use dmcl_mcmeta::layout::read_version_json_safe;
+use dmcl_game::{
+    check_integrity, ensure_files, ensure_natives, resolve_version, GameFilesOptions,
+    ResolvedVersion, VersionRef,
+};
+use dmcl_java::{
+    install_jre, JavaDetails, JavaOption, JavaRuntimeOptions, JreAutoInstall, JreInstallRequest,
+};
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_task::{BoxFuture, Task, TaskChain, TaskContext};
 
 use crate::account::{Account, AccountSource};
-use crate::java::{official_runtime_root, JavaDetails, JavaOption};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
 use crate::option::LaunchOption;
@@ -79,72 +83,77 @@ impl Task<JavaOption, WithAccount<JavaOption>> for LoginTask {
     }
 }
 
-/// 检查文件完整性；缺件时跑一次 `dmcl-install` 补全。
-///
-/// 完整性只检查一次：结果既用来判断要不要补全，也原样传给下一步。
+/// 读取版本、检查文件完整性；缺件时补全。
 pub struct PrepareLaunchFilesTask {
-    install: Arc<InstallOptions>,
-    version_name: String,
+    game: Arc<GameFilesOptions>,
+    version: VersionRef,
 }
 
 impl PrepareLaunchFilesTask {
-    pub fn new(install: Arc<InstallOptions>, version_name: impl Into<String>) -> Self {
-        Self {
-            install,
-            version_name: version_name.into(),
-        }
+    pub fn new(game: Arc<GameFilesOptions>, version: VersionRef) -> Self {
+        Self { game, version }
     }
 }
 
-impl Task<(), IntegrityStatus> for PrepareLaunchFilesTask {
-    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<IntegrityStatus>> {
+impl Task<(), ResolvedVersion> for PrepareLaunchFilesTask {
+    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<ResolvedVersion>> {
         Box::pin(async move {
-            let integrity =
-                dmcl_install::check_integrity(&self.install.plan(), &self.version_name).await?;
+            let resolved = resolve_version(&self.version).await?;
+            let integrity = check_integrity(&resolved, &self.game).await?;
             ctx.log(integrity.summary());
-
-            // 缺件时才跑下载链（链内会跳过已存在的文件），进度转发到当前事件流
             if !integrity.is_complete() {
-                let chain =
-                    dmcl_install::game_files_task(self.install.clone(), self.version_name.clone());
-                Task::<(), ()>::run(&chain, (), ctx).await?;
+                ensure_files(&resolved, &self.game, &ctx).await?;
             }
-            Ok(integrity)
+            Ok(resolved)
         })
     }
 }
 
-/// 通过选择器选好 java；允许自动安装时先下载匹配的 JRE；版本 / 架构仍不匹配时先等用户确认。
+/// 通过解析器选好 java；允许自动安装时下载匹配的 JRE；版本 / 架构仍不匹配时先等用户确认。
 pub struct SelectJavaTask {
     option: LaunchOption,
-    install: Arc<InstallOptions>,
+    game: Arc<GameFilesOptions>,
+    jre: Option<JreAutoInstall>,
 }
 
 impl SelectJavaTask {
-    pub fn new(option: LaunchOption, install: Arc<InstallOptions>) -> Self {
-        Self { option, install }
+    pub fn new(
+        option: LaunchOption,
+        game: Arc<GameFilesOptions>,
+        jre: Option<JreAutoInstall>,
+    ) -> Self {
+        Self { option, game, jre }
     }
 
-    /// 下载匹配版本要求的 Mojang JRE，并把它交给选择器（GUI 会写回配置）。
+    /// 下载匹配版本要求的 Mojang JRE，并把它交给 hook（GUI 会写回配置）。
     async fn auto_install_java(
         &self,
         preferred: Option<&str>,
         required_major: u32,
+        jre: &JreAutoInstall,
         ctx: &TaskContext,
     ) -> Result<JavaOption> {
-        let runtime_root = official_runtime_root()
-            .ok_or_else(|| anyhow!("无法确定官方启动器的 runtime 目录，不能自动下载 Java"))?;
         let arch =
             Arch::current().ok_or_else(|| anyhow!("无法确定当前 CPU 架构，不能自动下载 Java"))?;
-        let mut request =
-            JreForMajorRequest::new(runtime_root, (Os::current(), arch), required_major);
-        if let Some(component) = preferred {
-            request = request.with_preferred_component(component);
+        let runtime = JavaRuntimeOptions {
+            source: self.game.source.clone(),
+            download: self.game.download.clone(),
+        };
+        let mut request = JreInstallRequest::new(
+            jre.runtime_root.clone(),
+            (Os::current(), arch),
+            required_major,
+        )
+        .with_format(jre.format);
+        if let Some(component) = preferred.filter(|component| !component.is_empty()) {
+            request = request.with_component(component);
         }
 
-        let installed = dmcl_install::install_jre_for_major(&self.install, &request, ctx).await?;
+        let installed = install_jre(&runtime, &request, ctx).await?;
         let details = JavaDetails::probe(installed.java).await?;
-        self.option.java.add_installed_java(&details).await?;
+        if let Some(hook) = &self.option.java_installed_hook {
+            hook.on_installed(&details).await?;
+        }
         ctx.log(format!(
             "已下载 Java {}：{}",
             details.option.major,
@@ -159,46 +168,46 @@ fn java_is_suitable(java: &JavaOption, required_major: u32) -> bool {
     java.major == required_major && Arch::current().is_none_or(|host| host == java.arch)
 }
 
-impl Task<IntegrityStatus, JavaOption> for SelectJavaTask {
+impl Task<ResolvedVersion, JavaOption> for SelectJavaTask {
     fn run<'a>(
         &'a self,
-        _integrity: IntegrityStatus,
+        resolved: ResolvedVersion,
         ctx: TaskContext,
     ) -> BoxFuture<'a, Result<JavaOption>> {
         Box::pin(async move {
-            let json =
-                read_version_json_safe(&self.option.root_path, &self.option.version_name).await?;
-            let required_major = json.required_java_major();
-            let preferred = json
+            let required_major = resolved.json.required_java_major();
+            let preferred = resolved
+                .json
                 .java_version
                 .as_ref()
                 .and_then(|java| java.component.clone())
                 .filter(|component| !component.is_empty());
 
             let mut downloaded = false;
-            let mut java = match self.option.java.select_java(required_major).await {
+            let mut java = match self.option.java.resolve(required_major).await {
                 Ok(java) => java,
-                Err(err) if !self.option.java.allows_auto_install() => return Err(err),
                 Err(err) => {
+                    let Some(jre) = &self.jre else {
+                        return Err(err);
+                    };
                     ctx.log(format!("没有找到合适的 Java：{err:#}，尝试自动下载"));
                     downloaded = true;
-                    self.auto_install_java(preferred.as_deref(), required_major, &ctx)
+                    self.auto_install_java(preferred.as_deref(), required_major, jre, &ctx)
                         .await?
                 }
             };
 
-            if !downloaded
-                && self.option.java.allows_auto_install()
-                && !java_is_suitable(&java, required_major)
-            {
-                match self
-                    .auto_install_java(preferred.as_deref(), required_major, &ctx)
-                    .await
-                {
-                    Ok(installed) => java = installed,
-                    Err(err) => ctx.log(format!(
-                        "警告：自动下载 Java 失败，继续使用已选的 Java：{err:#}"
-                    )),
+            if !downloaded && !java_is_suitable(&java, required_major) {
+                if let Some(jre) = &self.jre {
+                    match self
+                        .auto_install_java(preferred.as_deref(), required_major, jre, &ctx)
+                        .await
+                    {
+                        Ok(installed) => java = installed,
+                        Err(err) => ctx.log(format!(
+                            "警告：自动下载 Java 失败，继续使用已选的 Java：{err:#}"
+                        )),
+                    }
                 }
             }
 
@@ -238,25 +247,20 @@ impl Task<IntegrityStatus, JavaOption> for SelectJavaTask {
 /// 上一步选好的 java；这里不再选择 Java。
 pub struct PrepareNativesTask {
     option: LaunchOption,
-    install: Arc<InstallOptions>,
+    game: Arc<GameFilesOptions>,
 }
 
 impl PrepareNativesTask {
-    pub fn new(option: LaunchOption, install: Arc<InstallOptions>) -> Self {
-        Self { option, install }
+    pub fn new(option: LaunchOption, game: Arc<GameFilesOptions>) -> Self {
+        Self { option, game }
     }
 }
 
 impl Task<JavaOption, JavaOption> for PrepareNativesTask {
     fn run<'a>(&'a self, java: JavaOption, ctx: TaskContext) -> BoxFuture<'a, Result<JavaOption>> {
         Box::pin(async move {
-            let chain = dmcl_install::natives_task(
-                self.install.clone(),
-                self.option.version_name.clone(),
-                Os::current(),
-                java.arch,
-            );
-            Task::<(), ()>::run(&chain, (), ctx).await?;
+            let version = resolve_version(&self.option.version).await?;
+            ensure_natives(&version, Os::current(), java.arch, &self.game, &ctx).await?;
             Ok(java)
         })
     }
@@ -319,21 +323,22 @@ impl Task<PreparedLaunch, GameMonitor> for LaunchTask {
 /// 返回 `TaskChain<(), GameMonitor>`（不运行）。
 pub fn launch_chain(
     option: LaunchOption,
-    install: Arc<InstallOptions>,
+    game: Arc<GameFilesOptions>,
+    jre: Option<JreAutoInstall>,
 ) -> TaskChain<(), GameMonitor> {
-    let version_name = option.version_name.clone();
+    let version = option.version.clone();
     let account_source = option.account_source.clone();
     TaskChain::new("启动")
         .then(
-            PrepareLaunchFilesTask::new(install.clone(), version_name),
+            PrepareLaunchFilesTask::new(game.clone(), version),
             "检查并补全文件",
         )
         .then(
-            SelectJavaTask::new(option.clone(), install.clone()),
+            SelectJavaTask::new(option.clone(), game.clone(), jre),
             "选择 Java",
         )
         .then(
-            PrepareNativesTask::new(option.clone(), install),
+            PrepareNativesTask::new(option.clone(), game),
             "解压 natives",
         )
         .then(LoginTask::new(account_source), "登录")
@@ -345,12 +350,14 @@ pub fn launch_chain(
 mod tests {
     use super::*;
     use crate::account::OfflineAccountSource;
+    use dmcl_game::GameFilesOptions;
+    use dmcl_java::{default_java_roots, find_java};
     use dmcl_mcmeta::source::DownloadSource;
     use dmcl_task::TaskEvent;
     use std::sync::Arc;
 
-    fn install_options(root: &std::path::Path) -> Arc<InstallOptions> {
-        Arc::new(InstallOptions::new(root, DownloadSource::official()))
+    fn game_options() -> Arc<GameFilesOptions> {
+        Arc::new(GameFilesOptions::new(DownloadSource::official()))
     }
 
     fn offline_source() -> Arc<dyn AccountSource> {
@@ -359,7 +366,7 @@ mod tests {
 
     /// 找一个能用的 java 可执行文件；本机没有就返回 `None`（跳过测试）。
     async fn any_java() -> Option<JavaOption> {
-        crate::find_java(&crate::default_java_roots())
+        find_java(&default_java_roots())
             .await
             .into_iter()
             .next()
@@ -376,7 +383,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("dmcl-prepare-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&root).await;
 
-        // 一个最小版本：没有库、没有资源，因此完整性检查"完整"
+        // 一个最小版本：没有库、没有资源，因此完整性检查「完整」
         let json = serde_json::json!({
             "id": "1.0",
             "mainClass": "com.example.Main",
@@ -392,24 +399,24 @@ mod tests {
 
         let option = LaunchOption::new(
             Arc::new(OfflineAccountSource::new("player")),
-            root.clone(),
-            "1.0",
+            VersionRef::new(&root, "1.0"),
             Arc::new(java),
+            None,
         );
 
-        let integrity = PrepareLaunchFilesTask::new(install_options(&root), "1.0")
+        let resolved = PrepareLaunchFilesTask::new(game_options(), VersionRef::new(&root, "1.0"))
             .run((), TaskContext::detached("检查并补全文件"))
             .await
             .unwrap();
-        assert!(integrity.is_complete(), "{:?}", integrity.missing);
+        assert_eq!(resolved.json.id.as_deref(), Some("1.0"));
 
-        let java = SelectJavaTask::new(option.clone(), install_options(&root))
-            .run(integrity, TaskContext::detached("选择 Java"))
+        let java = SelectJavaTask::new(option.clone(), game_options(), None)
+            .run(resolved, TaskContext::detached("选择 Java"))
             .await
             .unwrap();
         assert!(java.major > 0);
 
-        let java = PrepareNativesTask::new(option.clone(), install_options(&root))
+        let java = PrepareNativesTask::new(option.clone(), game_options())
             .run(java, TaskContext::detached("解压 natives"))
             .await
             .unwrap();
@@ -461,22 +468,24 @@ mod tests {
         let arch = dmcl_mcmeta::os::Arch::current().unwrap_or(dmcl_mcmeta::os::Arch::X86_64);
         let option = LaunchOption::new(
             offline_source(),
-            root.clone(),
-            "1.0",
+            VersionRef::new(&root, "1.0"),
             Arc::new(JavaOption {
                 path: PathBuf::from("/opt/jdk8/bin/java"),
                 major: 8,
                 arch,
             }),
+            None,
         );
         let ctx = TaskContext::detached("选择 Java");
         let mut events = ctx.subscribe();
-        let install = install_options(&root);
+        let resolved = resolve_version(&VersionRef::new(&root, "1.0"))
+            .await
+            .unwrap();
         let waiting = tokio::spawn({
             let ctx = ctx.clone();
             async move {
-                SelectJavaTask::new(option, install)
-                    .run(IntegrityStatus::default(), ctx)
+                SelectJavaTask::new(option, game_options(), None)
+                    .run(resolved, ctx)
                     .await
             }
         });

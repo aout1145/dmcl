@@ -93,19 +93,19 @@ HomeMsg::MonitorExited { name, stopped, abnormal }
 
 ## Java 选择
 
-主页启动链使用 `home/java.rs` 的 `GuiJavaSelector`，与 CLI「只认配置」的策略不同：
+主页启动链使用 `home/java.rs` 的 `GuiJavaResolver`，与 CLI「只认配置」的策略不同：
 
 - `JavaChoice::Named`：只按配置名取；路径失效直接报错，不自动扫描或下载；
 - `JavaChoice::Auto`：先从 `javas` 里路径存在的条目自动选择；没有可用条目时扫描本机，
   把结果合并进 `javas`；仍然没有匹配版本时由启动链的「选择 Java」步骤下载 Mojang 的
-  JRE 到官方启动器的 runtime 目录，并通过 `JavaSelector::add_installed_java` 写回
-  `javas`。写配置失败静默忽略，本次仍使用下载结果；
+  JRE 到官方启动器的 runtime 目录，并通过 `GuiJavaInstalledHook` 写回 `javas`。写配置
+  失败静默忽略，本次仍使用下载结果；
 - 选中的 Java 与版本要求不匹配时，由启动链的「选择 Java」步骤向用户确认，确认后才继续。
 
-安装器 processor 用的 Java 不走这个选择器：`Config::install_options` 使用
-`download.java`（默认 `autoselect`），从 `javas` 自动选择，没有匹配版本时扫描本机，
-仍然没有就由安装流程用当前任务上下文下载到官方 runtime 目录（进度进入安装任务）；
-与启动选中的 Java 无关。
+安装器 processor 用的 Java 不走这个解析器：`Config::install_options` 使用
+`download.java`（默认 `autoselect`），从 `javas` 自动选择并要求精确匹配版本要求，没有
+匹配时扫描本机，仍然没有就由安装流程用当前任务上下文下载到官方 runtime 目录（进度进入
+安装任务）；与启动选中的 Java 无关。
 
 ## 启动 / 停止
 

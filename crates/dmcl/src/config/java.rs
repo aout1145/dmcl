@@ -7,8 +7,9 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-use dmcl_install::JavaProvider;
-use dmcl_launch::{auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption};
+use dmcl_java::{
+    auto_select_java, default_java_roots, find_java, JavaDetails, JavaOption, JavaResolver,
+};
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_task::BoxFuture;
@@ -311,56 +312,86 @@ fn path_hash(path: &Path) -> String {
     )
 }
 
-/// 安装流程用的 Java 提供者：按 `download.java` 选择，自动模式下先读配置、再扫描本机。
+/// 按配置里的显式名字取 Java；路径必须仍然存在。
+fn named_java(name: &str, configs: &JavaConfigs) -> Result<JavaOption> {
+    let java = configs
+        .get(name)
+        .ok_or_else(|| anyhow!("Java 配置项不存在：{name}"))?;
+    ensure_java_path(name, java)?;
+    Ok(java.option())
+}
+
+/// 从配置表里自动选择；只读缓存的版本 / 架构，路径必须仍然存在。
+pub(crate) fn configured_java(required_major: u32, configs: &JavaConfigs) -> Option<JavaOption> {
+    let options: Vec<JavaOption> = configs
+        .values()
+        .filter(|java| java.path.is_file())
+        .map(JavaConfig::option)
+        .collect();
+    auto_select_java(required_major, &options)
+}
+
+/// 扫描本机，转成可以直接并入配置的条目。
+pub(crate) async fn scan_configs() -> JavaConfigs {
+    configs_from_details(find_java(&default_java_roots()).await)
+}
+
+/// CLI / 安装流程共用的选择逻辑。
+///
+/// `scan = false` 只认配置；`true` 时配置里没有可用条目才扫描本机（不写回配置）。
+pub(crate) async fn resolve_from_config(
+    required_major: u32,
+    choice: &JavaChoice,
+    configs: &JavaConfigs,
+    scan: bool,
+) -> Result<JavaOption> {
+    match choice {
+        JavaChoice::Named(name) => named_java(name, configs),
+        JavaChoice::Auto => {
+            if let Some(java) = configured_java(required_major, configs) {
+                return Ok(java);
+            }
+            if !scan {
+                return Err(anyhow!(
+                    "配置中没有可用的 Java，请先执行 dmcl search-java 扫描本机 Java"
+                ));
+            }
+            let found = scan_configs().await;
+            configured_java(required_major, &found)
+                .ok_or_else(|| anyhow!("未找到可用的 Java，请先安装 Java 或在配置中添加 Java 路径"))
+        }
+    }
+}
+
+/// 安装流程用的 Java 解析器：按 `download.java` 选择，自动模式下先读配置、再扫描本机。
 ///
 /// 这里只负责找**现有** Java；找不到时由安装流程用
 /// [`dmcl_install::InstallOptions::java_for_or_install`] 下载 JRE，下载进度因此能显示在
 /// 安装任务里。与启动时的 `launch.java` 无关，扫描结果也不写回配置。
-pub(crate) struct InstallJavaProvider {
+pub(crate) struct InstallJavaResolver {
     choice: JavaChoice,
     configs: JavaConfigs,
 }
 
-impl InstallJavaProvider {
+impl InstallJavaResolver {
     pub(crate) fn new(choice: JavaChoice, configs: JavaConfigs) -> Self {
         Self { choice, configs }
     }
 }
 
-impl JavaProvider for InstallJavaProvider {
-    fn java_for<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<PathBuf>> {
+impl JavaResolver for InstallJavaResolver {
+    fn resolve<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
         Box::pin(async move {
-            if let JavaChoice::Named(name) = &self.choice {
-                let java = self
-                    .configs
-                    .get(name)
-                    .ok_or_else(|| anyhow!("Java 配置项不存在：{name}"))?;
-                ensure_java_path(name, java)?;
-                return Ok(java.path.clone());
+            let java =
+                resolve_from_config(required_major, &self.choice, &self.configs, true).await?;
+            // 显式指定不按版本要求改选；自动选择必须精确匹配要求的 Java 大版本，
+            // 否则交给安装流程下载对应的 JRE。
+            if self.choice.is_auto() && java.major != required_major {
+                return Err(anyhow!(
+                    "没有找到匹配 Java {required_major} 的可用 Java，请先安装或在配置中添加 Java 路径"
+                ));
             }
-
-            let configured: Vec<JavaOption> = self
-                .configs
-                .values()
-                .filter(|java| java.path.is_file())
-                .map(JavaConfig::option)
-                .collect();
-            if let Some(java) = auto_select_java(required_major, &configured)
-                .filter(|java| java.major == required_major)
-            {
-                return Ok(java.path);
-            }
-
-            let found = configs_from_details(find_java(&default_java_roots()).await);
-            let options: Vec<JavaOption> = found.values().map(JavaConfig::option).collect();
-            auto_select_java(required_major, &options)
-                .filter(|java| java.major == required_major)
-                .map(|java| java.path)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "没有找到匹配 Java {required_major} 的可用 Java，请先安装或在配置中添加 Java 路径"
-                    )
-                })
+            Ok(java)
         })
     }
 }
@@ -507,17 +538,29 @@ mod tests {
             ("eight".to_string(), file_entry(&dir, "eight", 8)),
             ("seventeen".to_string(), file_entry(&dir, "seventeen", 17)),
         ]);
-        // provider 只找现有 Java；自动下载由安装流程的 java_for_or_install 负责。
-        let provider = InstallJavaProvider::new(JavaChoice::Auto, configs);
+        // resolver 只找现有 Java；自动下载由安装流程的 java_for_or_install 负责。
+        let resolver = InstallJavaResolver::new(JavaChoice::Auto, configs);
 
         assert_eq!(
-            JavaProvider::java_for(&provider, 17).await.unwrap(),
+            JavaResolver::resolve(&resolver, 17).await.unwrap().path,
             dir.join("seventeen")
         );
         assert_eq!(
-            JavaProvider::java_for(&provider, 8).await.unwrap(),
+            JavaResolver::resolve(&resolver, 8).await.unwrap().path,
             dir.join("eight")
         );
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_java_auto_selects_only_an_exact_major() {
+        let dir = temp_java_dir("install-java-exact");
+        let configs = JavaConfigs::from([("eight".to_string(), file_entry(&dir, "eight", 8))]);
+        let resolver = InstallJavaResolver::new(JavaChoice::Auto, configs);
+
+        // 自动选择要求精确大版本；不匹配时交给 java_for_or_install 下载 JRE。
+        assert!(JavaResolver::resolve(&resolver, 17).await.is_err());
 
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -529,11 +572,11 @@ mod tests {
             ("eight".to_string(), file_entry(&dir, "eight", 8)),
             ("seventeen".to_string(), file_entry(&dir, "seventeen", 17)),
         ]);
-        let provider = InstallJavaProvider::new(JavaChoice::Named("eight".into()), configs);
+        let resolver = InstallJavaResolver::new(JavaChoice::Named("eight".into()), configs);
 
         // 显式指定就不按版本要求改选，即使 8 低于要求。
         assert_eq!(
-            JavaProvider::java_for(&provider, 17).await.unwrap(),
+            JavaResolver::resolve(&resolver, 17).await.unwrap().path,
             dir.join("eight")
         );
 

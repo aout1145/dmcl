@@ -55,6 +55,7 @@ async fn write_fabric_version_json(
     loader_version: &str,
 ) -> Result<()> {
     let fabric_json = options
+        .game
         .source
         .fetch_fabric_profile(mc_version, loader_version)
         .await?;

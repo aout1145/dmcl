@@ -13,7 +13,7 @@ pub(crate) use page::{GameOptionsInit, GameOptionsMsg, GameOptionsPage};
 
 use std::collections::BTreeSet;
 
-use dmcl_launch::JavaDetails;
+use dmcl_java::JavaDetails;
 
 use crate::config::{AccountConfig, JavaChoice, JavaConfig, LaunchConfig};
 use crate::gui::gtk4::pages::settings::common::{details_arch_text, details_title, java_summary};
@@ -214,7 +214,7 @@ pub(crate) fn java_label(entry: &JavaEntry) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use dmcl_launch::{JavaDetails, JavaOption};
+    use dmcl_java::{JavaDetails, JavaOption};
     use dmcl_mcmeta::os::Arch;
 
     use super::*;

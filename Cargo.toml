@@ -16,7 +16,9 @@ members = [
     "crates/dmcl-task",
     "crates/dmcl-mcmeta",
     "crates/dmcl-download",
+    "crates/dmcl-game",
     "crates/dmcl-install",
+    "crates/dmcl-java",
     "crates/dmcl-launch",
 ]
 
@@ -32,7 +34,9 @@ authors = ["a_out_"]
 dmcl-task = { path = "crates/dmcl-task", version = "0.0.1" }
 dmcl-mcmeta = { path = "crates/dmcl-mcmeta", version = "0.0.1" }
 dmcl-download = { path = "crates/dmcl-download", version = "0.0.1" }
+dmcl-game = { path = "crates/dmcl-game", version = "0.0.1" }
 dmcl-install = { path = "crates/dmcl-install", version = "0.0.1" }
+dmcl-java = { path = "crates/dmcl-java", version = "0.0.1" }
 dmcl-launch = { path = "crates/dmcl-launch", version = "0.0.1" }
 
 # external

@@ -11,10 +11,11 @@ authors.workspace = true
 dmcl-task.workspace = true
 dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
+dmcl-game.workspace = true
+dmcl-java.workspace = true
 
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zip.workspace = true
-lzma-rs.workspace = true
 anyhow.workspace = true

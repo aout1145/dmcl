@@ -380,15 +380,17 @@ impl HomePage {
         name: &str,
         launch: &LaunchConfig,
     ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
-        let java = Arc::new(java::GuiJavaSelector {
+        let version = dmcl_game::VersionRef::new(self.root_path.clone(), name);
+        let java = Arc::new(java::GuiJavaResolver {
             choice: launch.java.clone(),
             config: self.config.clone(),
         });
         let config = self.config.read();
-        let option = config.launch_option(launch, name, &self.root_path, java)?;
-        let install =
-            std::sync::Arc::new(config.install_options(config.download_source(), &self.root_path)?);
-        Ok(dmcl_launch::launch_chain(option, install))
+        let hook = Arc::new(java::GuiJavaInstalledHook::new(self.config.clone()));
+        let option = config.launch_option(launch, version, java, Some(hook))?;
+        let game = Arc::new(config.game_files_options(config.download_source()));
+        let jre = config.launch_jre_auto_install(launch);
+        Ok(dmcl_launch::launch_chain(option, game, jre))
     }
 
     /// 读取实例配置；有警告先弹确认框，否则直接开始。

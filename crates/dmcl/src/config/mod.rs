@@ -49,18 +49,22 @@ pub use account::AccountConfig;
 pub(crate) use account::{unique_account_name, KeyringTokenStore};
 pub use download::DownloadConfig;
 pub use instance::{instance_config_path, read_instance_category, write_instance_category};
-pub(crate) use java::ensure_java_path;
+pub(crate) use java::resolve_from_config;
 pub use java::{
     configs_from_details, merge_javas, same_java_path, unique_java_name, JavaChoice, JavaConfig,
     JavaConfigs,
 };
+#[cfg(feature = "gtk4")]
+pub(crate) use java::{configured_java, scan_configs};
 pub use launch::{LaunchConfig, LoadedInstanceConfig};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use dmcl_game::GameFilesOptions;
 use dmcl_install::InstallOptions;
+use dmcl_java::JreAutoInstall;
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::source::DownloadSource;
 use indexmap::IndexMap;
@@ -372,26 +376,45 @@ impl Config {
         self.save_to(path).await
     }
 
+    /// 配置 + 下载源 → 文件物化选项。
+    pub fn game_files_options(&self, source: DownloadSource) -> GameFilesOptions {
+        GameFilesOptions {
+            source,
+            download: self.download_options(),
+            skip_music: self.download.skip_music,
+        }
+    }
+
+    /// 安装流程的 JRE 安装位置：官方 runtime 目录，取不到时回退到 `<root>/runtime`。
+    pub fn install_jre_auto_install(&self, root: &Path) -> JreAutoInstall {
+        let runtime_root =
+            dmcl_java::official_runtime_root().unwrap_or_else(|| root.join("runtime"));
+        JreAutoInstall::new(runtime_root)
+    }
+
+    /// 启动流程的 JRE 安装位置：只有自动选择 Java 时才允许自动下载。
+    pub fn launch_jre_auto_install(&self, launch: &LaunchConfig) -> Option<JreAutoInstall> {
+        if launch.java.is_auto() {
+            dmcl_java::official_runtime_root().map(JreAutoInstall::new)
+        } else {
+            None
+        }
+    }
+
     /// 配置 + 下载源 → [`InstallOptions`]。
     ///
-    /// 安装器 processor 用的 Java 由安装流程自己的 `JavaProvider` 按 `download.java` 选择，
-    /// 与 `launch.java` 无关；`autoselect` 找不到匹配版本时由安装流程下载到官方 runtime
-    /// 目录，下载进度进入安装任务。
+    /// 安装器 processor 用的 Java 由 `download.java` 选择，与 `launch.java` 无关；
+    /// 找不到匹配 Java 时总是尝试下载 JRE。
     pub fn install_options(&self, source: DownloadSource, root: &Path) -> Result<InstallOptions> {
-        let mut options = InstallOptions::new(root.to_path_buf(), source)
-            .with_download(self.download_options())
-            .with_skip_music(self.download.skip_music)
-            .with_java(Arc::new(java::InstallJavaProvider::new(
+        Ok(InstallOptions::new(
+            root.to_path_buf(),
+            self.game_files_options(source),
+            Arc::new(java::InstallJavaResolver::new(
                 self.download.java.clone(),
                 self.javas.clone(),
-            )));
-        if self.download.java.is_auto() {
-            if let Some(runtime_root) = dmcl_launch::official_runtime_root() {
-                options =
-                    options.with_jre_auto_install(dmcl_install::JreAutoInstall::new(runtime_root));
-            }
-        }
-        Ok(options)
+            )),
+            self.install_jre_auto_install(root),
+        ))
     }
 }
 
@@ -836,8 +859,8 @@ mod tests {
             .install_options(config.download_source(), &root)
             .unwrap();
         assert_eq!(install.root_path, root);
-        assert!(install.skip_music);
-        assert_eq!(install.download.max_connections, 8);
+        assert!(install.game.skip_music);
+        assert_eq!(install.game.download.max_connections, 8);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use dmcl_launch::JavaDetails;
+use dmcl_java::JavaDetails;
 use dmcl_mcmeta::layout::absolute;
 
 /// 按绝对路径缓存的 Java 探测结果。

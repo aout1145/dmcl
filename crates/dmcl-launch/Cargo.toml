@@ -10,8 +10,8 @@ authors.workspace = true
 [dependencies]
 dmcl-task.workspace = true
 dmcl-mcmeta.workspace = true
-dmcl-download.workspace = true
-dmcl-install.workspace = true
+dmcl-game.workspace = true
+dmcl-java.workspace = true
 
 tokio.workspace = true
 serde.workspace = true
@@ -19,7 +19,6 @@ serde_json.workspace = true
 reqwest = { workspace = true, features = ["form", "json"] }
 md-5.workspace = true
 uuid.workspace = true
-walkdir.workspace = true
 version-compare.workspace = true
 sysinfo.workspace = true
 anyhow.workspace = true

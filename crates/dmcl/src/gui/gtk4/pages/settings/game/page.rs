@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use dmcl_launch::{auto_max_memory, JavaDetails};
+use dmcl_java::JavaDetails;
+use dmcl_launch::auto_max_memory;
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::Arch;
 use relm4::adw;

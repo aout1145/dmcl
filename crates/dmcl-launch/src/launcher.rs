@@ -3,7 +3,7 @@
 //! 真正起进程由 [`crate::LaunchTask`] 负责；这个模块只负责拼参数。
 //! 两条设计要点：
 //!
-//! * **这里不解压 natives** —— 那是"把文件铺好"，由 [`dmcl_install`] 负责，
+//! * **这里不解压 natives** —— 那是"把文件铺好"，由 [`dmcl_game`] 负责，
 //!   这里只引用 natives 目录（[`dmcl_mcmeta::layout::natives_dir`]）；启动逻辑因此与安装解耦。
 //! * **java 的选择来自 [`LaunchOption`]**。
 
@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use dmcl_mcmeta::layout::{natives_dir, read_version_json_safe, version_dir};
+use dmcl_game::{resolve_version, VersionRef};
+use dmcl_java::JavaOption;
+use dmcl_mcmeta::layout::natives_dir;
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
 use dmcl_mcmeta::os::{classpath_separator, Os};
 use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
@@ -19,7 +21,6 @@ use dmcl_task::TaskContext;
 use version_compare::{compare_to, Cmp};
 
 use crate::account::Account;
-use crate::java::JavaOption;
 use crate::memory::resolve_memory;
 use crate::monitor::GameMonitor;
 use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
@@ -41,13 +42,13 @@ pub struct GameLauncher {
 impl GameLauncher {
     /// `this(LaunchOption, Account)`。
     pub async fn new(option: LaunchOption, account: Account) -> Result<Self> {
-        let version_path = version_dir(&option.root_path, &option.version_name);
+        let version_path = option.version.dir();
         let game_path = if option.version_isolation {
             version_path.clone()
         } else {
-            option.root_path.clone()
+            option.version.root.clone()
         };
-        let json = read_version_json_safe(&option.root_path, &option.version_name).await?;
+        let json = resolve_version(&option.version).await?.json;
         Ok(Self {
             option,
             account,
@@ -66,7 +67,7 @@ impl GameLauncher {
         if self.java.is_none() {
             return Err(anyhow!("还没有选择 java"));
         }
-        let libraries_dir = self.option.root_path.join("libraries");
+        let libraries_dir = self.option.version.root.join("libraries");
 
         // 名字 -> (版本, 绝对路径)
         let mut libs: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
@@ -129,14 +130,13 @@ impl GameLauncher {
         }
         if let Some(oriver) = self.json.inherits_from.as_deref() {
             // 若基于另一个版本，把父版本的 jar 也加进 classpath
-            let parent_jar =
-                version_dir(&self.option.root_path, oriver).join(format!("{oriver}.jar"));
+            let parent_jar = VersionRef::new(self.option.version.root.clone(), oriver)
+                .dir()
+                .join(format!("{oriver}.jar"));
             result.push_str(&parent_jar.to_string_lossy());
             result.push_str("${classpath_separator}");
         }
-        let self_jar = self
-            .version_path
-            .join(format!("{}.jar", self.option.version_name));
+        let self_jar = self.option.version.jar_path();
         if tokio::fs::metadata(&self_jar).await.is_ok() {
             result.push_str(&self_jar.to_string_lossy());
             result.push_str("${classpath_separator}");
@@ -191,13 +191,13 @@ impl GameLauncher {
             None => {
                 self.option
                     .java
-                    .select_java(self.json.required_java_major())
+                    .resolve(self.json.required_java_major())
                     .await?
             }
         };
 
         // natives 目录按运行平台的 os 与所选 java 的 arch 区分
-        let natives_directory = natives_dir(&self.option.version_name, Os::current(), java.arch)
+        let natives_directory = natives_dir(&self.option.version.name, Os::current(), java.arch)
             .to_string_lossy()
             .into_owned();
 
@@ -262,25 +262,28 @@ impl GameLauncher {
         let classpath = self.get_libraries(ctx).await?;
         let library_directory = self
             .option
-            .root_path
+            .version
+            .root
             .join("libraries")
             .to_string_lossy()
             .into_owned();
         let assets_root = self
             .option
-            .root_path
+            .version
+            .root
             .join("assets")
             .to_string_lossy()
             .into_owned();
         let asset_index_id = self.json.asset_index_id().to_string();
         let game_assets = if asset_index_id == "legacy" {
             self.option
-                .root_path
+                .version
+                .root
                 .join("assets")
                 .join("virtual")
                 .join("legacy")
         } else {
-            self.option.root_path.join("assets")
+            self.option.version.root.join("assets")
         }
         .to_string_lossy()
         .into_owned();
@@ -445,8 +448,8 @@ mod tests {
             major: 17,
             arch: Arch::X86_64,
         };
-        let option = LaunchOption::new(source, &root, "1.0", Arc::new(java));
-        let version_path = version_dir(&root, "1.0");
+        let option = LaunchOption::new(source, VersionRef::new(&root, "1.0"), Arc::new(java), None);
+        let version_path = option.version.dir();
         let game_path = if option.version_isolation {
             version_path.clone()
         } else {
@@ -590,13 +593,13 @@ mod tests {
         let account = source.login().await.unwrap();
         let mut option = LaunchOption::new(
             source,
-            &root,
-            "1.0",
+            VersionRef::new(&root, "1.0"),
             Arc::new(JavaOption {
                 path: PathBuf::from("/usr/bin/java"),
                 major: 17,
                 arch: Arch::X86_64,
             }),
+            None,
         );
         option.version_isolation = false;
         let mut launcher = GameLauncher::new(option, account).await.unwrap();

@@ -88,7 +88,8 @@ pub(crate) async fn run(args: InstallArgs, config: &Config, root_path: &Path) ->
     let mut printer = ProgressPrinter::new();
     let result = install_task(options, spec)
         .run_with((), |event| handle_event(&mut printer, event))
-        .await;
+        .await
+        .map(|_| ());
     printer.finish();
     result
 }

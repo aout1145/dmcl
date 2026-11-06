@@ -12,17 +12,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use dmcl_download::{file_ok, Checksum};
+use dmcl_game::{base_name, download_planned, plan_libraries, PlannedFile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::os::classpath_separator;
 use dmcl_mcmeta::vanilla::{Library, VersionJson};
 use dmcl_task::{CommandTask, Task, TaskContext};
 
-use crate::files::download_planned;
+use crate::archive::{main_class_of, open_archive, read_entry};
 use crate::io::write_safe;
 use crate::options::InstallOptions;
-use crate::plan::{base_name, plan_libraries, PlannedFile};
-use crate::zip::{main_class_of, open_archive, zip_read_entry};
 
 /// 安装 Forge / NeoForge 时在步骤之间传递的中间值。
 #[derive(Clone)]
@@ -57,7 +56,7 @@ pub(crate) async fn download_installer(
     ctx: &TaskContext,
 ) -> Result<()> {
     download_planned(
-        options,
+        &options.game,
         "安装器",
         vec![PlannedFile {
             url: installer.url.clone(),
@@ -156,7 +155,7 @@ pub(crate) async fn run_installer_processors(
     // client.lzma 先解到临时目录（processor 的工作目录；下面解析参数要用到它的路径）
     let scratch = std::env::temp_dir().join(format!("dmcl-installer-{loader_label}"));
     let lzma_path = scratch.join("client.lzma");
-    write_safe(&lzma_path, &zip_read_entry(zip, "data/client.lzma")?).await?;
+    write_safe(&lzma_path, &read_entry(zip, "data/client.lzma")?).await?;
 
     // 解析 `{占位符}`、lzma 路径、`[maven:坐标]` 以及外面的单引号
     let get_arg = |arg: &str| -> String {
@@ -211,7 +210,7 @@ pub(crate) async fn run_installer_processors(
             name: base_name(&path),
         });
     }
-    planned.extend(plan_libraries(&options.plan(), &mc_json));
+    planned.extend(plan_libraries(&options.version(version_name), &mc_json));
     let mut mojmaps: Vec<bool> = vec![false; processors.len()];
     for index in 0..processors.len() {
         if let Some(file) = mojmaps_download(&mc_json, &resolved[index]) {
@@ -219,7 +218,7 @@ pub(crate) async fn run_installer_processors(
             mojmaps[index] = true;
         }
     }
-    download_planned(options, "安装器依赖库", planned, ctx).await?;
+    download_planned(&options.game, "安装器依赖库", planned, ctx).await?;
 
     for (index, spec) in processors.iter().enumerate() {
         let jar_coord = spec.jar;

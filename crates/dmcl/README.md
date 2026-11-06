@@ -6,8 +6,8 @@
 
 它同时是库（`dmcl`）与可执行文件（`bin/dmcl`），方便将来复用到 GUI / 守护进程。
 在 workspace 内依赖全部业务 crate（`dmcl-task` / `dmcl-mcmeta` / `dmcl-download` /
-`dmcl-install` / `dmcl-launch`）；`relm4` / `sysinfo` / `notify` 只在 `gtk4` feature 下
-编译，`keyring` 只在应用层（`config/account.rs`）使用。
+`dmcl-game` / `dmcl-java` / `dmcl-install` / `dmcl-launch`）；`relm4` / `sysinfo` / `notify`
+只在 `gtk4` feature 下编译，`keyring` 只在应用层（`config/account.rs`）使用。
 
 ## 模块布局
 
@@ -35,8 +35,10 @@ gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 REA
 | `dmcl-task`     | 无（纯任务抽象）                                                                      |
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
 | `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
-| `dmcl-install`  | `InstallOptions`（根目录、下载源、下载策略、是否跳过音乐、java 提供者）             |
-| `dmcl-launch`   | `LaunchOption`（账户登录源、根目录、版本名、窗口 / 内存（可自动）、版本隔离、`JavaSelector`）   |
+| `dmcl-game`     | `GameFilesOptions`（下载源、下载策略、是否跳过音乐）、`VersionRef`                    |
+| `dmcl-java`     | `JavaResolver`（选 Java）、`JavaRuntimeOptions` + `JreInstallRequest`（装 JRE）       |
+| `dmcl-install`  | `InstallOptions`（根目录、游戏文件选项、Java 解析器、JRE 安装位置）                   |
+| `dmcl-launch`   | `LaunchOption`（账户登录源、`VersionRef`、窗口 / 内存（可自动）、版本隔离、`JavaResolver`） |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 配置的**键、默认值与用户可见含义**见 `config/` 下各段的定义与文档注释；这里只讲应用层的组织方式。
@@ -88,15 +90,15 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`），包含 `launch`
 同样的缓存。之后启动只读这份缓存，不再探测。
 
 CLI 的启动只认配置：`javas` 为空或路径全部失效时直接报错并提示先执行
-`dmcl search-java`，不会扫描本机、也不会下载。GUI 的启动选择器
+`dmcl search-java`，不会扫描本机、也不会下载。GUI 的 `GuiJavaResolver`
 （`pages/home/java.rs`）在配置里没有可用条目或没有匹配版本时，会先扫描本机，把结果合并进
-`javas`；仍然没有匹配版本时下载 Mojang 的 JRE 到官方启动器的 runtime 目录，并把新 Java
-写回 `javas`。写配置失败静默忽略，不阻断本次启动。
+`javas`；仍然没有匹配版本时下载 Mojang 的 JRE 到官方启动器的 runtime 目录，并通过
+`GuiJavaInstalledHook` 把新 Java 写回 `javas`。写配置失败静默忽略，不阻断本次启动。
 
 安装流程的 Java 与启动分开：`download.java` 决定安装器 processor 用哪个 Java（默认
 `autoselect`），与 `launch.java` 无关。`autoselect` 先从 `javas` 里可用的条目自动选择，
-没有精确匹配时扫描本机，仍然没有就由安装流程下载到官方 runtime 目录（下载进度显示在
-安装任务里）；显式指定时只使用该条目。CLI 与 GUI 的安装都走这份逻辑。
+并要求精确匹配版本要求；没有匹配时扫描本机，仍然没有就由安装流程下载到官方 runtime 目录
+（下载进度显示在安装任务里）；显式指定时只使用该条目。CLI 与 GUI 的安装都走这份逻辑。
 
 ### CLI
 
