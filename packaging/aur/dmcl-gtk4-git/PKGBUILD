@@ -1,0 +1,56 @@
+# Maintainer: a_out_ <https://github.com/aout1145>
+
+pkgname=dmcl-gtk4-git
+pkgver=0.0.1.r159.g1acedbc
+pkgrel=1
+pkgdesc='Unofficial Minecraft launcher with a GTK4/libadwaita interface'
+arch=('x86_64' 'aarch64')
+url='https://github.com/aout1145/dmcl'
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libadwaita')
+makedepends=('cargo' 'git')
+optdepends=('org.freedesktop.secrets: Save Microsoft account credentials')
+provides=("dmcl-gtk4=$pkgver")
+conflicts=('dmcl-gtk4')
+# aws-lc-sys 的 C 代码与 makepkg 默认的 -flto 不兼容（rust-lld 读不了 GCC 的
+# slim LTO 目标文件），会链接失败；只关掉 C/C++ 侧的 LTO，Rust 自身仍按
+# release profile 做 LTO。
+options=('!lto')
+source=("$pkgname::git+$url.git#branch=main"
+        'io.github.aout1145.DMCL.desktop')
+sha256sums=('SKIP'
+            'e0bce11cda6b77f6406ce7d063bd15591085e0ca105ccb6f4efd4985bb281053')
+
+# 微软登录的公共客户端 ID，编译期嵌入二进制。不设置也能编译，只是微软登录不可用。
+_client_id='aff5936d-0fdf-42de-bfd3-c1303fc0ff15'
+export DMCL_MICROSOFT_CLIENT_ID="$_client_id"
+
+pkgver() {
+  cd "$pkgname"
+  local ver
+  ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+  printf '%s.r%s.g%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target host-tuple
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --features gtk4
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 target/release/dmcl "$pkgdir/usr/bin/dmcl"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/io.github.aout1145.DMCL.desktop" \
+    "$pkgdir/usr/share/applications/io.github.aout1145.DMCL.desktop"
+}

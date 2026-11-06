@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=DMCL
+Comment=Unofficial Minecraft launcher
+Exec=dmcl
+Type=Application
+Categories=Game;
+Keywords=Minecraft;Launcher;
+Terminal=false
+StartupNotify=true

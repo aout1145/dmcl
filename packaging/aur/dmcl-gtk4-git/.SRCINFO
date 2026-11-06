@@ -1,0 +1,22 @@
+pkgbase = dmcl-gtk4-git
+	pkgdesc = Unofficial Minecraft launcher with a GTK4/libadwaita interface
+	pkgver = 0.0.1.r159.g1acedbc
+	pkgrel = 1
+	url = https://github.com/aout1145/dmcl
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = cargo
+	makedepends = git
+	depends = gtk4
+	depends = libadwaita
+	optdepends = org.freedesktop.secrets: Save Microsoft account credentials
+	provides = dmcl-gtk4=0.0.1.r159.g1acedbc
+	conflicts = dmcl-gtk4
+	options = !lto
+	source = dmcl-gtk4-git::git+https://github.com/aout1145/dmcl.git#branch=main
+	source = io.github.aout1145.DMCL.desktop
+	sha256sums = SKIP
+	sha256sums = e0bce11cda6b77f6406ce7d063bd15591085e0ca105ccb6f4efd4985bb281053
+
+pkgname = dmcl-gtk4-git
