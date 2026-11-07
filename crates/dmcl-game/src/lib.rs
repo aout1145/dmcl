@@ -5,7 +5,8 @@
 //! * 一个已安装版本在磁盘上是什么（[`VersionRef`] / [`ResolvedVersion`]）；
 //! * 这个版本应该有哪些文件（[`plan_files`]，纯函数）；
 //! * 本地缺了什么 / 坏了什么（[`check_integrity`]）；
-//! * 怎么把缺的文件补齐（[`ensure_files`] / [`ensure_client_jar`] / [`ensure_asset_index`]）；
+//! * 怎么把缺的文件补齐（[`ensure_files`] / [`ensure_client_jar`] / [`ensure_libraries`] /
+//!   [`ensure_assets`] / [`ensure_asset_index`]）；
 //! * natives 怎么按 os / arch 下载并解压（[`ensure_natives`]）。
 //!
 //! 它不创建版本目录、不写原版元数据、不安装加载器或 JRE，也不认识账户与启动参数。
@@ -20,7 +21,9 @@ pub mod options;
 pub mod plan;
 pub mod version;
 
-pub use ensure::{ensure_asset_index, ensure_client_jar, ensure_files};
+pub use ensure::{
+    ensure_asset_index, ensure_assets, ensure_client_jar, ensure_files, ensure_libraries,
+};
 pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
 pub use natives::ensure_natives;
 pub use options::{download_planned, GameFilesOptions};

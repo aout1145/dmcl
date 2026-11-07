@@ -7,112 +7,237 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use dmcl_download::DownloadContext;
-use dmcl_game::base_name;
+use dmcl_game::{base_name, ResolvedVersion, VersionRef};
 use dmcl_mcmeta::forge::{forge_installer_url, InstallProfile};
-use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
+use dmcl_mcmeta::layout::{libraries_dir, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::vanilla::VersionJson;
-use dmcl_task::{task_fn, TaskContext};
+use dmcl_task::{task_fn, Handle, StepId, TaskContext, TaskGraphBuilder};
 
 use crate::archive::{has_entry, open_archive, read_entry};
 use crate::io::{write_json_safe, write_safe};
 use crate::loader::common::finish_version_json;
 use crate::loader::xforge::{
-    download_installer, extract_maven_entries, installer_temp_path, run_installer_processors,
-    select_installer_java, Installer, InstallerRun, ProcessorSpec, ProfileInputs,
+    download_installer, download_installer_dependencies, extract_maven_entries,
+    installer_temp_path, run_installer_processors, Installer, InstallerDeps, InstallerPlan,
+    ProcessorPlan,
 };
 use crate::options::InstallOptions;
 
-/// 顺序跑各阶段（薄封装）。
-pub async fn install_forge(
-    options: &InstallOptions,
-    downloads: &Arc<DownloadContext>,
-    version_name: &str,
-    forge_version: &str,
-    ctx: &TaskContext,
-) -> Result<()> {
-    let installer = forge_installer(forge_version);
-    download_installer(options, downloads, &installer, ctx).await?;
-    extract_forge_libraries(options, forge_version, &installer.path, ctx).await?;
-    if forge_installer_needs_java(&installer.path).await? {
-        install_with_java(options, downloads, version_name, &installer, ctx).await?;
-    }
-    write_installer_version_json(options, version_name, &installer.path).await
-}
+/// 把 Forge 安装拆成「下载安装器 → 解析 → 解出库 / 下载依赖 → 跑 processor → 合并 JSON」。
+///
+/// 安装器只依赖版本目录已经创建；真正跑 processor 时再串上客户端 jar 与上一步的版本 JSON。
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn add_forge_install(
+    builder: &mut TaskGraphBuilder,
+    step: StepId,
+    download_step: StepId,
+    options: Arc<InstallOptions>,
+    downloads: Arc<DownloadContext>,
+    created: Handle<VersionRef>,
+    client_jar: Handle<()>,
+    previous: Handle<ResolvedVersion>,
+    version_name: String,
+    forge_version: String,
+) -> Handle<ResolvedVersion> {
+    let installer = forge_installer(&forge_version);
 
-/// 「选择 Java → 运行安装器」作为两个动态节点；需要返回值时才 `wait`。
-async fn install_with_java(
-    options: &InstallOptions,
-    downloads: &Arc<DownloadContext>,
-    version_name: &str,
-    installer: &Installer,
-    ctx: &TaskContext,
-) -> Result<()> {
-    let step = ctx.step();
-
-    let java_options = options.clone();
-    let java_downloads = downloads.clone();
-    let java_version_name = version_name.to_string();
-    let java_handle = ctx.add_task(
+    let downloaded = builder.add(
         step,
-        "选择 Java",
-        (),
-        task_fn(move |_: (), ctx| {
-            let options = java_options.clone();
-            let downloads = java_downloads.clone();
-            let version_name = java_version_name.clone();
-            async move { select_installer_java(&options, &version_name, &downloads, &ctx).await }
-        }),
-    )?;
-
-    let java = java_handle.wait().await?;
-    let run_options = options.clone();
-    let run_downloads = downloads.clone();
-    let run_version_name = version_name.to_string();
-    let run_installer = installer.clone();
-    let run_handle = ctx.add_task(
-        step,
-        "运行安装器",
-        (),
-        task_fn(move |_: (), ctx| {
-            let options = run_options.clone();
-            let downloads = run_downloads.clone();
-            let version_name = run_version_name.clone();
-            let installer = run_installer.clone();
-            let java = java.clone();
-            async move {
-                run_forge_installer(
-                    &options,
-                    &downloads,
-                    &version_name,
-                    &installer.version,
-                    &installer.path,
-                    &java,
-                    &ctx,
-                )
-                .await
+        "下载安装器",
+        created,
+        task_fn({
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let installer = installer.clone();
+            move |_: Arc<VersionRef>, ctx: TaskContext| {
+                let options = options.clone();
+                let downloads = downloads.clone();
+                let installer = installer.clone();
+                async move {
+                    download_installer(&options, &downloads, &installer, &ctx).await?;
+                    Ok(installer)
+                }
             }
         }),
-    )?;
-    run_handle.wait().await?;
-    Ok(())
-}
+    );
 
-/// 老式 Forge 安装器没有 `data/client.lzma`，不需要跑 processor，也就不需要 Java。
-async fn forge_installer_needs_java(installer: &Path) -> Result<bool> {
-    let bytes = tokio::fs::read(installer).await?;
-    let mut zip = open_archive(bytes)?;
-    Ok(has_entry(&mut zip, "data/client.lzma"))
+    let plan = builder.add(
+        step,
+        "解析安装器",
+        downloaded,
+        task_fn({
+            let forge_version = forge_version.clone();
+            move |installer: Arc<Installer>, ctx: TaskContext| {
+                let forge_version = forge_version.clone();
+                async move { parse_installer(&installer, &forge_version, &ctx).await }
+            }
+        }),
+    );
+
+    let extracted = builder.add(
+        step,
+        "解出安装器库",
+        plan.clone(),
+        task_fn({
+            let options = options.clone();
+            let forge_version = forge_version.clone();
+            move |plan: Arc<InstallerPlan>, ctx: TaskContext| {
+                let options = options.clone();
+                let forge_version = forge_version.clone();
+                async move {
+                    extract_forge_libraries(&options, &forge_version, &plan.installer.path, &ctx)
+                        .await
+                }
+            }
+        }),
+    );
+
+    let deps = builder.add(
+        step,
+        "下载安装器依赖",
+        (plan.clone(), previous.clone()),
+        task_fn({
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let version_name = version_name.clone();
+            let forge_version = forge_version.clone();
+            move |(plan, previous): (Arc<InstallerPlan>, Arc<ResolvedVersion>), ctx: TaskContext| {
+                let options = options.clone();
+                let downloads = downloads.clone();
+                let version_name = version_name.clone();
+                let forge_version = forge_version.clone();
+                async move {
+                    download_installer_dependencies(
+                        &options,
+                        &downloads,
+                        &version_name,
+                        &forge_version,
+                        download_step,
+                        &previous,
+                        &plan,
+                        &ctx,
+                    )
+                    .await
+                }
+            }
+        }),
+    );
+
+    let processed = builder.add(
+        step,
+        "运行安装器",
+        (plan.clone(), deps, extracted, client_jar),
+        task_fn({
+            let options = options.clone();
+            let version_name = version_name.clone();
+            let forge_version = forge_version.clone();
+            move |(plan, deps, _extracted, _client_jar): (
+                Arc<InstallerPlan>,
+                Arc<InstallerDeps>,
+                Arc<()>,
+                Arc<()>,
+            ),
+                  ctx: TaskContext| {
+                let options = options.clone();
+                let version_name = version_name.clone();
+                let forge_version = forge_version.clone();
+                async move {
+                    run_installer_processors(
+                        &options,
+                        &version_name,
+                        &forge_version,
+                        &plan,
+                        &deps,
+                        &ctx,
+                    )
+                    .await
+                }
+            }
+        }),
+    );
+
+    builder.add(
+        step,
+        "合并版本 JSON",
+        (previous, plan, processed),
+        task_fn({
+            let version_name = version_name.clone();
+            move |(previous, plan, _): (
+                Arc<ResolvedVersion>,
+                Arc<InstallerPlan>,
+                Arc<()>,
+            ),
+                  ctx: TaskContext| {
+                let version_name = version_name.clone();
+                async move {
+                    merge_installer_version_json(&previous, &plan, &version_name, &ctx).await
+                }
+            }
+        }),
+    )
 }
 
 fn forge_installer(version: &str) -> Installer {
     let file_name = format!("forge-{version}-installer.jar");
     Installer {
-        version: version.to_string(),
         url: forge_installer_url(version),
         path: installer_temp_path(version, &file_name),
         file_name,
     }
+}
+
+/// 解析安装器里的档案与自带版本 JSON，产出后续阶段使用的自有数据。
+async fn parse_installer(
+    installer: &Installer,
+    forge_version: &str,
+    ctx: &TaskContext,
+) -> Result<InstallerPlan> {
+    let bytes = tokio::fs::read(&installer.path).await?;
+    let mut zip = open_archive(bytes)?;
+
+    // 老式安装器没有 `data/client.lzma`，不需要跑 processor，也就不需要解析档案。
+    let client_lzma = if has_entry(&mut zip, "data/client.lzma") {
+        Some(read_entry(&mut zip, "data/client.lzma")?)
+    } else {
+        None
+    };
+    let (libraries, data, processors) = if client_lzma.is_some() {
+        let profile = read_install_profile(&mut zip)?;
+        let data = profile
+            .data
+            .iter()
+            .filter_map(|(key, entry)| entry.client().map(|value| (key.clone(), value.to_string())))
+            .collect();
+        let processors = profile
+            .processors
+            .iter()
+            .filter(|step| step.is_client_side())
+            .map(|step| ProcessorPlan {
+                jar: step.jar.clone(),
+                classpath: step.classpath.clone(),
+                args: step.args.clone(),
+                outputs: step.outputs.clone(),
+            })
+            .collect();
+        (profile.libraries, data, processors)
+    } else {
+        (Vec::new(), BTreeMap::new(), Vec::new())
+    };
+    let installer_json = read_installer_version_json(&mut zip)?;
+    ctx.log(format!(
+        "Forge {forge_version}：{} 个 processor",
+        processors.len()
+    ));
+
+    Ok(InstallerPlan {
+        installer: installer.clone(),
+        installer_json,
+        libraries,
+        data,
+        processors,
+        client_lzma,
+    })
 }
 
 /// 解出安装器里 `maven/` 下的文件；老版把单个 jar 直接铺进 `libraries/`。
@@ -140,58 +265,6 @@ async fn extract_forge_libraries(
         ctx.log(format!("解出 {}", base_name(&target)));
     }
     Ok(())
-}
-
-/// 1.13+ 跑安装器 processor 生成 forge-client.jar。
-async fn run_forge_installer(
-    options: &InstallOptions,
-    downloads: &Arc<DownloadContext>,
-    version_name: &str,
-    forge_version: &str,
-    installer: &Path,
-    java: &Path,
-    ctx: &TaskContext,
-) -> Result<()> {
-    let bytes = tokio::fs::read(installer).await?;
-    let mut zip = open_archive(bytes)?;
-    if !has_entry(&mut zip, "data/client.lzma") {
-        return Ok(());
-    }
-    let profile = read_install_profile(&mut zip)?;
-    let data: BTreeMap<String, String> = profile
-        .data
-        .iter()
-        .filter_map(|(key, entry)| entry.client().map(|value| (key.clone(), value.to_string())))
-        .collect();
-    let processors: Vec<ProcessorSpec<'_>> = profile
-        .processors
-        .iter()
-        .filter(|step| step.is_client_side())
-        .map(|step| ProcessorSpec {
-            jar: &step.jar,
-            classpath: &step.classpath,
-            args: &step.args,
-            outputs: step.outputs.as_ref(),
-        })
-        .collect();
-    let inputs = ProfileInputs {
-        libraries: &profile.libraries,
-        data: &data,
-        processors: &processors,
-    };
-    run_installer_processors(
-        InstallerRun {
-            options,
-            downloads,
-            version_name,
-            loader_label: forge_version,
-            java,
-            ctx,
-        },
-        inputs,
-        &mut zip,
-    )
-    .await
 }
 
 fn read_install_profile(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Result<InstallProfile> {
@@ -228,23 +301,30 @@ fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Re
     Ok(json)
 }
 
-/// 把安装器自带的版本 JSON 合并进本地版本 JSON 并写盘。
-async fn write_installer_version_json(
-    options: &InstallOptions,
+/// 把安装器自带的版本 JSON 合并进上一步的版本描述并写盘。
+///
+/// 合并用的是内存里的 `previous`，不再从磁盘重读，避免与并发写盘互相干扰。
+async fn merge_installer_version_json(
+    previous: &ResolvedVersion,
+    plan: &InstallerPlan,
     version_name: &str,
-    installer: &Path,
-) -> Result<()> {
-    let path = version_json_path(&options.root_path, version_name);
-    let mut mc_json = read_version_json(&path).await?;
+    ctx: &TaskContext,
+) -> Result<ResolvedVersion> {
+    let mut json = previous.json.clone();
+    json.merge(&plan.installer_json)?;
+    json.extra.remove("_comment_");
+    finish_version_json(&mut json, version_name, true);
+    write_json_safe(
+        &version_json_path(&previous.reference.root, version_name),
+        &json,
+    )
+    .await?;
+    ctx.log(format!("已写入 {version_name}.json"));
 
-    let bytes = tokio::fs::read(installer).await?;
-    let mut zip = open_archive(bytes)?;
-    let installer_json = read_installer_version_json(&mut zip)?;
-    mc_json.merge(&installer_json)?;
-    mc_json.extra.remove("_comment_");
-    finish_version_json(&mut mc_json, version_name, true);
-
-    write_json_safe(&path, &mc_json).await
+    Ok(ResolvedVersion {
+        reference: previous.reference.clone(),
+        json,
+    })
 }
 
 #[cfg(test)]

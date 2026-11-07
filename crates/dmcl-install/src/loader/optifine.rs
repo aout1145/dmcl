@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_download::DownloadContext;
-use dmcl_game::{base_name, download_planned, PlannedFile};
-use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
+use dmcl_game::{base_name, download_planned, PlannedFile, ResolvedVersion};
+use dmcl_mcmeta::layout::{libraries_dir, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
 use dmcl_task::TaskContext;
@@ -24,7 +24,9 @@ const LAUNCHWRAPPER_LIBRARY: &str = "net.minecraft:launchwrapper";
 const TWEAK_CLASS: &str = "--tweakClass";
 
 /// 下载并安装 OptiFine。`has_forge` 决定是否沿用 Forge 提供的 launchwrapper。
+#[expect(clippy::too_many_arguments)]
 pub async fn install_optifine(
+    previous: &ResolvedVersion,
     options: &InstallOptions,
     downloads: &Arc<DownloadContext>,
     version_name: &str,
@@ -32,7 +34,7 @@ pub async fn install_optifine(
     optifine_version: &str,
     has_forge: bool,
     ctx: &TaskContext,
-) -> Result<()> {
+) -> Result<ResolvedVersion> {
     let listing = options
         .game
         .source
@@ -95,8 +97,7 @@ pub async fn install_optifine(
         Some(version)
     };
 
-    let json_path = version_json_path(&options.root_path, version_name);
-    let mut json = read_version_json(&json_path).await?;
+    let mut json = previous.json.clone();
     apply_optifine_version_json(
         &mut json,
         &library_version,
@@ -104,9 +105,16 @@ pub async fn install_optifine(
         has_forge,
     );
     finish_version_json(&mut json, version_name, true);
-    write_json_safe(&json_path, &json).await?;
+    write_json_safe(
+        &version_json_path(&previous.reference.root, version_name),
+        &json,
+    )
+    .await?;
     ctx.log("OptiFine 已写入版本元数据");
-    Ok(())
+    Ok(ResolvedVersion {
+        reference: previous.reference.clone(),
+        json,
+    })
 }
 
 /// 把 OptiFine 的库与 tweakClass 写进版本 JSON。

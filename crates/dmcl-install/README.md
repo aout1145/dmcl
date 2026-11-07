@@ -25,27 +25,37 @@ io.rs         安全写盘（先建父目录）
 
 ### 版本级原子安装
 
-`install_task` 的顺序是：占用 `versions/<version_name>` → 原版元数据 → 客户端 jar →
-各加载器 → 游戏文件。第一步目录已存在就直接报错（不会碰已有版本）；只有这一步成功后
-才在节点里用 `ctx.on_rollback` 登记删除动作，之后任何一步失败或被取消，都会删掉本次新建
-的版本目录，不让半装版本出现在版本列表里。共享的 `libraries/` / `assets/` 是内容校验过的
-缓存，不跟着回滚（下次安装会跳过已有文件）。
+`install_task` 先占用 `versions/<version_name>`；目录已存在就直接报错（不会碰已有版本）。
+只有这一步成功后才在节点里用 `ctx.on_rollback` 登记删除动作，之后任何一步失败或被取消，
+都会删掉本次新建的版本目录，不让半装版本出现在版本列表里。共享的 `libraries/` /
+`assets/` 是内容校验过的缓存，不跟着回滚（下次安装会跳过已有文件）。
 
-安装图的每个节点传递类型明确的中间值，而不是反复从磁盘猜状态：
+显示步骤按「用户的直觉」分三段，加载器各自再占一个 `安装 X`：
+
+```text
+获取版本元数据   创建版本目录、获取版本 json
+下载游戏文件     下载版本 jar、下载资源、下载依赖库（等加载器合并完版本 JSON）
+安装 X           下载安装器、解析安装器、解出安装器库、下载安装器依赖、运行安装器、合并版本 JSON
+```
+
+安装图的节点传递类型明确的中间值，而不是反复从磁盘猜状态：
 
 ```text
 创建版本目录          Task<(), VersionRef>
 获取并解析原版元数据   Task<Arc<VersionRef>, ResolvedVersion>
-确保客户端 jar        Task<Arc<ResolvedVersion>, ResolvedVersion>
+下载版本 jar / 资源   Task<Arc<ResolvedVersion>, ()>
 每个加载器            Task<Arc<ResolvedVersion>, ResolvedVersion>
-补齐游戏文件          Task<Arc<ResolvedVersion>, InstallOutcome>
+下载依赖库            Task<Arc<ResolvedVersion>, ResolvedVersion>
+游戏文件就绪          Task<(Arc<()>, Arc<ResolvedVersion>, Arc<()>), InstallOutcome>
 ```
 
-`InstallOutcome` 带最终版本引用。加载器节点读写磁盘上的版本 JSON，完成后重新
-`resolve_version` 拿到更新后的描述。
+版本 jar 与资源只依赖原版元数据，所以能最早开始；依赖库要等所有加载器把版本 JSON
+合并完，才能把 Forge / NeoForge 新增的库一起规划进去。加载器之间直接传递内存里的
+`ResolvedVersion`，合并节点写盘后把同一份结果交给下一步，避免从磁盘重读到写了一半的
+JSON。
 
-客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的 processor 要读它来生成
-patched client（`{MINECRAFT_JAR}`）。
+客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来生成
+patched client（`{MINECRAFT_JAR}`）；因此 processor 节点会额外依赖「下载版本 jar」。
 
 ### 规划、完整性与 natives 在 dmcl-game
 
@@ -64,10 +74,17 @@ patched client（`{MINECRAFT_JAR}`）。
 - **NeoForge** —— 只有现代式（spec 1）；**别给它加 Forge 的经典式**（`install` /
   `versionInfo`）分支。
 
-Forge / NeoForge 的「执行安装器」步骤会在运行时检查安装器内容，按需用
-`ctx.add_task` 动态创建「选择 Java」「运行安装器」两个节点：需要 processor 时才出现这两步；
-经典式 Forge 安装器没有 processor，就不创建。JRE 下载进度因此只在实际需要 Java 时进入
-「选择 Java」节点。
+Forge / NeoForge 的安装拆成「下载安装器 → 解析安装器 → 解出安装器库 / 下载安装器依赖 →
+运行安装器 → 合并版本 JSON」几个节点：
+
+- 「下载安装器」只依赖版本目录，可以和元数据 / 资源下载并行；
+- processor 需要的库、版本库与可被下载顶替的 `DOWNLOAD_MOJMAPS` 在「下载安装器依赖」里
+  统一提前下好，「运行安装器」只跑 Java，不再自己下载；
+- 经典式 Forge 安装器没有 processor，后几步会跳过下载与执行，直接合并版本 JSON；
+- 确实需要跑 processor 时，「下载安装器依赖」在 `下载游戏文件` Step 下动态创建
+  `选择 Java` 节点，JRE 下载也归在这个 Step；
+- 其中 `DOWNLOAD_MOJMAPS` 只是把官方映射文件下载到指定位置，可以直接用自己的下载器
+  完成并跳过这个 processor；其余 processor 仍交给 Java 执行。
 
 `read_installer_version_json` 的查找顺序：`json` 指向的条目 →（仅 Forge）内联
 `versionInfo` →（兜底）`install.filePath` 指向的内嵌 jar。

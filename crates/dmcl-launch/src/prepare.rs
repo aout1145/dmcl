@@ -1,22 +1,23 @@
-//! 启动流程：检查并补全 → 选择 Java → 解压 natives → 登录 → 生成参数 → 启动。
+//! 启动流程：读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动。
 //!
-//! * [`PrepareLaunchFilesTask`]（`Task<(), ResolvedVersion>`）——「读取版本、检查文件完整性；
-//!   缺件时补全」，产出已解析的版本；
+//! * [`ReadVersionTask`]（`Task<(), ResolvedVersion>`）——读取版本 JSON 并解析
+//!   `inheritsFrom`；
+//! * [`PrepareLaunchFilesTask`]（`Task<Arc<ResolvedVersion>, ResolvedVersion>`）——检查文件
+//!   完整性，缺件时补全；
 //! * [`SelectJavaTask`]（`Task<Arc<ResolvedVersion>, JavaOption>`）——读取版本要求的 Java
 //!   大版本，通过解析器选好 java；允许自动安装时下载 JRE；版本 / 架构不匹配时先等用户确认；
-//! * [`PrepareNativesTask`]（`Task<Arc<JavaOption>, JavaOption>`）——按当前平台的 os 与已选
-//!   java 的 arch 下载 + 解压 natives；
-//! * [`LoginTask`]（`Task<(), Account>`）——让账户来源产出一个可用会话，失败即中止；
+//! * [`PrepareNativesTask`]（`Task<(Arc<ResolvedVersion>, Arc<JavaOption>), JavaOption>`）——
+//!   按当前平台的 os 与已选 java 的 arch 下载 + 解压 natives；
+//! * [`LoginTask`]（`Task<(Arc<ResolvedVersion>, Arc<JavaOption>), Account>`）——等文件补全和
+//!   natives 都完成后，让账户来源产出一个可用会话，失败即中止；
 //! * [`GenerateArgsTask`]（`Task<(Arc<Account>, Arc<JavaOption>), PreparedLaunch>`）——用已经
 //!   选好的 java 生成启动参数，产出 [`PreparedLaunch`]；
 //! * [`LaunchTask`]（`Task<Arc<PreparedLaunch>, GameMonitor>`）——用已生成的参数启动子进程，
 //!   产出**未 wait** 的 [`GameMonitor`]。
 //!
-//! [`launch_chain`] 把它们组成 `TaskGraph<GameMonitor>`：检查文件 / 选 Java / 登录可以并行，
-//! 生成参数依赖账户与选好的 Java，启动是唯一的最终节点。
-//!
-//! 「检查并补全、选择 Java、解压 natives」都不需要账户，所以登录与它们并行；生成参数
-//! 同时依赖账户和 java，失败时不会启动游戏，也不会让会话在长时间下载中过期。
+//! [`launch_chain`] 把它们组成 `TaskGraph<GameMonitor>`：读取版本后，检查文件与选 Java
+//! 并行；natives 依赖两者；登录等文件补全和 natives 都结束才开始，避免会话在长时间下载中
+//! 过期；生成参数依赖账户与选好的 Java，启动是唯一的最终节点。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,8 +65,12 @@ impl LoginTask {
 }
 
 #[async_trait::async_trait]
-impl Task<(), Account> for LoginTask {
-    async fn run(&self, _input: (), ctx: TaskContext) -> Result<Account> {
+impl Task<(Arc<ResolvedVersion>, Arc<JavaOption>), Account> for LoginTask {
+    async fn run(
+        &self,
+        _input: (Arc<ResolvedVersion>, Arc<JavaOption>),
+        ctx: TaskContext,
+    ) -> Result<Account> {
         let account = self.account_source.login().await?;
         ctx.log(format!(
             "账户：{}（{}）",
@@ -75,37 +80,49 @@ impl Task<(), Account> for LoginTask {
     }
 }
 
-/// 读取版本、检查文件完整性；缺件时补全。
-pub struct PrepareLaunchFilesTask {
-    game: Arc<GameFilesOptions>,
-    downloads: Arc<DownloadContext>,
+/// 读取版本 JSON 并解析 `inheritsFrom`。
+pub struct ReadVersionTask {
     version: VersionRef,
 }
 
-impl PrepareLaunchFilesTask {
-    pub fn new(
-        game: Arc<GameFilesOptions>,
-        downloads: Arc<DownloadContext>,
-        version: VersionRef,
-    ) -> Self {
-        Self {
-            game,
-            downloads,
-            version,
-        }
+impl ReadVersionTask {
+    pub fn new(version: VersionRef) -> Self {
+        Self { version }
     }
 }
 
 #[async_trait::async_trait]
-impl Task<(), ResolvedVersion> for PrepareLaunchFilesTask {
-    async fn run(&self, _input: (), ctx: TaskContext) -> Result<ResolvedVersion> {
-        let resolved = resolve_version(&self.version).await?;
+impl Task<(), ResolvedVersion> for ReadVersionTask {
+    async fn run(&self, _input: (), _ctx: TaskContext) -> Result<ResolvedVersion> {
+        resolve_version(&self.version).await
+    }
+}
+
+/// 检查文件完整性；缺件时补全。
+pub struct PrepareLaunchFilesTask {
+    game: Arc<GameFilesOptions>,
+    downloads: Arc<DownloadContext>,
+}
+
+impl PrepareLaunchFilesTask {
+    pub fn new(game: Arc<GameFilesOptions>, downloads: Arc<DownloadContext>) -> Self {
+        Self { game, downloads }
+    }
+}
+
+#[async_trait::async_trait]
+impl Task<Arc<ResolvedVersion>, ResolvedVersion> for PrepareLaunchFilesTask {
+    async fn run(
+        &self,
+        resolved: Arc<ResolvedVersion>,
+        ctx: TaskContext,
+    ) -> Result<ResolvedVersion> {
         let integrity = check_integrity(&resolved, &self.game).await?;
         ctx.log(integrity.summary());
         if !integrity.is_complete() {
             ensure_files(&resolved, &self.game, &self.downloads, &ctx).await?;
         }
-        Ok(resolved)
+        Ok((*resolved).clone())
     }
 }
 
@@ -248,29 +265,23 @@ impl Task<Arc<ResolvedVersion>, JavaOption> for SelectJavaTask {
 /// natives 的分类器（`natives-linux-64` 之类）取决于运行游戏的 JVM 架构，所以必须用
 /// 上一步选好的 java；这里不再选择 Java。
 pub struct PrepareNativesTask {
-    option: LaunchOption,
     game: Arc<GameFilesOptions>,
     downloads: Arc<DownloadContext>,
 }
 
 impl PrepareNativesTask {
-    pub fn new(
-        option: LaunchOption,
-        game: Arc<GameFilesOptions>,
-        downloads: Arc<DownloadContext>,
-    ) -> Self {
-        Self {
-            option,
-            game,
-            downloads,
-        }
+    pub fn new(game: Arc<GameFilesOptions>, downloads: Arc<DownloadContext>) -> Self {
+        Self { game, downloads }
     }
 }
 
 #[async_trait::async_trait]
-impl Task<Arc<JavaOption>, JavaOption> for PrepareNativesTask {
-    async fn run(&self, java: Arc<JavaOption>, ctx: TaskContext) -> Result<JavaOption> {
-        let version = resolve_version(&self.option.version).await?;
+impl Task<(Arc<ResolvedVersion>, Arc<JavaOption>), JavaOption> for PrepareNativesTask {
+    async fn run(
+        &self,
+        (version, java): (Arc<ResolvedVersion>, Arc<JavaOption>),
+        ctx: TaskContext,
+    ) -> Result<JavaOption> {
         ensure_natives(
             &version,
             Os::current(),
@@ -331,10 +342,11 @@ impl Task<Arc<PreparedLaunch>, GameMonitor> for LaunchTask {
     }
 }
 
-/// 组装「检查并补全 → 选择 Java → 解压 natives / 登录 → 生成参数 → 启动」任务图。
+/// 组装「读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动」任务图。
 ///
-/// 登录与文件 / Java 准备没有依赖关系，因此并行执行；生成参数同时依赖账户与选好的
-/// java；最终节点「启动游戏」返回 `GameMonitor`。
+/// 读取版本后，检查文件与选 Java 并行；natives 同时依赖版本与 Java；登录等文件补全和
+/// natives 都完成；生成参数同时依赖账户与选好的 java；最终节点「启动游戏」返回
+/// `GameMonitor`。
 pub fn launch_chain(
     option: LaunchOption,
     game: Arc<GameFilesOptions>,
@@ -347,25 +359,31 @@ pub fn launch_chain(
     let downloads = game.download_context(builder.progress());
     let prepare = builder.step("准备");
 
-    let resolved = builder.add(
+    let read = builder.add(prepare, "读取版本", (), ReadVersionTask::new(version));
+    let files = builder.add(
         prepare,
         "检查并补全文件",
-        (),
-        PrepareLaunchFilesTask::new(game.clone(), downloads.clone(), version),
+        read.clone(),
+        PrepareLaunchFilesTask::new(game.clone(), downloads.clone()),
     );
     let java = builder.add(
         prepare,
         "选择 Java",
-        resolved,
+        read.clone(),
         SelectJavaTask::new(option.clone(), game.clone(), downloads.clone(), jre),
     );
-    let java = builder.add(
+    let natives = builder.add(
         prepare,
         "解压 natives",
-        java,
-        PrepareNativesTask::new(option.clone(), game, downloads),
+        (read, java.clone()),
+        PrepareNativesTask::new(game, downloads),
     );
-    let account = builder.add(prepare, "登录", (), LoginTask::new(account_source));
+    let account = builder.add(
+        prepare,
+        "登录",
+        (files, natives),
+        LoginTask::new(account_source),
+    );
 
     let launch_step = builder.step("启动");
     let prepared = builder.add(
@@ -421,7 +439,8 @@ mod tests {
             .map(|details| details.option)
     }
 
-    /// 完整跑一遍：检查（空版本即完整）→ 选 java → 解压 natives → 登录 → 生成参数。
+    /// 完整跑一遍：读取版本 → 检查（空版本即完整）→ 选 java → 解压 natives → 登录 →
+    /// 生成参数。
     #[tokio::test]
     async fn a_minimal_version_runs_the_full_chain_to_launch_args() {
         let Some(java) = any_java().await else {
@@ -455,22 +474,26 @@ mod tests {
         let game = game_options();
         let downloads = downloads(&game);
 
-        let (game_for_task, downloads_for_task, version_for_task) = (
-            game.clone(),
-            downloads.clone(),
-            VersionRef::new(&root, "1.0"),
-        );
+        let version = VersionRef::new(&root, "1.0");
         let resolved = run_node(move |ctx| {
-            let task = PrepareLaunchFilesTask::new(
-                game_for_task.clone(),
-                downloads_for_task.clone(),
-                version_for_task.clone(),
-            );
+            let task = ReadVersionTask::new(version.clone());
             async move { task.run((), ctx).await }
         })
         .await
         .unwrap();
         assert_eq!(resolved.json.id.as_deref(), Some("1.0"));
+
+        let (game_for_task, downloads_for_task) = (game.clone(), downloads.clone());
+        let resolved_for_task = resolved.clone();
+        let files = run_node(move |ctx| {
+            let task =
+                PrepareLaunchFilesTask::new(game_for_task.clone(), downloads_for_task.clone());
+            let resolved = resolved_for_task.clone();
+            async move { task.run(resolved, ctx).await }
+        })
+        .await
+        .unwrap();
+        assert_eq!(files.json.id.as_deref(), Some("1.0"));
 
         let (option_for_task, game_for_task, downloads_for_task) =
             (option.clone(), game.clone(), downloads.clone());
@@ -489,26 +512,25 @@ mod tests {
         .unwrap();
         assert!(java.major > 0);
 
-        let (option_for_task, game_for_task, downloads_for_task) =
-            (option.clone(), game.clone(), downloads.clone());
+        let (game_for_task, downloads_for_task) = (game.clone(), downloads.clone());
+        let resolved_for_task = resolved.clone();
         let java_for_task = java.clone();
         let java = run_node(move |ctx| {
-            let task = PrepareNativesTask::new(
-                option_for_task.clone(),
-                game_for_task.clone(),
-                downloads_for_task.clone(),
-            );
-            let java = java_for_task.clone();
-            async move { task.run(java, ctx).await }
+            let task = PrepareNativesTask::new(game_for_task.clone(), downloads_for_task.clone());
+            let input = (resolved_for_task.clone(), java_for_task.clone());
+            async move { task.run(input, ctx).await }
         })
         .await
         .unwrap();
         assert!(java.major > 0);
 
         let source = option.account_source.clone();
+        let resolved_for_task = resolved.clone();
+        let java_for_task = java.clone();
         let account = run_node(move |ctx| {
             let task = LoginTask::new(source.clone());
-            async move { task.run((), ctx).await }
+            let input = (resolved_for_task.clone(), java_for_task.clone());
+            async move { task.run(input, ctx).await }
         })
         .await
         .unwrap();

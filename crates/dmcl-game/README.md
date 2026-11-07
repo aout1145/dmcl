@@ -14,7 +14,7 @@ version.rs    VersionRef / ResolvedVersion / resolve_version
 options.rs    GameFilesOptions、download_planned
 plan.rs       纯函数规划：这个版本需要哪些文件
 integrity.rs  完整性检查：完整吗？缺什么？
-ensure.rs     ensure_files / ensure_client_jar / ensure_asset_index
+ensure.rs     ensure_files / ensure_client_jar / ensure_libraries / ensure_assets / ensure_asset_index
 natives.rs    按 os / arch 下载并解压 natives
 extract.rs    薄 extract_zip（zip 9 的安全解压）
 ```
@@ -44,9 +44,15 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 
 ### 补全
 
-`ensure_files` 先确保资源索引，再按 `plan_files` 规划并下载；已存在的文件会被跳过，
-额外文件不会被删除。`ensure_client_jar` 只下客户端 jar，供 Forge / NeoForge 的 processor
-在安装时读取。
+`ensure_files` 一次补齐整个版本；已存在的文件会被跳过，额外文件不会被删除。
+
+安装流程需要把下载拆到不同步骤时，可以分别用：
+
+- `ensure_client_jar` —— 只下客户端 jar，供 Forge / NeoForge 的 processor 在安装时读取；
+- `ensure_libraries` —— 只下版本依赖库（不含 natives 分类器 jar）；
+- `ensure_assets` —— 先确保资源索引，再下资源对象。
+
+四个入口共享同一套规划与下载逻辑，因此拆分后不会与 `ensure_files` 对不上。
 
 ### natives
 

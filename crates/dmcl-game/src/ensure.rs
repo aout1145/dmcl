@@ -8,7 +8,9 @@ use dmcl_mcmeta::vanilla::AssetIndexFile;
 use dmcl_task::TaskContext;
 
 use crate::options::{download_planned, GameFilesOptions};
-use crate::plan::{plan_assets_index, plan_client_jar, plan_files};
+use crate::plan::{
+    plan_asset_objects, plan_assets_index, plan_client_jar, plan_files, plan_libraries,
+};
 use crate::version::ResolvedVersion;
 
 /// 确保资源索引存在，并读出来。版本没有 `assetIndex` 时返回 `None`。
@@ -44,6 +46,31 @@ pub async fn ensure_client_jar(
         planned.push(client);
     }
     download_planned(options, downloads, "客户端 jar", planned, ctx).await
+}
+
+/// 确保版本依赖的库文件就位（不含 natives 分类器 jar）。
+pub async fn ensure_libraries(
+    version: &ResolvedVersion,
+    options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let planned = plan_libraries(&version.reference, &version.json);
+    download_planned(options, downloads, "依赖库", planned, ctx).await
+}
+
+/// 确保资源索引与资源对象就位。
+pub async fn ensure_assets(
+    version: &ResolvedVersion,
+    options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let Some(index) = ensure_asset_index(version, options, downloads, ctx).await? else {
+        return Ok(());
+    };
+    let planned = plan_asset_objects(&version.reference, &version.json, &index, options);
+    download_planned(options, downloads, "资源", planned, ctx).await
 }
 
 /// 把缺的 / 坏的文件补齐；幂等，不删除额外文件。

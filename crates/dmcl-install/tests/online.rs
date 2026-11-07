@@ -196,6 +196,9 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
     .unwrap();
 
     let options = options(root.clone());
+    let previous = resolve_version(&VersionRef::new(&root, version_name))
+        .await
+        .unwrap();
     let mut builder = TaskGraphBuilder::new("安装 OptiFine");
     let step = builder.step("安装");
     let downloads = options.game.download_context(builder.progress());
@@ -207,8 +210,10 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
             let options = options.clone();
             let downloads = downloads.clone();
             let version_name = version_name.to_string();
+            let previous = previous.clone();
             async move {
                 dmcl_install::optifine::install_optifine(
+                    &previous,
                     &options,
                     &downloads,
                     &version_name,

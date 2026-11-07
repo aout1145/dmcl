@@ -13,22 +13,20 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use dmcl_download::{file_ok, Checksum, DownloadContext};
-use dmcl_game::{base_name, download_planned, plan_libraries, PlannedFile};
-use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
+use dmcl_game::{base_name, download_planned, plan_libraries, PlannedFile, ResolvedVersion};
+use dmcl_mcmeta::layout::{libraries_dir, version_jar_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::os::classpath_separator;
 use dmcl_mcmeta::vanilla::{Library, VersionJson};
-use dmcl_task::{CommandTask, Task, TaskContext};
+use dmcl_task::{task_fn, CommandTask, StepId, Task, TaskContext};
 
-use crate::archive::{main_class_of, open_archive, read_entry};
+use crate::archive::{main_class_of, open_archive};
 use crate::io::write_safe;
 use crate::options::InstallOptions;
 
 /// 安装 Forge / NeoForge 时在步骤之间传递的中间值。
 #[derive(Clone)]
 pub(crate) struct Installer {
-    /// 安装器对应的加载器版本号。
-    pub(crate) version: String,
     /// 安装器的下载地址。
     pub(crate) url: String,
     /// 安装器文件名。
@@ -37,11 +35,49 @@ pub(crate) struct Installer {
     pub(crate) path: PathBuf,
 }
 
+/// 从安装器里解析出来的、后续阶段要用的内容（自有数据，不借用 zip）。
+#[derive(Clone)]
+pub(crate) struct InstallerPlan {
+    pub(crate) installer: Installer,
+    /// 安装器自带的版本 JSON（地址已模板化）。
+    pub(crate) installer_json: VersionJson,
+    /// 安装器档案声明的库。
+    pub(crate) libraries: Vec<Library>,
+    /// 已解析成 client 值的 `{占位符}` 数据。
+    pub(crate) data: BTreeMap<String, String>,
+    /// 客户端侧的 processor。
+    pub(crate) processors: Vec<ProcessorPlan>,
+    /// 安装器里的 `data/client.lzma`；老式安装器没有。
+    pub(crate) client_lzma: Option<Vec<u8>>,
+}
+
+/// 一个客户端侧 processor 的静态描述。
+#[derive(Clone)]
+pub(crate) struct ProcessorPlan {
+    pub(crate) jar: String,
+    pub(crate) classpath: Vec<String>,
+    pub(crate) args: Vec<String>,
+    pub(crate) outputs: Option<BTreeMap<String, String>>,
+}
+
+/// 下载安装器依赖后得到的运行环境。
+pub(crate) struct InstallerDeps {
+    /// 需要跑 processor 时选好的 Java；全部是 mojmaps 下载时为空。
+    pub(crate) java: Option<PathBuf>,
+    /// 每个 processor 是否已被等价下载接管（命中后不用跑 java）。
+    pub(crate) mojmaps: Vec<bool>,
+    /// 解析过 `{占位符}` 的 processor 实参。
+    pub(crate) args: Vec<Vec<String>>,
+}
+
 /// 安装器临时路径：`<tmp>/dmcl-installer-<label>/<file_name>`。
 pub(crate) fn installer_temp_path(label: &str, file_name: &str) -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("dmcl-installer-{label}"))
-        .join(file_name)
+    installer_scratch(label).join(file_name)
+}
+
+/// processor 的临时工作目录：`<tmp>/dmcl-installer-<label>`。
+pub(crate) fn installer_scratch(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("dmcl-installer-{label}"))
 }
 
 /// 下载安装器到临时路径。后续步骤按需重新打开，不把字节流长期攥在手里。
@@ -93,120 +129,98 @@ pub(crate) async fn extract_maven_entries(
     Ok(())
 }
 
-/// 跑安装器 processor 需要的运行环境。
-pub(crate) struct InstallerRun<'a> {
-    pub options: &'a InstallOptions,
-    pub downloads: &'a Arc<DownloadContext>,
-    pub version_name: &'a str,
-    pub loader_label: &'a str,
-    pub java: &'a Path,
-    pub ctx: &'a TaskContext,
-}
-
-/// 跑 processor 时需要的一项（两种 profile 的 `Processor` 类型不同，由调用方传进来）。
-pub(crate) struct ProcessorSpec<'a> {
-    pub jar: &'a str,
-    pub classpath: &'a [String],
-    pub args: &'a [String],
-    pub outputs: Option<&'a BTreeMap<String, String>>,
-}
-
-/// 来自安装器档案的输入（两种 `InstallProfile` 类型不同，所以先拆成通用形状再传进来）。
-pub(crate) struct ProfileInputs<'a> {
-    /// 安装器档案声明的库。
-    pub libraries: &'a [Library],
-    /// 已经解析成 client 值的 `{占位符}` 数据。
-    pub data: &'a BTreeMap<String, String>,
-    /// 客户端侧的 processor（已过滤、已拆成视图）。
-    pub processors: &'a [ProcessorSpec<'a>],
-}
-
-/// 读取版本 JSON，选出（必要时下载）安装器 processor 要用的 Java。
+/// 读取安装器（或版本）要求的 Java 大版本，选出（必要时下载）processor 要用的 Java。
 pub(crate) async fn select_installer_java(
     options: &InstallOptions,
-    version_name: &str,
+    json: &VersionJson,
     downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
-    let mc_json = read_version_json(&version_json_path(&options.root_path, version_name)).await?;
-    let preferred = mc_json
+    let preferred = json
         .java_version
         .as_ref()
         .and_then(|java| java.component.as_deref())
         .filter(|component| !component.is_empty());
     options
-        .java_for_or_install(mc_json.required_java_major(), preferred, downloads, ctx)
+        .java_for_or_install(json.required_java_major(), preferred, downloads, ctx)
         .await
 }
 
-/// 下载安装器声明的库，解出 `client.lzma`，然后依次执行客户端侧的 processor。
-///
-/// `java` 由调用方在单独的「选择 Java」步骤里准备好，这里不再重复选择。
-pub(crate) async fn run_installer_processors(
-    run: InstallerRun<'_>,
-    inputs: ProfileInputs<'_>,
-    zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
-) -> Result<()> {
-    let InstallerRun {
-        options,
-        downloads,
-        version_name,
-        loader_label,
-        java,
-        ctx,
-    } = run;
-    let ProfileInputs {
-        libraries: installer_libraries,
-        data,
-        processors,
-    } = inputs;
-    let mc_json = read_version_json(&version_json_path(&options.root_path, version_name)).await?;
-    let libraries = libraries_dir(&options.root_path);
-
-    // client.lzma 先解到临时目录（processor 的工作目录；下面解析参数要用到它的路径）
-    let scratch = std::env::temp_dir().join(format!("dmcl-installer-{loader_label}"));
-    let lzma_path = scratch.join("client.lzma");
-    write_safe(&lzma_path, &read_entry(zip, "data/client.lzma")?).await?;
-
-    // 解析 `{占位符}`、lzma 路径、`[maven:坐标]` 以及外面的单引号
-    let get_arg = |arg: &str| -> String {
-        let mut arg = arg.to_string();
-        if arg.len() >= 2 && arg.starts_with('{') && arg.ends_with('}') {
-            let inner = &arg[1..arg.len() - 1];
-            arg = match inner {
-                "MINECRAFT_JAR" => version_jar_path(&options.root_path, version_name)
-                    .to_string_lossy()
-                    .into_owned(),
-                "SIDE" => "client".to_string(),
-                key => data.get(key).cloned().unwrap_or_default(),
-            };
-        }
-        if arg == "/data/client.lzma" {
-            arg = lzma_path.to_string_lossy().into_owned();
-        }
-        if arg.len() >= 2 && arg.starts_with('[') && arg.ends_with(']') {
-            let inner = &arg[1..arg.len() - 1];
-            arg = libraries
-                .join(lib_name_to_path(inner))
+/// 把一个 processor 参数里的占位符、lzma 路径与 maven 坐标解析成实际值。
+fn resolve_arg(
+    arg: &str,
+    options: &InstallOptions,
+    version_name: &str,
+    data: &BTreeMap<String, String>,
+    lzma_path: &Path,
+) -> String {
+    let mut arg = arg.to_string();
+    if arg.len() >= 2 && arg.starts_with('{') && arg.ends_with('}') {
+        let inner = &arg[1..arg.len() - 1];
+        arg = match inner {
+            "MINECRAFT_JAR" => version_jar_path(&options.root_path, version_name)
                 .to_string_lossy()
-                .into_owned();
-        }
-        if arg.len() >= 2 && arg.starts_with('\'') && arg.ends_with('\'') {
-            arg = arg[1..arg.len() - 1].to_string();
-        }
-        arg
-    };
+                .into_owned(),
+            "SIDE" => "client".to_string(),
+            key => data.get(key).cloned().unwrap_or_default(),
+        };
+    }
+    if arg == "/data/client.lzma" {
+        arg = lzma_path.to_string_lossy().into_owned();
+    }
+    if arg.len() >= 2 && arg.starts_with('[') && arg.ends_with(']') {
+        let inner = &arg[1..arg.len() - 1];
+        arg = libraries_dir(&options.root_path)
+            .join(lib_name_to_path(inner))
+            .to_string_lossy()
+            .into_owned();
+    }
+    if arg.len() >= 2 && arg.starts_with('\'') && arg.ends_with('\'') {
+        arg = arg[1..arg.len() - 1].to_string();
+    }
+    arg
+}
 
-    // 每个 processor 的实参（解析一次，下面复用）
-    let resolved: Vec<Vec<String>> = processors
+/// 下载安装器声明的库、版本自己的库与可顶替的 `DOWNLOAD_MOJMAPS`，必要时选好 Java。
+///
+/// 命中的 mojmaps 会并进同一个下载任务，后面跑 processor 时直接跳过。
+/// Java 选择作为「下载游戏文件」Step 下的动态任务创建，JRE 下载也因此归在同一个 Step。
+#[expect(clippy::too_many_arguments)]
+pub(crate) async fn download_installer_dependencies(
+    options: &InstallOptions,
+    downloads: &Arc<DownloadContext>,
+    version_name: &str,
+    loader_label: &str,
+    download_step: StepId,
+    previous: &ResolvedVersion,
+    plan: &InstallerPlan,
+    ctx: &TaskContext,
+) -> Result<InstallerDeps> {
+    // 老式安装器没有 processor：库与 mojmaps 都留给「下载游戏文件」Step 统一处理。
+    if plan.processors.is_empty() {
+        return Ok(InstallerDeps {
+            java: None,
+            mojmaps: Vec::new(),
+            args: Vec::new(),
+        });
+    }
+
+    let lzma_path = installer_scratch(loader_label).join("client.lzma");
+    let args: Vec<Vec<String>> = plan
+        .processors
         .iter()
-        .map(|spec| spec.args.iter().map(|arg| get_arg(arg)).collect())
+        .map(|processor| {
+            processor
+                .args
+                .iter()
+                .map(|arg| resolve_arg(arg, options, version_name, &plan.data, &lzma_path))
+                .collect()
+        })
         .collect();
 
-    // 安装器声明的库 + 版本自己的库 + 可顶替的 DOWNLOAD_MOJMAPS，合成**一个**下载任务，
-    // 让它们一起并发下；命中 mojmaps 的 processor 到时候直接跳过。
+    let libraries = libraries_dir(&options.root_path);
     let mut planned: Vec<PlannedFile> = Vec::new();
-    for lib in installer_libraries {
+    for lib in &plan.libraries {
         let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) else {
             continue;
         };
@@ -221,35 +235,99 @@ pub(crate) async fn run_installer_processors(
             name: base_name(&path),
         });
     }
-    planned.extend(plan_libraries(&options.version(version_name), &mc_json));
-    let mut mojmaps: Vec<bool> = vec![false; processors.len()];
-    for index in 0..processors.len() {
-        if let Some(file) = mojmaps_download(&mc_json, &resolved[index]) {
+    planned.extend(plan_libraries(&previous.reference, &previous.json));
+
+    let mut mojmaps: Vec<bool> = vec![false; plan.processors.len()];
+    for (index, resolved) in args.iter().enumerate() {
+        if let Some(file) = mojmaps_download(&previous.json, resolved) {
             planned.push(file);
             mojmaps[index] = true;
         }
     }
+
+    let needs_java = mojmaps.iter().any(|replaced| !replaced);
+    let java = if needs_java {
+        let java_options = options.clone();
+        let java_downloads = downloads.clone();
+        let json = previous.json.clone();
+        let handle = ctx.add_task(
+            download_step,
+            "选择 Java",
+            (),
+            task_fn(move |_: (), ctx| {
+                let options = java_options.clone();
+                let downloads = java_downloads.clone();
+                let json = json.clone();
+                async move { select_installer_java(&options, &json, &downloads, &ctx).await }
+            }),
+        )?;
+        Some(handle)
+    } else {
+        None
+    };
+
     download_planned(&options.game, downloads, "安装器依赖库", planned, ctx).await?;
 
-    for (index, spec) in processors.iter().enumerate() {
-        let jar_coord = spec.jar;
+    let java = match java {
+        Some(handle) => Some((*handle.wait().await?).clone()),
+        None => None,
+    };
+    Ok(InstallerDeps {
+        java,
+        mojmaps,
+        args,
+    })
+}
 
-        // DOWNLOAD_MOJMAPS 已在上面那个下载任务里下好了，不用再跑 java
-        if mojmaps[index] {
+/// 依次执行客户端侧的 processor。
+///
+/// 依赖已经由 [`download_installer_dependencies`] 提前下载好：这里只跑 Java，
+/// 不再自己下载库或 mojmaps。
+pub(crate) async fn run_installer_processors(
+    options: &InstallOptions,
+    version_name: &str,
+    loader_label: &str,
+    plan: &InstallerPlan,
+    deps: &InstallerDeps,
+    ctx: &TaskContext,
+) -> Result<()> {
+    if plan.processors.is_empty() {
+        return Ok(());
+    }
+
+    let scratch = installer_scratch(loader_label);
+    tokio::fs::create_dir_all(&scratch)
+        .await
+        .with_context(|| format!("无法创建 {}", scratch.display()))?;
+    let lzma_path = scratch.join("client.lzma");
+    if let Some(bytes) = &plan.client_lzma {
+        write_safe(&lzma_path, bytes).await?;
+    }
+
+    let libraries = libraries_dir(&options.root_path);
+    for (index, spec) in plan.processors.iter().enumerate() {
+        let jar_coord = &spec.jar;
+
+        // DOWNLOAD_MOJMAPS 已由依赖下载接管，不用再跑 java
+        if deps.mojmaps[index] {
             ctx.log(format!("完成 {jar_coord}"));
             continue;
         }
 
+        let java = deps
+            .java
+            .as_deref()
+            .ok_or_else(|| anyhow!("安装器需要 Java，但没有选到可用的 Java"))?;
         let jar_path = libraries.join(lib_name_to_path(jar_coord));
 
         // classpath：processor 自己的 jar 在最前，然后依次是它的 classpath
         let mut classpath = jar_path.to_string_lossy().into_owned();
-        for entry in spec.classpath {
+        for entry in &spec.classpath {
             classpath.push(classpath_separator());
             classpath.push_str(&libraries.join(lib_name_to_path(entry)).to_string_lossy());
         }
 
-        let args = &resolved[index];
+        let args = &deps.args[index];
 
         // 入口类从 processor jar 的 MANIFEST 里读
         let bytes = tokio::fs::read(&jar_path)
@@ -272,10 +350,16 @@ pub(crate) async fn run_installer_processors(
             .with_context(|| format!("执行 {jar_coord} 失败"))?;
 
         // 校验产物（安装器档案里的 `outputs` 给的是 sha1 摘要）
-        if let Some(outputs) = spec.outputs {
+        if let Some(outputs) = &spec.outputs {
             for (key, value) in outputs {
-                let file = get_arg(key);
-                let expected = Checksum::sha1(get_arg(value));
+                let file = resolve_arg(key, options, version_name, &plan.data, &lzma_path);
+                let expected = Checksum::sha1(resolve_arg(
+                    value,
+                    options,
+                    version_name,
+                    &plan.data,
+                    &lzma_path,
+                ));
                 if !file_ok(&file, Some(&expected), None).await {
                     return Err(anyhow!("{file}: sha1 校验失败"));
                 }

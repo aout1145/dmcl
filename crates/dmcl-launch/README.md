@@ -15,7 +15,7 @@ microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / M
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
 option.rs    LaunchOption
-prepare.rs   启动链：检查并补全 → 选择 Java → 解压 natives → 登录 → 生成参数 → 启动
+prepare.rs   启动链：读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动
 monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```
 
@@ -104,21 +104,23 @@ monitor.wait().await?;
 
 `launch_chain(option, game, jre)` 组成 `TaskGraph<GameMonitor>`：
 
-1. **检查并补全文件** —— `resolve_version` + `dmcl_game::check_integrity`；缺件时
-   `ensure_files`，产出 `ResolvedVersion`；
-2. **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动
+1. **读取版本** —— `resolve_version` 解析版本 JSON（含一层 `inheritsFrom`）；
+2. **检查并补全文件** —— `dmcl_game::check_integrity`；缺件时 `ensure_files`，产出
+   `ResolvedVersion`；
+3. **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动
    安装时下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时先等用户确认；
-3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑
+4. **解压 natives** —— 依赖已解析的版本与已选 Java，按当前平台的 os 与 Java 的 arch 跑
    `dmcl_game::ensure_natives`（下载 + 解压到 `natives_dir`，即
    `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
-4. **登录** —— 与文件 / Java 准备**并行**；让 `AccountSource` 产出可用会话，失败就中止；
-5. **生成启动参数** —— 同时依赖账户与选好的 Java，只在两者都就绪后才拼；
-6. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
+5. **登录** —— 等文件补全和 natives 都完成后，让 `AccountSource` 产出可用会话，失败就中止；
+6. **生成启动参数** —— 同时依赖账户与选好的 Java，只在两者都就绪后才拼；
+7. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
    还是中途停掉。
 
-登录与下载互不依赖，所以并行执行；参数只在文件齐备、Java 选好、账户可用后才拼，避免在缺件
-时生成一份用不了（或需要重拼）的命令行。整张图共享一个 `DownloadContext`，连接 / 文件 /
-worker 预算与全局进度都只有一份。
+读取版本后，检查文件与选 Java 并行；natives 同时需要版本与 Java，因此接在两者之后。登录
+刻意等到文件补全与 natives 都结束，避免在线会话在长时间下载中过期；参数只在文件齐备、
+Java 选好、账户可用后才拼，避免在缺件时生成一份用不了（或需要重拼）的命令行。整张图共享
+一个 `DownloadContext`，连接 / 文件 / worker 预算与全局进度都只有一份。
 
 ## 相关文档
 
