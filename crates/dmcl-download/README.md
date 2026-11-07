@@ -28,6 +28,7 @@ hash.rs     Checksum / HashAlgorithm，以及 file_ok / files_ok / files_ok_with
 | 校验算法     | `Checksum` 支持 **md5 / sha1 / sha256 / sha512**                                                                                     |
 | 进度         | 全局只有 `downloaded / total` 字节；预检只计入缺失文件的已知大小，服务器实际大小到达后修订；重试扣回本轮已报告字节                   |
 | 换源重试     | 每个下载项带一串**候选地址**；第 `n` 次尝试轮换一个（A B A…），全失败才让节点失败                                                   |
+| 重试退避     | 重试前按指数等待（`retry_base_delay` 起翻倍、`retry_max_delay` 封顶）；429 等响应优先遵循 `Retry-After`，bmclapi 的 `x-ratelimit-reset-short` 作为兜底 |
 | 断点续传     | 不做；失败即整份重来（首次之外最多重试 `max_retries` 次）                                                                            |
 | 取消         | 信号量获取、HTTP 请求、读响应体、哈希校验都可取消；取消时 permit 随 future 释放                                                      |
 

@@ -70,7 +70,8 @@ source.candidates("${MC_MAVEN}/a/b.jar");
 - 用哪种镜像由 `MirrorPolicy` 决定：`official-only`（仅官方）、`official-first`
   （官方优先，默认）、`mirror-first`（镜像优先，顺序是 bmclapi → ForgeCDN → 官方）；
   各域取 meta 统一走 `fetch_meta(url)`
-  —— 内部按镜像优先级展开候选、轮换重试（A B A …）直到用满重试次数，
+  —— 内部按镜像优先级展开候选、轮换重试（A B A …）直到用满重试次数；重试前按指数退避，
+  429 等限流响应优先遵循 `Retry-After`（bmclapi 的 `x-ratelimit-reset-short` 作为兜底）；
   `fetch_json` 就是它的 JSON 版：
   `source.fetch_json("${MC_META}/mc/game/version_manifest.json").await?`。
 

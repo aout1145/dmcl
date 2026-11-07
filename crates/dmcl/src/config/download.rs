@@ -1,5 +1,7 @@
 //! `download.*` 段与下载 Options 转换。
 
+use std::time::Duration;
+
 use dmcl_download::{DownloadOptions, DEFAULT_USER_AGENT};
 use dmcl_launch::{LAUNCHER_NAME, LAUNCHER_VERSION};
 use dmcl_mcmeta::source::{DownloadSource, MirrorPolicy};
@@ -30,6 +32,10 @@ pub struct DownloadConfig {
     pub chunk_size_mib: u64,
     /// 单个文件失败后最多重试几次（不含第一次尝试）。
     pub max_retries: u32,
+    /// 第 1 次重试前等待多少毫秒；之后每次翻倍。
+    pub retry_base_delay_ms: u64,
+    /// 指数退避的等待上限（毫秒）。
+    pub retry_max_delay_ms: u64,
     /// 安装器 processor 用哪个 Java，或自动选择。
     pub java: JavaChoice,
 }
@@ -46,21 +52,36 @@ impl Default for DownloadConfig {
             chunk_threshold_mib: 8,
             chunk_size_mib: 4,
             max_retries: defaults.max_retries,
+            retry_base_delay_ms: defaults.retry_base_delay.as_millis() as u64,
+            retry_max_delay_ms: defaults.retry_max_delay.as_millis() as u64,
             java: JavaChoice::Auto,
         }
     }
 }
 
+impl DownloadConfig {
+    /// 配置里的毫秒数 → 指数退避的（基础, 上限）。
+    fn retry_delays(&self) -> (Duration, Duration) {
+        (
+            Duration::from_millis(self.retry_base_delay_ms),
+            Duration::from_millis(self.retry_max_delay_ms),
+        )
+    }
+}
+
 impl Config {
-    /// 按配置造一个下载源（镜像策略 + 重试次数 + User-Agent）。
+    /// 按配置造一个下载源（镜像策略 + 重试次数 + 退避 + User-Agent）。
     pub fn download_source(&self) -> DownloadSource {
+        let (base, max) = self.download.retry_delays();
         DownloadSource::from_policy(self.download.mirror)
             .with_user_agent(format!("{LAUNCHER_NAME}/{LAUNCHER_VERSION}"))
             .with_max_retries(self.download.max_retries)
+            .with_retry_delay(base, max)
     }
 
     /// 配置文件里的下载策略 → [`dmcl_download::DownloadOptions`]。
     pub fn download_options(&self) -> DownloadOptions {
+        let (base, max) = self.download.retry_delays();
         DownloadOptions::with_max_connections(self.download.max_connections)
             .with_chunking(
                 self.download.chunk_threshold_mib.max(1) * MIB,
@@ -69,6 +90,7 @@ impl Config {
             .with_max_active_files(self.download.max_active_files)
             .with_max_workers(self.download.max_workers)
             .with_max_retries(self.download.max_retries)
+            .with_retry_delay(base, max)
             .with_user_agent(DEFAULT_USER_AGENT)
     }
 }
@@ -87,6 +109,8 @@ mod tests {
         config.download.chunk_threshold_mib = 2;
         config.download.chunk_size_mib = 1;
         config.download.max_retries = 5;
+        config.download.retry_base_delay_ms = 250;
+        config.download.retry_max_delay_ms = 8_000;
 
         let download = config.download_options();
         assert_eq!(download.max_connections, 8);
@@ -95,5 +119,7 @@ mod tests {
         assert_eq!(download.chunk_threshold, 2 * MIB);
         assert_eq!(download.chunk_size, MIB);
         assert_eq!(download.max_retries, 5);
+        assert_eq!(download.retry_base_delay, Duration::from_millis(250));
+        assert_eq!(download.retry_max_delay, Duration::from_millis(8_000));
     }
 }

@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dmcl_download::{hash_bytes, DownloadContext, DownloadItem, DownloadOptions, HashAlgorithm};
 use dmcl_task::{task_fn, ProgressHandle, TaskEvent, TaskGraph, TaskGraphBuilder};
@@ -86,6 +86,101 @@ impl TestServer {
     }
 }
 
+/// 按脚本依次返回原始 HTTP 响应；脚本用完后重复最后一条。
+struct ScriptedServer {
+    addr: SocketAddr,
+    requests: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ScriptedServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl ScriptedServer {
+    async fn start(responses: Vec<Vec<u8>>) -> Self {
+        assert!(!responses.is_empty());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = Arc::new(responses);
+        let requests = Arc::new(AtomicUsize::new(0));
+
+        let task = {
+            let responses = responses.clone();
+            let requests = requests.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let responses = responses.clone();
+                    let requests = requests.clone();
+                    tokio::spawn(async move {
+                        if read_request(&mut stream).await.is_none() {
+                            return;
+                        }
+                        let index = requests.fetch_add(1, Ordering::SeqCst);
+                        let response = &responses[index.min(responses.len() - 1)];
+                        let _ = stream.write_all(response).await;
+                        let _ = stream.flush().await;
+                    });
+                }
+            })
+        };
+
+        Self {
+            addr,
+            requests,
+            task,
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.addr)
+    }
+
+    fn requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+}
+
+/// 读一个请求，返回（含请求头的缓冲区，请求头结束位置）。
+async fn read_request(stream: &mut TcpStream) -> Option<(Vec<u8>, usize)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 1024];
+    let header_end = loop {
+        let read = match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return None,
+            Ok(read) => read,
+        };
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(position) = find_subsequence(&buffer, b"\r\n\r\n") {
+            break position + 4;
+        }
+        if buffer.len() > 64 * 1024 {
+            return None;
+        }
+    };
+    Some((buffer, header_end))
+}
+
+/// 拼一个带响应体的 HTTP 响应。
+fn http_response(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in headers {
+        response.push_str(&format!("{name}: {value}\r\n"));
+    }
+    response.push_str("\r\n");
+    let mut response = response.into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
 async fn serve(
     mut stream: TcpStream,
     files: Arc<HashMap<String, Vec<u8>>>,
@@ -94,20 +189,8 @@ async fn serve(
     requests: Arc<AtomicUsize>,
     delay: Duration,
 ) {
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 1024];
-    let header_end = loop {
-        let read = match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(read) => read,
-        };
-        buffer.extend_from_slice(&chunk[..read]);
-        if let Some(position) = find_subsequence(&buffer, b"\r\n\r\n") {
-            break position + 4;
-        }
-        if buffer.len() > 64 * 1024 {
-            return;
-        }
+    let Some((buffer, header_end)) = read_request(&mut stream).await else {
+        return;
     };
 
     requests.fetch_add(1, Ordering::SeqCst);
@@ -265,6 +348,96 @@ async fn a_file_downloads_and_retries_with_the_next_candidate() {
     assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), body);
     assert_eq!(progress.snapshot().downloaded, body.len() as u64);
     assert_eq!(server.requests(), 2, "第一次 404，第二次换源成功");
+}
+
+#[tokio::test]
+async fn a_429_response_honours_retry_after() {
+    let dir = work_dir("retry-after");
+    let body = b"after the limit".to_vec();
+    let server = ScriptedServer::start(vec![
+        http_response("429 Too Many Requests", &[("Retry-After", "1")], b""),
+        http_response("200 OK", &[], &body),
+    ])
+    .await;
+
+    let item = DownloadItem::new([server.url("/limited")], dir.join("a.txt"))
+        .with_size(Some(body.len() as u64))
+        .with_sha1(Some(hash_bytes(HashAlgorithm::Sha1, &body)));
+    // 指数退避故意设得比 Retry-After 短：确认等的是响应头。
+    let options = DownloadOptions::default()
+        .without_chunking()
+        .with_max_retries(1)
+        .with_retry_delay(Duration::from_millis(10), Duration::from_millis(10));
+
+    let started = Instant::now();
+    let (_, result, _) = run_items(options, vec![item]).await;
+    result.unwrap();
+
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "应当等待 Retry-After 给出的 1 秒"
+    );
+    assert_eq!(server.requests(), 2);
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), body);
+}
+
+#[tokio::test]
+async fn bmclapi_rate_limit_header_is_used_when_retry_after_is_missing() {
+    let dir = work_dir("rate-limit-reset");
+    let body = b"ok".to_vec();
+    let server = ScriptedServer::start(vec![
+        http_response(
+            "429 Too Many Requests",
+            &[("x-ratelimit-reset-short", "0")],
+            b"",
+        ),
+        http_response("200 OK", &[], &body),
+    ])
+    .await;
+
+    let item = DownloadItem::new([server.url("/limited")], dir.join("b.txt"))
+        .with_size(Some(body.len() as u64))
+        .with_sha1(Some(hash_bytes(HashAlgorithm::Sha1, &body)));
+    // 如果没读到 bmclapi 的限流头，就会退避 5 秒。
+    let options = DownloadOptions::default()
+        .without_chunking()
+        .with_max_retries(1)
+        .with_retry_delay(Duration::from_secs(5), Duration::from_secs(5));
+
+    let started = Instant::now();
+    let (_, result, _) = run_items(options, vec![item]).await;
+    result.unwrap();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "x-ratelimit-reset-short 应当覆盖指数退避"
+    );
+    assert_eq!(server.requests(), 2);
+    assert_eq!(std::fs::read(dir.join("b.txt")).unwrap(), body);
+}
+
+#[tokio::test]
+async fn transient_errors_back_off_exponentially() {
+    let dir = work_dir("backoff");
+    let server =
+        ScriptedServer::start(vec![http_response("500 Internal Server Error", &[], b"")]).await;
+
+    let item = DownloadItem::new([server.url("/broken")], dir.join("c.bin"));
+    let options = DownloadOptions::default()
+        .without_chunking()
+        .with_max_retries(2)
+        .with_retry_delay(Duration::from_millis(100), Duration::from_secs(10));
+
+    let started = Instant::now();
+    let (_, result, _) = run_items(options, vec![item]).await;
+    result.unwrap_err();
+
+    // 第 1 次重试等 100ms，第 2 次等 200ms。
+    assert!(
+        started.elapsed() >= Duration::from_millis(280),
+        "两次重试必须按指数退避等待"
+    );
+    assert_eq!(server.requests(), 3);
 }
 
 #[tokio::test]

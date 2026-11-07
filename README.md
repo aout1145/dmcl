@@ -151,6 +151,12 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`）。图形界面的
 保存时先写临时文件再改名覆盖。图形界面启动时发现坏掉或不认识的配置项会回退默认值，把原文件
 备份为同目录的 `dmcl.old.json`，再写入修复后的配置并弹窗说明。
 
+`download` 段可调整下载策略：`max_connections`、`max_active_files`、`max_workers`、
+`chunk_threshold_mib`、`chunk_size_mib`、`max_retries`、`retry_base_delay_ms`、
+`retry_max_delay_ms`、`mirror`、`skip_music`、`java`。重试前按指数退避，
+`retry_base_delay_ms` 是第 1 次重试的等待（默认 1000），之后翻倍，`retry_max_delay_ms`
+是上限（默认 60000）；服务器给出 `Retry-After` 时以响应头为准。
+
 ## 开发与测试
 
 ```bash

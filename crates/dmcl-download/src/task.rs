@@ -23,6 +23,9 @@ use crate::options::DownloadOptions;
 /// 两次读之间的空闲时限：超过它就认为连接僵死，报错并交给重试。
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// 服务器要求等待的上限：`Retry-After` 再大也不真的睡那么久。
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
 /// 一份下载计划共享的客户端、并发预算与全局进度。
 pub struct DownloadContext {
     client: reqwest::Client,
@@ -140,14 +143,6 @@ impl DownloadContext {
             ctx.check_cancelled()?;
             // 轮换候选源：第 n 次尝试用 urls[(n-1) % len]
             let url = item.urls[candidate_index(&item.urls, attempt)].clone();
-            if attempt > 1 {
-                ctx.log(format!(
-                    "{} 重试（{}/{}）",
-                    item.name,
-                    attempt - 1,
-                    self.options.max_retries
-                ));
-            }
 
             // 每次尝试单独记账：失败重试时把这一轮已经上报的字节减回去，
             // 否则进度会变成「100% 了还在涨」。
@@ -169,7 +164,26 @@ impl DownloadContext {
                     if cancelled {
                         return Err(error);
                     }
+                    // 429 等限流响应会给出明确的等待时间，优先照它等；
+                    // 其它错误按指数退避，避免所有文件同时重试把源打满。
+                    let retry_after = error
+                        .downcast_ref::<HttpStatusError>()
+                        .and_then(|error| error.retry_after);
                     last_error = Some(error.context(format!("下载 {} 失败", item.name)));
+                    if attempt == attempts {
+                        break;
+                    }
+                    let delay = retry_after
+                        .map(|delay| delay.min(MAX_RETRY_AFTER))
+                        .unwrap_or_else(|| self.options.retry_delay(attempt));
+                    ctx.log(format!(
+                        "{} 将在 {} 后重试（{}/{}）",
+                        item.name,
+                        format_delay(delay),
+                        attempt,
+                        self.options.max_retries
+                    ));
+                    wait_retry(delay, ctx).await?;
                 }
             }
         }
@@ -253,9 +267,7 @@ impl DownloadContext {
         ctx: &TaskContext,
     ) -> Result<u64> {
         let _connection = acquire(&self.connection_semaphore, ctx).await?;
-        let mut response = send_get(&self.client, url, None, ctx)
-            .await?
-            .error_for_status()?;
+        let mut response = ensure_success(send_get(&self.client, url, None, ctx).await?, url)?;
         if let Some(actual) = response.content_length() {
             total.observe(actual);
         }
@@ -366,9 +378,10 @@ impl ChunkRequest {
     /// 抓取 `[start, end]` 区间的字节并写到文件的对应偏移。
     async fn run(self, _permit: OwnedSemaphorePermit) -> Result<u64> {
         let range = format!("bytes={}-{}", self.start, self.end);
-        let mut response = send_get(&self.client, &self.url, Some(&range), &self.ctx)
-            .await?
-            .error_for_status()?;
+        let mut response = ensure_success(
+            send_get(&self.client, &self.url, Some(&range), &self.ctx).await?,
+            &self.url,
+        )?;
         if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
             anyhow::bail!("服务器没有按 Range 请求返回 206（{}）", response.status());
         }
@@ -420,6 +433,52 @@ async fn send_get(
     Ok(sent?)
 }
 
+/// 非 2xx 响应转成错误；429 等限流响应带上服务器要求的等待时间。
+fn ensure_success(response: reqwest::Response, url: &str) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let retry_after = retry_after(&response);
+    Err(anyhow::Error::new(HttpStatusError {
+        url: url.to_string(),
+        status,
+        retry_after,
+    }))
+}
+
+/// 从响应头里取建议的重试等待时间。
+///
+/// 标准头 `Retry-After` 支持秒数；bmclapi 的 429 只给
+/// `x-ratelimit-reset-short`（同样是秒数），作为兜底。
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    let parse = |header: Option<&reqwest::header::HeaderValue>| {
+        header?.to_str().ok()?.trim().parse::<u64>().ok()
+    };
+    let header = response.headers().get(reqwest::header::RETRY_AFTER);
+    let mut seconds = parse(header);
+    if seconds.is_none() && response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        seconds = parse(response.headers().get("x-ratelimit-reset-short"));
+    }
+    seconds.map(Duration::from_secs)
+}
+
+/// 非 2xx 响应；`retry_after` 来自 [`retry_after`]。
+#[derive(Debug)]
+struct HttpStatusError {
+    url: String,
+    status: reqwest::StatusCode,
+    retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for HttpStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "服务器返回 {}（{}）", self.status, self.url)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
+
 /// 读下一段响应体；取消时立刻返回。
 async fn next_chunk(
     response: &mut reqwest::Response,
@@ -441,7 +500,7 @@ async fn probe_range(
     url: &str,
     ctx: &TaskContext,
 ) -> Result<Option<u64>> {
-    let response = send_get(client, url, Some("bytes=0-0"), ctx).await?;
+    let response = ensure_success(send_get(client, url, Some("bytes=0-0"), ctx).await?, url)?;
     if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         return Ok(None);
     }
@@ -463,6 +522,28 @@ fn parse_content_range(value: &str) -> Option<u64> {
 /// 第 `attempt`（从 1 开始）次尝试该用哪个候选地址：按优先级轮换（A B A …）。
 fn candidate_index(urls: &[String], attempt: u32) -> usize {
     (attempt.saturating_sub(1) as usize) % urls.len()
+}
+
+/// 可取消地等待重试退避。
+async fn wait_retry(delay: Duration, ctx: &TaskContext) -> Result<()> {
+    if delay.is_zero() {
+        return Ok(());
+    }
+    let cancel = ctx.cancel_handle();
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => Ok(()),
+        _ = cancel.cancelled() => Err(anyhow::Error::new(Cancelled)),
+    }
+}
+
+/// 日志里的等待时间：不足 1 秒用毫秒，否则保留一位小数。
+fn format_delay(delay: Duration) -> String {
+    let seconds = delay.as_secs_f64();
+    if seconds < 1.0 {
+        format!("{} 毫秒", delay.as_millis())
+    } else {
+        format!("{seconds:.1} 秒")
+    }
 }
 
 /// 可取消地获取一个信号量许可。

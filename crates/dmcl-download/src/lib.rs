@@ -29,6 +29,8 @@
 //! * **先写 `.part` 再改名**：校验通过才 rename，失败直接让节点失败，由 DAG FailFast
 //!   处理；
 //! * **换源重试**：每个下载项可带一串候选地址，第 `n` 次尝试轮换一个（A B A …）；
+//! * **指数退避**：重试前按指数等待；429 等限流响应优先遵循 `Retry-After`（或 bmclapi 的
+//!   `x-ratelimit-reset-short`）；
 //! * **不做断点续传**：失败即整份重来（首次之外最多重试 [`DownloadOptions::max_retries`] 次）。
 
 mod hash;

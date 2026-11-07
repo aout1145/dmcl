@@ -510,10 +510,18 @@ pub struct DownloadSource {
     client: reqwest::Client,
     user_agent: String,
     max_retries: u32,
+    retry_base_delay: Duration,
+    retry_max_delay: Duration,
 }
 
 /// 单个请求默认的重试次数（与下载侧 `max_retries` 默认值一致）。
 const DEFAULT_MAX_RETRIES: u32 = 3;
+/// 第 1 次重试的基础等待时间。
+const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_secs(1);
+/// 指数退避的上限。
+const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
+/// 服务器要求等待的上限：`Retry-After` 再大也不真的睡那么久。
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 
 /// 建立连接的超时。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -566,12 +574,23 @@ impl DownloadSource {
         self
     }
 
+    /// 设置指数退避：第 1 次重试等 `base`，之后翻倍，最长不超过 `max`。
+    ///
+    /// 服务器返回 `Retry-After` 时以响应头为准，不使用这里的退避。
+    pub fn with_retry_delay(mut self, base: Duration, max: Duration) -> Self {
+        self.retry_base_delay = base;
+        self.retry_max_delay = max;
+        self
+    }
+
     fn build(mirrors: Vec<Mirror>, user_agent: &str) -> Self {
         Self {
             mirrors,
             client: build_client(user_agent),
             user_agent: user_agent.to_string(),
             max_retries: DEFAULT_MAX_RETRIES,
+            retry_base_delay: DEFAULT_RETRY_BASE_DELAY,
+            retry_max_delay: DEFAULT_RETRY_MAX_DELAY,
         }
     }
 
@@ -609,14 +628,37 @@ impl DownloadSource {
     pub async fn fetch_meta(&self, url: &str) -> Result<String> {
         let candidates = self.candidates(url);
         let mut last: Option<anyhow::Error> = None;
-        for attempt in 1..=self.max_retries.saturating_add(1) {
+        let attempts = self.max_retries.saturating_add(1);
+        for attempt in 1..=attempts {
             let candidate = &candidates[candidate_index(candidates.len(), attempt)];
             match self.fetch_text(candidate).await {
                 Ok(body) => return Ok(body),
-                Err(err) => last = Some(err.context(format!("从 {candidate} 取数失败"))),
+                Err(err) => {
+                    // 429 等限流响应会给出明确的等待时间，优先照它等；
+                    // 其它错误按指数退避，避免所有请求同时重试把源打满。
+                    let retry_after = err
+                        .downcast_ref::<HttpStatusError>()
+                        .and_then(|error| error.retry_after);
+                    last = Some(err.context(format!("从 {candidate} 取数失败")));
+                    if attempt == attempts {
+                        break;
+                    }
+                    let delay = retry_after
+                        .map(|delay| delay.min(MAX_RETRY_AFTER))
+                        .unwrap_or_else(|| self.retry_delay(attempt));
+                    tokio::time::sleep(delay).await;
+                }
             }
         }
         Err(last.unwrap_or_else(|| anyhow!("没有可用的下载地址：{url}")))
+    }
+
+    /// 第 `retry` 次重试（从 1 开始）的指数退避等待时间。
+    fn retry_delay(&self, retry: u32) -> Duration {
+        let factor = 1u32 << retry.saturating_sub(1).min(31);
+        self.retry_base_delay
+            .saturating_mul(factor)
+            .min(self.retry_max_delay)
     }
 
     /// 取一份 JSON：`fetch_meta` + 反序列化。
@@ -627,11 +669,57 @@ impl DownloadSource {
 
     /// 单次 GET（响应体按 UTF-8 文本返回）；重试由 [`DownloadSource::fetch_meta`] 负责。
     async fn fetch_text(&self, url: &str) -> Result<String> {
-        let response = self.client.get(url).send().await?.error_for_status()?;
+        let response = ensure_success(self.client.get(url).send().await?, url)?;
         let bytes = response.bytes().await?;
         String::from_utf8(bytes.to_vec()).with_context(|| format!("{url} 的响应不是合法 UTF-8"))
     }
 }
+
+/// 非 2xx 响应转成错误；429 等限流响应带上服务器要求的等待时间。
+fn ensure_success(response: reqwest::Response, url: &str) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let retry_after = retry_after(&response);
+    Err(anyhow::Error::new(HttpStatusError {
+        url: url.to_string(),
+        status,
+        retry_after,
+    }))
+}
+
+/// 从响应头里取建议的重试等待时间。
+///
+/// 标准头 `Retry-After` 支持秒数；bmclapi 的 429 只给
+/// `x-ratelimit-reset-short`（同样是秒数），作为兜底。
+fn retry_after(response: &reqwest::Response) -> Option<Duration> {
+    let parse = |header: Option<&reqwest::header::HeaderValue>| {
+        header?.to_str().ok()?.trim().parse::<u64>().ok()
+    };
+    let header = response.headers().get(reqwest::header::RETRY_AFTER);
+    let mut seconds = parse(header);
+    if seconds.is_none() && response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        seconds = parse(response.headers().get("x-ratelimit-reset-short"));
+    }
+    seconds.map(Duration::from_secs)
+}
+
+/// 非 2xx 响应；`retry_after` 来自 [`retry_after`]。
+#[derive(Debug)]
+struct HttpStatusError {
+    url: String,
+    status: reqwest::StatusCode,
+    retry_after: Option<Duration>,
+}
+
+impl fmt::Display for HttpStatusError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "服务器返回 {}（{}）", self.status, self.url)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
 
 /// 候选轮换：第 `attempt` 次（从 1 开始）用第几个候选（A B A …）。
 fn candidate_index(len: usize, attempt: u32) -> usize {
@@ -838,6 +926,17 @@ mod tests {
         );
         assert!(template.is_templated());
         assert!(!UrlTemplate::new("https://example.com/a.jar").is_templated());
+    }
+
+    #[test]
+    fn retry_delays_grow_exponentially_and_stop_at_the_cap() {
+        let source = DownloadSource::new(Mirror::Official)
+            .with_retry_delay(Duration::from_millis(100), Duration::from_millis(500));
+        assert_eq!(source.retry_delay(1), Duration::from_millis(100));
+        assert_eq!(source.retry_delay(2), Duration::from_millis(200));
+        assert_eq!(source.retry_delay(3), Duration::from_millis(400));
+        assert_eq!(source.retry_delay(4), Duration::from_millis(500));
+        assert_eq!(source.retry_delay(u32::MAX), Duration::from_millis(500));
     }
 
     #[test]

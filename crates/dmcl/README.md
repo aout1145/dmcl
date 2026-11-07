@@ -34,7 +34,7 @@ gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 REA
 | --------------- | ------------------------------------------------------------------------------------- |
 | `dmcl-task`     | 无（纯任务抽象）                                                                      |
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
-| `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
+| `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数与退避、失败是否忽略、UA）  |
 | `dmcl-game`     | `GameFilesOptions`（下载源、下载策略、是否跳过音乐）、`VersionRef`                    |
 | `dmcl-java`     | `JavaResolver`（选 Java）、`JavaRuntimeOptions` + `JreInstallRequest`（装 JRE）       |
 | `dmcl-install`  | `InstallOptions`（根目录、游戏文件选项、Java 解析器、JRE 安装位置）                   |
