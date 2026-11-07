@@ -110,8 +110,8 @@ HomeMsg::MonitorExited { name, stopped, abnormal }
 ## 启动 / 停止
 
 - **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」
-  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`。全局 `launch` 从共享配置的
-  `ConfigRef` 现读，不缓存启动那一刻的副本。
+  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`，并立即用 `Shell::open_tasks`
+  弹出任务对话框。全局 `launch` 从共享配置的 `ConfigRef` 现读，不缓存启动那一刻的副本。
 - 启动链的完成任务不挂在 `HomePage` 的 `TaskGuard` 上：关闭标签后启动链继续跑，
   结果仍会回到常驻的 `HomePage`。
 - **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，

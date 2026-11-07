@@ -436,6 +436,8 @@ impl HomePage {
         self.sync_sections();
 
         let handle = self.shell.run(format!("启动 {name}"), chain);
+        // 启动链已经在任务对话框里跑，主动打开让用户看到进度。
+        self.shell.open_tasks();
         let sender = sender.clone();
         let task_name = name.clone();
         // 这个任务不挂在 HomePage 的 TaskGuard 上：关闭标签后启动链继续跑，结果仍会
