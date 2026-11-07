@@ -212,13 +212,14 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
             let version_name = version_name.to_string();
             let previous = previous.clone();
             async move {
+                let files = dmcl_install::optifine::download_optifine(
+                    &options, &downloads, "1.12.2", "HD_U_G5", false, &ctx,
+                )
+                .await?;
                 dmcl_install::optifine::install_optifine(
                     &previous,
-                    &options,
-                    &downloads,
+                    &files,
                     &version_name,
-                    "1.12.2",
-                    "HD_U_G5",
                     false,
                     &ctx,
                 )

@@ -9,7 +9,7 @@ use dmcl_game::{base_name, download_planned, PlannedFile, ResolvedVersion};
 use dmcl_mcmeta::layout::{libraries_dir, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
-use dmcl_task::TaskContext;
+use dmcl_task::{task_fn, Handle, StepId, TaskContext, TaskGraphBuilder};
 
 use crate::archive::{has_entry, open_archive, read_entry};
 use crate::io::{write_json_safe, write_safe};
@@ -23,18 +23,91 @@ const LAUNCHWRAPPER_LIBRARY: &str = "net.minecraft:launchwrapper";
 /// 游戏参数里的 tweakClass 开关。
 const TWEAK_CLASS: &str = "--tweakClass";
 
-/// 下载并安装 OptiFine。`has_forge` 决定是否沿用 Forge 提供的 launchwrapper。
+/// 下载 OptiFine 得到的产物：写版本 JSON 只需要这里的版本号。
+#[derive(Debug, Clone)]
+pub struct OptifineFiles {
+    /// `optifine:OptiFine:<version>` 里的版本部分。
+    pub library_version: String,
+    /// 从 jar 里解出的 launchwrapper 版本；有 Forge 时为 `None`。
+    pub launchwrapper: Option<String>,
+}
+
+/// 往安装图里追加 OptiFine：先并行下载 jar，再等前面的加载器合并完版本 JSON。
+///
+/// 「下载 OptiFine」只依赖版本列表与共享的 `libraries/`，因此和原版元数据、版本 jar、
+/// 资源、Forge 安装同时起跑；改版本 JSON 的节点依赖 `previous`，确保 Forge 的
+/// `mainClass` / launchwrapper 已经就位。
 #[expect(clippy::too_many_arguments)]
-pub async fn install_optifine(
-    previous: &ResolvedVersion,
+pub(crate) fn add_optifine_install(
+    builder: &mut TaskGraphBuilder,
+    step: StepId,
+    options: Arc<InstallOptions>,
+    downloads: Arc<DownloadContext>,
+    previous: Handle<ResolvedVersion>,
+    version_name: String,
+    mc_version: String,
+    optifine_version: String,
+    has_forge: bool,
+) -> Handle<ResolvedVersion> {
+    let files = builder.add(
+        step,
+        "下载 OptiFine",
+        (),
+        task_fn({
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let mc_version = mc_version.clone();
+            let optifine_version = optifine_version.clone();
+            move |_: (), ctx: TaskContext| {
+                let options = options.clone();
+                let downloads = downloads.clone();
+                let mc_version = mc_version.clone();
+                let optifine_version = optifine_version.clone();
+                async move {
+                    download_optifine(
+                        &options,
+                        &downloads,
+                        &mc_version,
+                        &optifine_version,
+                        has_forge,
+                        &ctx,
+                    )
+                    .await
+                }
+            }
+        }),
+    );
+
+    builder.add(
+        step,
+        "安装 OptiFine",
+        (previous, files),
+        task_fn({
+            let version_name = version_name.clone();
+            move |(previous, files): (Arc<ResolvedVersion>, Arc<OptifineFiles>),
+                  ctx: TaskContext| {
+                let version_name = version_name.clone();
+                async move {
+                    install_optifine(&previous, &files, &version_name, has_forge, &ctx).await
+                }
+            }
+        }),
+    )
+}
+
+/// 下载 OptiFine jar，并在没有 Forge 时解出它自带的 launchwrapper。
+///
+/// 只依赖 OptiFine 的版本列表与共享的 `libraries/` 目录，不碰版本 JSON，因此可以和
+/// 原版元数据、版本 jar、资源、Forge 安装等步骤并行。`has_forge` 决定是否沿用 Forge
+/// 提供的 launchwrapper。
+pub async fn download_optifine(
     options: &InstallOptions,
     downloads: &Arc<DownloadContext>,
-    version_name: &str,
     mc_version: &str,
     optifine_version: &str,
     has_forge: bool,
     ctx: &TaskContext,
-) -> Result<ResolvedVersion> {
+) -> Result<OptifineFiles> {
     let listing = options
         .game
         .source
@@ -97,11 +170,28 @@ pub async fn install_optifine(
         Some(version)
     };
 
+    Ok(OptifineFiles {
+        library_version,
+        launchwrapper,
+    })
+}
+
+/// 把 OptiFine 写进版本 JSON。
+///
+/// 这一步要等前面的加载器（尤其是 Forge）合并完版本 JSON，才能在它们的 `mainClass` /
+/// launchwrapper 之上追加 OptiFine 的库与 tweaker。
+pub async fn install_optifine(
+    previous: &ResolvedVersion,
+    files: &OptifineFiles,
+    version_name: &str,
+    has_forge: bool,
+    ctx: &TaskContext,
+) -> Result<ResolvedVersion> {
     let mut json = previous.json.clone();
     apply_optifine_version_json(
         &mut json,
-        &library_version,
-        launchwrapper.as_deref(),
+        &files.library_version,
+        files.launchwrapper.as_deref(),
         has_forge,
     );
     finish_version_json(&mut json, version_name, true);

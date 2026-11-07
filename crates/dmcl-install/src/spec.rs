@@ -15,7 +15,7 @@ use dmcl_task::{task_fn, Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use crate::fabric::install_fabric;
 use crate::forge::add_forge_install;
 use crate::neoforge::add_neoforge_install;
-use crate::optifine::install_optifine;
+use crate::optifine::add_optifine_install;
 use crate::options::InstallOptions;
 use crate::vanilla::download_vanilla;
 
@@ -268,7 +268,9 @@ fn finish_step() -> impl Task<(Arc<()>, Arc<ResolvedVersion>, Arc<()>), InstallO
 ///
 /// 显示上分为三步：`获取版本元数据`、`下载游戏文件`、每个加载器一个 `安装 X`。
 /// 版本 jar 与资源只依赖原版元数据，可以尽早开始；依赖库等加载器把版本 JSON 合并完
-/// 之后再下，保证 Forge / NeoForge 新增的库也在计划里。
+/// 之后再下，保证 Forge / NeoForge 新增的库也在计划里。OptiFine 的 jar 也只需要版本
+/// 列表，因此单独成一个「下载 OptiFine」节点；真正写版本 JSON 时才等前面的加载器，
+/// 这样 Forge 的 `mainClass` / launchwrapper 已经就位。
 ///
 /// 客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来
 /// 生成 patched client（`{MINECRAFT_JAR}`）。
@@ -351,38 +353,17 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
                     }),
                 )
             }
-            LoaderKind::OptiFine => {
-                let task_options = options.clone();
-                let task_downloads = downloads.clone();
-                let task_version_name = version_name.clone();
-                let task_mc_version = mc_version.clone();
-                let task_loader_version = loader_version.clone();
-                builder.add(
-                    step,
-                    label,
-                    previous.clone(),
-                    task_fn(move |version: Arc<ResolvedVersion>, ctx: TaskContext| {
-                        let options = task_options.clone();
-                        let downloads = task_downloads.clone();
-                        let version_name = task_version_name.clone();
-                        let mc_version = task_mc_version.clone();
-                        let loader_version = task_loader_version.clone();
-                        async move {
-                            install_optifine(
-                                &version,
-                                &options,
-                                &downloads,
-                                &version_name,
-                                &mc_version,
-                                &loader_version,
-                                has_forge,
-                                &ctx,
-                            )
-                            .await
-                        }
-                    }),
-                )
-            }
+            LoaderKind::OptiFine => add_optifine_install(
+                &mut builder,
+                step,
+                options.clone(),
+                downloads.clone(),
+                previous.clone(),
+                version_name,
+                mc_version,
+                loader_version,
+                has_forge,
+            ),
             LoaderKind::Forge => add_forge_install(
                 &mut builder,
                 step,

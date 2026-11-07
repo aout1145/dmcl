@@ -44,15 +44,16 @@ io.rs         安全写盘（先建父目录）
 创建版本目录          Task<(), VersionRef>
 获取并解析原版元数据   Task<Arc<VersionRef>, ResolvedVersion>
 下载版本 jar / 资源   Task<Arc<ResolvedVersion>, ()>
+下载 OptiFine         Task<(), OptifineFiles>
 每个加载器            Task<Arc<ResolvedVersion>, ResolvedVersion>
 下载依赖库            Task<Arc<ResolvedVersion>, ResolvedVersion>
 游戏文件就绪          Task<(Arc<()>, Arc<ResolvedVersion>, Arc<()>), InstallOutcome>
 ```
 
-版本 jar 与资源只依赖原版元数据，所以能最早开始；依赖库要等所有加载器把版本 JSON
-合并完，才能把 Forge / NeoForge 新增的库一起规划进去。加载器之间直接传递内存里的
-`ResolvedVersion`，合并节点写盘后把同一份结果交给下一步，避免从磁盘重读到写了一半的
-JSON。
+版本 jar 与资源只依赖原版元数据，所以能最早开始；OptiFine 的 jar 同样只依赖版本列表，
+单独成一个节点先下；依赖库要等所有加载器把版本 JSON 合并完，才能把 Forge / NeoForge
+新增的库一起规划进去。加载器之间直接传递内存里的 `ResolvedVersion`，合并节点写盘后把
+同一份结果交给下一步，避免从磁盘重读到写了一半的 JSON。
 
 客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来生成
 patched client（`{MINECRAFT_JAR}`）；因此 processor 节点会额外依赖「下载版本 jar」。
@@ -94,13 +95,16 @@ Forge / NeoForge 的安装拆成「下载安装器 → 解析安装器 → 解�
 
 ### OptiFine
 
-OptiFine 不是独立加载器，而是叠加在原版或 Forge 上的 tweaker（`loader/optifine.rs`）：
+OptiFine 不是独立加载器，而是叠加在原版或 Forge 上的 tweaker（`loader/optifine.rs`），
+拆成「下载 OptiFine」与「安装 OptiFine」两个节点：
 
-1. 按调用者给的 OptiFine 版本，从 bmclapi 的列表里找到 `type` / `patch` 并下载 jar；
+1. 「下载 OptiFine」按调用者给的 OptiFine 版本，从 bmclapi 的列表里找到 `type` / `patch`
+   并下载 jar；这一步只依赖版本列表，可以和元数据 / 版本 jar / 资源 / Forge 安装并行；
 2. 把 jar 放到 `libraries/optifine/OptiFine/<mc>_<type>_<patch>/`；
 3. **没有 Forge** 时，从 jar 的 `launchwrapper-of.txt`（或 `launchwrapper-of-*.jar` 条目名）
    读出版本，把内嵌的 launchwrapper 解到 `libraries/net/minecraft/launchwrapper/of-<version>/`；
-4. 版本 JSON 里加 `optifine:OptiFine:…`（以及没有 Forge 时的 `net.minecraft:launchwrapper:of-…`）；
+4. 「安装 OptiFine」等前面的加载器（尤其是 Forge）合并完版本 JSON 后，加
+   `optifine:OptiFine:…`（以及没有 Forge 时的 `net.minecraft:launchwrapper:of-…`）；
 5. **没有 Forge** 时把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch` 并追加
    `--tweakClass optifine.OptiFineTweaker`；**有 Forge** 时保持 Forge 的 `mainClass` 与
    launchwrapper 不动，只追加 `--tweakClass optifine.OptiFineForgeTweaker`。
