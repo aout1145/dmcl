@@ -1,7 +1,8 @@
 //! 任务卡片的状态与进度归约（纯逻辑，可单测）。
 //!
-//! 图的 Step 是静态的：`GraphStarted` 一次性带出全部 Step，之后只按任务事件累计
-//! 每个 Step 的等待 / 执行 / 完成计数；全局进度只有 `downloaded / total`。
+//! 图的 Step 是静态的：`GraphStarted` 一次性带出全部 Step，之后按任务事件累计每个 Step
+//! 的等待 / 执行 / 完成计数，并记录每个任务的名字与状态（展开 Step 时显示）；
+//! 全局进度只有 `downloaded / total`。
 
 use dmcl_task::{human_bytes, StepDef, TaskEvent, TaskRef};
 
@@ -36,6 +37,102 @@ impl StepCounts {
     }
 }
 
+/// 一个任务在展开的 Step 里的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TaskItemStatus {
+    Waiting,
+    Running,
+    Done,
+    Failed,
+    /// 依赖失败 / 全局取消，没有执行。
+    Skipped,
+}
+
+/// 一个任务在展开的 Step 里的一行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskItemView {
+    pub name: String,
+    pub status: TaskItemStatus,
+}
+
+impl TaskItemView {
+    pub fn status_text(&self) -> &'static str {
+        match self.status {
+            TaskItemStatus::Waiting => "等待中",
+            TaskItemStatus::Running => "运行中",
+            TaskItemStatus::Done => "完成",
+            TaskItemStatus::Failed => "失败",
+            TaskItemStatus::Skipped => "未执行",
+        }
+    }
+
+    /// 状态文字的样式：`caption` 加上按状态区分的颜色。
+    pub fn status_classes(&self) -> Vec<&'static str> {
+        let mut classes = vec!["caption"];
+        classes.extend(match self.status {
+            TaskItemStatus::Done => vec!["success"],
+            TaskItemStatus::Running => vec!["accent"],
+            TaskItemStatus::Waiting | TaskItemStatus::Skipped => vec!["dim-label"],
+            TaskItemStatus::Failed => vec!["error"],
+        });
+        classes
+    }
+}
+
+/// 内部跟踪的任务：身份用于去重，状态用于显示。
+#[derive(Debug, Clone)]
+struct TrackedTask {
+    task: TaskRef,
+    status: TaskItemStatus,
+}
+
+/// 展开 Step 时最多渲染的任务行数。下载会为每个文件创建节点，几千行会拖垮 UI；
+/// 其余任务只在底部显示数量。
+const MAX_VISIBLE_TASKS: usize = 50;
+
+/// 任务行的显示优先级：正在进行的排最前，其次是等待中，其余（完成 / 失败 / 未执行）排最后。
+fn status_rank(status: TaskItemStatus) -> u8 {
+    match status {
+        TaskItemStatus::Running => 0,
+        TaskItemStatus::Waiting => 1,
+        TaskItemStatus::Done | TaskItemStatus::Failed | TaskItemStatus::Skipped => 2,
+    }
+}
+
+/// 按优先级挑出最多 `limit` 个任务下标；同一优先级内保持加入顺序。
+fn visible_indices(statuses: &[TaskItemStatus], limit: usize) -> Vec<usize> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut indices = Vec::with_capacity(limit.min(statuses.len()));
+    for rank in 0..=2 {
+        for (index, status) in statuses.iter().enumerate() {
+            if status_rank(*status) == rank {
+                indices.push(index);
+                if indices.len() == limit {
+                    return indices;
+                }
+            }
+        }
+    }
+    indices
+}
+
+/// 生成展开区要显示的任务快照与未显示数量。
+fn visible_tasks(tracked: &[TrackedTask]) -> (Vec<TaskItemView>, u64) {
+    let statuses: Vec<_> = tracked.iter().map(|item| item.status).collect();
+    let indices = visible_indices(&statuses, MAX_VISIBLE_TASKS);
+    let hidden = (tracked.len() - indices.len()) as u64;
+    let tasks = indices
+        .into_iter()
+        .map(|index| TaskItemView {
+            name: tracked[index].task.name().to_string(),
+            status: tracked[index].status,
+        })
+        .collect();
+    (tasks, hidden)
+}
+
 /// 一个 Step 在界面上的一行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StepView {
@@ -47,6 +144,10 @@ pub(crate) struct StepView {
     pub completed: u64,
     pub failed: u64,
     pub skipped: u64,
+    /// 展开时显示的任务明细：运行中 → 等待中 → 其余，最多 [`MAX_VISIBLE_TASKS`] 条。
+    pub tasks: Vec<TaskItemView>,
+    /// 因为超过上限而没有放进 `tasks` 的任务数。
+    pub hidden_tasks: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +161,14 @@ pub(crate) enum StepDisplayStatus {
 }
 
 impl StepView {
-    fn new(number: usize, name: String, counts: StepCounts, finished: bool) -> Self {
+    fn new(
+        number: usize,
+        name: String,
+        counts: StepCounts,
+        tasks: Vec<TaskItemView>,
+        hidden_tasks: u64,
+        finished: bool,
+    ) -> Self {
         // 取消 / 失败会让调度器立刻把未开始的节点标成 Skipped，但正在跑的节点还要收尾；
         // 图真正结束前先按「等待中」显示，避免一点取消就把这些 Step 标成「未完成」。
         let incomplete = counts.waiting > 0 || counts.skipped > 0 || counts.total() == 0;
@@ -86,6 +194,8 @@ impl StepView {
             completed: counts.completed,
             failed: counts.failed,
             skipped: counts.skipped,
+            tasks,
+            hidden_tasks,
         }
     }
 
@@ -125,6 +235,13 @@ impl StepView {
         }
     }
 
+    /// 右侧计数的样式：`caption` 控制字号，再叠加与状态图标一致的颜色。
+    pub fn counts_classes(&self) -> Vec<&'static str> {
+        let mut classes = vec!["caption"];
+        classes.extend(self.icon_classes());
+        classes
+    }
+
     pub fn counts_text(&self) -> String {
         let total = self.total();
         let mut text = match self.status {
@@ -152,6 +269,8 @@ pub(crate) struct TaskState {
     pub name: String,
     steps: Vec<StepDef>,
     counts: Vec<StepCounts>,
+    /// 与 `steps` 对齐的任务明细，展开 Step 时显示。
+    tasks: Vec<Vec<TrackedTask>>,
     pub downloaded: u64,
     pub total: u64,
     pub logs: Vec<String>,
@@ -165,6 +284,7 @@ impl TaskState {
             name: name.into(),
             steps: Vec::new(),
             counts: Vec::new(),
+            tasks: Vec::new(),
             downloaded: 0,
             total: 0,
             logs: Vec::new(),
@@ -179,19 +299,25 @@ impl TaskState {
             TaskEvent::GraphStarted { steps, .. } => {
                 self.steps = steps.clone();
                 self.counts = vec![StepCounts::default(); steps.len()];
+                self.tasks = vec![Vec::new(); steps.len()];
                 self.downloaded = 0;
                 self.total = 0;
             }
-            TaskEvent::TaskAdded { task } => self.counts_mut(task).waiting += 1,
+            TaskEvent::TaskAdded { task } => {
+                self.counts_mut(task).waiting += 1;
+                self.record(task, TaskItemStatus::Waiting);
+            }
             TaskEvent::TaskStarted { task } => {
                 let counts = self.counts_mut(task);
                 counts.waiting = counts.waiting.saturating_sub(1);
                 counts.running += 1;
+                self.record(task, TaskItemStatus::Running);
             }
             TaskEvent::TaskFinished { task } => {
                 let counts = self.counts_mut(task);
                 counts.running = counts.running.saturating_sub(1);
                 counts.completed += 1;
+                self.record(task, TaskItemStatus::Done);
             }
             TaskEvent::TaskFailed { task } => {
                 let counts = self.counts_mut(task);
@@ -201,12 +327,14 @@ impl TaskState {
                 if self.status != TaskStatus::Canceling {
                     self.status = TaskStatus::Failed;
                 }
+                self.record(task, TaskItemStatus::Failed);
             }
             TaskEvent::TaskSkipped { task } => {
                 let counts = self.counts_mut(task);
                 counts.waiting = counts.waiting.saturating_sub(1);
                 // 从未启动的任务不算完成，只记为「未执行」。
                 counts.skipped += 1;
+                self.record(task, TaskItemStatus::Skipped);
             }
             TaskEvent::Progress { downloaded, total } => {
                 self.downloaded = *downloaded;
@@ -228,6 +356,26 @@ impl TaskState {
             self.counts.resize(index + 1, StepCounts::default());
         }
         &mut self.counts[index]
+    }
+
+    /// 记录 / 更新一个任务的显示状态。
+    fn record(&mut self, task: &TaskRef, status: TaskItemStatus) {
+        let index = self
+            .steps
+            .iter()
+            .position(|step| step.id == task.step())
+            .unwrap_or(0);
+        if self.tasks.len() <= index {
+            self.tasks.resize_with(index + 1, Vec::new);
+        }
+        let tasks = &mut self.tasks[index];
+        match tasks.iter_mut().find(|tracked| tracked.task == *task) {
+            Some(tracked) => tracked.status = status,
+            None => tasks.push(TrackedTask {
+                task: task.clone(),
+                status,
+            }),
+        }
     }
 
     /// 请求取消：正在运行时进入「取消中」。
@@ -309,7 +457,16 @@ impl TaskState {
             .enumerate()
             .map(|(index, step)| {
                 let counts = self.counts.get(index).copied().unwrap_or_default();
-                StepView::new(index + 1, step.name.clone(), counts, finished)
+                let tracked = self.tasks.get(index).map(Vec::as_slice).unwrap_or(&[]);
+                let (tasks, hidden_tasks) = visible_tasks(tracked);
+                StepView::new(
+                    index + 1,
+                    step.name.clone(),
+                    counts,
+                    tasks,
+                    hidden_tasks,
+                    finished,
+                )
             })
             .collect()
     }
@@ -350,8 +507,55 @@ mod tests {
             state.apply(event);
         }
         assert!(!state.tasks_remaining());
-        assert_eq!(state.step_views().len(), 1);
-        assert_eq!(state.step_views()[0].status, StepDisplayStatus::Done);
+        let views = state.step_views();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].status, StepDisplayStatus::Done);
+
+        // 每个任务的名字与最终状态都保留下来，供展开 Step 时显示。
+        let tasks = &views[0].tasks;
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].name, "一");
+        assert_eq!(tasks[0].status, TaskItemStatus::Done);
+        assert_eq!(tasks[1].name, "二");
+        assert_eq!(tasks[1].status, TaskItemStatus::Done);
+    }
+
+    #[test]
+    fn task_items_render_each_state() {
+        let item = |status| TaskItemView {
+            name: "下载".into(),
+            status,
+        };
+        assert_eq!(item(TaskItemStatus::Waiting).status_text(), "等待中");
+        assert_eq!(item(TaskItemStatus::Running).status_text(), "运行中");
+        assert_eq!(item(TaskItemStatus::Done).status_text(), "完成");
+        assert_eq!(item(TaskItemStatus::Failed).status_text(), "失败");
+        assert_eq!(item(TaskItemStatus::Skipped).status_text(), "未执行");
+        assert_eq!(
+            item(TaskItemStatus::Failed).status_classes(),
+            vec!["caption", "error"]
+        );
+    }
+
+    #[test]
+    fn visible_tasks_put_running_then_waiting_then_finished_first() {
+        use TaskItemStatus::*;
+        let statuses = [
+            Done, Waiting, Running, Skipped, Done, Waiting, Running, Failed,
+        ];
+        assert_eq!(visible_indices(&statuses, 4), vec![2, 6, 1, 5]);
+        assert_eq!(
+            visible_indices(&statuses, 100),
+            vec![2, 6, 1, 5, 0, 3, 4, 7]
+        );
+        assert!(visible_indices(&statuses, 0).is_empty());
+
+        // 运行中的任务不会因为有大量已完成任务而被截掉。
+        let mut many = vec![Done; MAX_VISIBLE_TASKS];
+        many[MAX_VISIBLE_TASKS - 1] = Running;
+        let picked = visible_indices(&many, 5);
+        assert_eq!(picked.len(), 5);
+        assert_eq!(picked[0], MAX_VISIBLE_TASKS - 1);
     }
 
     #[test]
@@ -401,6 +605,8 @@ mod tests {
                 completed: 12,
                 ..Default::default()
             },
+            Vec::new(),
+            0,
             false,
         );
         assert_eq!(done.icon_name(), "object-select-symbolic");
@@ -416,6 +622,8 @@ mod tests {
                 completed: 4,
                 ..Default::default()
             },
+            Vec::new(),
+            0,
             false,
         );
         assert_eq!(running.icon_name(), "content-loading-symbolic");
@@ -428,6 +636,8 @@ mod tests {
                 waiting: 2,
                 ..Default::default()
             },
+            Vec::new(),
+            0,
             false,
         );
         assert_eq!(waiting.icon_name(), "radio-symbolic");
@@ -437,7 +647,7 @@ mod tests {
     #[test]
     fn step_rows_render_skipped_tasks_as_not_run() {
         // 全部任务都没执行，或根本没有任务。
-        let untouched = StepView::new(2, "安装".into(), StepCounts::default(), true);
+        let untouched = StepView::new(2, "安装".into(), StepCounts::default(), Vec::new(), 0, true);
         assert_eq!(untouched.status, StepDisplayStatus::Incomplete);
         assert_eq!(untouched.icon_name(), "radio-symbolic");
         assert_eq!(untouched.counts_text(), "未执行");
@@ -451,6 +661,8 @@ mod tests {
                 skipped: 1,
                 ..Default::default()
             },
+            Vec::new(),
+            0,
             true,
         );
         assert_eq!(partial.status, StepDisplayStatus::Incomplete);
@@ -466,6 +678,8 @@ mod tests {
                 skipped: 1,
                 ..Default::default()
             },
+            Vec::new(),
+            0,
             true,
         );
         assert_eq!(failed.status, StepDisplayStatus::Failed);
@@ -480,11 +694,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            StepView::new(1, "安装".into(), untouched, false).status,
+            StepView::new(1, "安装".into(), untouched, Vec::new(), 0, false).status,
             StepDisplayStatus::Waiting
         );
         assert_eq!(
-            StepView::new(1, "安装".into(), untouched, true).status,
+            StepView::new(1, "安装".into(), untouched, Vec::new(), 0, true).status,
             StepDisplayStatus::Incomplete
         );
 
@@ -494,11 +708,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            StepView::new(1, "下载".into(), partial, false).status,
+            StepView::new(1, "下载".into(), partial, Vec::new(), 0, false).status,
             StepDisplayStatus::Waiting
         );
         assert_eq!(
-            StepView::new(1, "下载".into(), partial, true).status,
+            StepView::new(1, "下载".into(), partial, Vec::new(), 0, true).status,
             StepDisplayStatus::Incomplete
         );
     }

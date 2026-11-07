@@ -1,4 +1,5 @@
-//! 单个任务卡片（工厂组件）：任务名、进度（运行中）或结果（已完成 / 失败）、可展开日志。
+//! 单个任务卡片（工厂组件）：任务名、进度（运行中）或结果（已完成 / 失败）、可展开的
+//! 步骤明细与日志。
 //!
 //! 卡片的状态全在 [`TaskCard`] 里，视图用 `view!` 声明、`#[watch]` 刷新；父组件直接改模型
 //! 并让工厂重新渲染。日志用 `GtkTextView` 只追加新行，展开时滚到最后一行；不确定进度条
@@ -15,14 +16,15 @@ use relm4::prelude::*;
 
 use dmcl_task::TaskEvent;
 
-use super::step_row::StepRow;
+use super::step_row::{StepRow, StepRowMsg};
 use super::task_view::{StepView, TaskState, TaskStatus};
 
 /// 任务卡片日志区的样式（全局 CSS）：边框 + 比正文更小的日志字体。
 pub(crate) const CSS: &str = "\
 .dmcl-task-log { border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 6px; }
 .dmcl-task-log-text { font-size: 0.8em; }
-.dmcl-step-title { font-size: 0.88em; }";
+.dmcl-step-header { font-weight: normal; }
+.dmcl-step-title { font-size: 0.88em; font-weight: normal; }";
 
 /// 卡片发给任务对话框的消息。
 #[derive(Debug)]
@@ -112,6 +114,7 @@ impl FactoryComponent for TaskCard {
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
                         set_spacing: 2,
+                        set_margin_top: 6,
                     },
 
                     gtk::Label {
@@ -272,16 +275,18 @@ impl FactoryComponent for TaskCard {
         let views = self.state.step_views();
         if *self.step_snapshot.borrow() != views {
             if let Some(factory) = self.steps.borrow_mut().as_mut() {
-                let mut guard = factory.guard();
-                while guard.len() > views.len() {
-                    guard.pop_back();
-                }
-                for (index, view) in views.iter().cloned().enumerate() {
-                    if let Some(row) = guard.get_mut(index) {
-                        *row = StepRow::new(view);
-                    } else {
+                {
+                    let mut guard = factory.guard();
+                    while guard.len() > views.len() {
+                        guard.pop_back();
+                    }
+                    for view in views[guard.len()..].iter().cloned() {
                         guard.push_back(view);
                     }
+                }
+                // Step 行用消息更新，保留用户点击出来的展开状态。
+                for (index, view) in views.iter().cloned().enumerate() {
+                    factory.send(index, StepRowMsg::View(view));
                 }
             }
             *self.step_snapshot.borrow_mut() = views;

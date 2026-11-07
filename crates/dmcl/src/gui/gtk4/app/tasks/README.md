@@ -30,16 +30,27 @@ app 层见 [app/README.md](../README.md)，整体架构见
 卡片从上到下：
 
 1. 状态图标 + 任务名 + 右上角的叉；
-2. 每个 Step 一行：状态图标（`object-select` / `content-loading` / `radio` /
-   `dialog-error`）+「步骤 N 名称」+ 右侧计数（`12/12 完成` / `5/8 运行中` /
-   `等待中` / `未执行` / 失败数）；所有 Step 同时列出；
+2. 每个 Step 一行，**点击标题展开**：状态图标（`object-select` / `content-loading` /
+   `radio` / `dialog-error`）+「步骤 N 名称」+ 右侧计数（`12/12 完成` / `5/8 运行中` /
+   `等待中` / `未执行` / 失败数）+ **最右侧的展开箭头**；所有 Step 同时列出。展开后是
+   该 Step 下的任务：任务名 + 状态文字（等待中 / 运行中 / 完成 / 失败 / 未执行）。
+   展开区最多 240px 高，任务多时内部滚动；
 3. 分隔线；
 4. 单独一行的全局进度条（占满整行）；
 5. 日志展开控件：左侧箭头 + 右侧「已下载 / 总字节」；
 6. 展开后的日志区。
 
-Step 行用嵌套的 `FactoryVecDeque<StepRow>`，只在计数变化时更新；纯进度事件不会重画
-整块列表。
+Step 默认折叠，展开 / 收起完全由用户点击决定；运行中、失败、取消都不会自动展开。
+Step 行用嵌套的 `FactoryVecDeque<StepRow>`，任务明细再用一层
+`FactoryVecDeque<TaskRow>`。标题是扁平按钮，展开区是 `GtkRevealer`；`StepRowMsg::Toggle`
+切换行模型里的 `expanded`，`StepRowMsg::View` 只更新 Step 快照。因为更新不替换整行，
+计数变化不会丢掉用户已经展开的状态；纯进度事件仍然不会重画整块列表。
+
+**行数上限与排序**：下载会为每个文件创建一个节点，整个安装可能产生几千个任务，全部
+渲染会直接卡死 UI。因此折叠的 Step **不创建任务行**；展开时最多渲染 50 条
+（`task_view::MAX_VISIBLE_TASKS`），排序固定为 **运行中 → 等待中 → 其余（完成 / 失败 /
+未执行）**，同一优先级内保持加入顺序；超出上限的任务在滚动内容的最末尾显示
+「还有 N 个任务未显示」，滚到最底下才看得到。
 
 状态机：
 
@@ -57,7 +68,8 @@ Step 行用嵌套的 `FactoryVecDeque<StepRow>`，只在计数变化时更新；
 ## 进度还原
 
 `GraphStarted` 一次性带出全部静态 Step；之后 `TaskAdded / TaskStarted / TaskFinished /
-TaskFailed / TaskSkipped` 分别维护每个 Step 的等待 / 执行 / 完成 / 失败 / 未执行计数。
+TaskFailed / TaskSkipped` 分别维护每个 Step 的等待 / 执行 / 完成 / 失败 / 未执行计数，
+同时按任务身份记录名字与状态，供展开 Step 时显示。
 失败仍计入「完成」并额外记录失败数；`TaskSkipped`（取消 / FailFast 时还没启动的任务）
 **不计入完成**，而是记为「未执行」。
 
@@ -103,7 +115,8 @@ pulse 定时器由卡片的 `post_view` 按需启停，状态变化后不会留�
 | --- | --- | --- |
 | `TaskMsg` | `message.rs` | `Open` / `Start` / `Event` / `Finished { id, ok, cancelled, error }` / `CloseCard` / `Closed` / `CloseMain` / `CancelAllAndQuit` |
 | `TaskCenterOut` | `mod.rs` | `RunningCount(n)`：当前未结束任务数，给标题栏角标；`Quit`：根组件可以销毁主窗口了 |
-| `StepRow` | `step_row.rs` | 单个 Step 行：状态图标、名称、计数 |
+| `StepRow` / `StepRowMsg` | `step_row.rs` | 可展开的 Step 行：状态图标、名称、计数、右侧箭头，展开后是任务明细；`Toggle` 切换展开，`View` 更新 Step 快照 |
+| `TaskRow` | `task_row.rs` | 展开后的单个任务行：任务名、状态文字 |
 | `CardMsg` | `task_card.rs` | 日志区展开状态变化 |
 | `CardOut` | `task_card.rs` | `Close(DynamicIndex)`：点卡片右上角的叉 |
 

@@ -7,6 +7,7 @@ mod confirm;
 pub(crate) mod message;
 mod step_row;
 mod task_card;
+mod task_row;
 mod task_view;
 
 use std::collections::HashMap;
