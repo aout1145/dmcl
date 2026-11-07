@@ -102,20 +102,22 @@ monitor.wait().await?;
 
 ### 一站式启动链
 
-`launch_chain(option, game, jre)` 组成 `TaskGraph<GameMonitor>`：
+`launch_chain(option, game, jre)` 显示为三个 Step，组成 `TaskGraph<GameMonitor>`：
 
-1. **读取版本** —— `resolve_version` 解析版本 JSON（含一层 `inheritsFrom`）；
-2. **检查并补全文件** —— `dmcl_game::check_integrity`；缺件时 `ensure_files`，产出
-   `ResolvedVersion`；
-3. **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动
-   安装时下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时先等用户确认；
-4. **解压 natives** —— 依赖已解析的版本与已选 Java，按当前平台的 os 与 Java 的 arch 跑
-   `dmcl_game::ensure_natives`（下载 + 解压到 `natives_dir`，即
-   `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
-5. **登录** —— 等文件补全和 natives 都完成后，让 `AccountSource` 产出可用会话，失败就中止；
-6. **生成启动参数** —— 同时依赖账户与选好的 Java，只在两者都就绪后才拼；
-7. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
-   还是中途停掉。
+1. **检查游戏完整性**
+   - **读取版本** —— `resolve_version` 解析版本 JSON（含一层 `inheritsFrom`）；
+   - **检查并补全文件** —— `dmcl_game::check_integrity`；缺件时 `ensure_files`，产出
+     `ResolvedVersion`；
+   - **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动
+     安装时下载 Mojang 的 JRE 并探测；版本 / 架构仍不匹配时先等用户确认；
+   - **解压 natives** —— 依赖已解析的版本与已选 Java，按当前平台的 os 与 Java 的 arch 跑
+     `dmcl_game::ensure_natives`（下载 + 解压到 `natives_dir`，即
+     `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
+2. **登录** —— 等文件补全和 natives 都完成后，让 `AccountSource` 产出可用会话，失败就中止；
+3. **启动**
+   - **生成启动参数** —— 同时依赖账户与选好的 Java，只在两者都就绪后才拼；
+   - **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
+     还是中途停掉。
 
 读取版本后，检查文件与选 Java 并行；natives 同时需要版本与 Java，因此接在两者之后。登录
 刻意等到文件补全与 natives 都结束，避免在线会话在长时间下载中过期；参数只在文件齐备、

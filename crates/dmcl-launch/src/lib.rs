@@ -9,10 +9,10 @@
 //!    窗口尺寸、内存设置等全部通过 [`LaunchOption`] 由调用者传入；内存可以留空，
 //!    由 [`resolve_memory`] 按系统可用内存与所选 Java 的架构自动决定。
 //!
-//! 一站式启动把「读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 →
-//! 启动」组成一张任务图（见 [`crate::prepare`]）：[`launch_chain`] 返回
-//! `TaskGraph<GameMonitor>`，由调用者运行、订阅事件，并在拿到**未 wait** 的
-//! [`GameMonitor`] 后决定何时等待或停掉。
+//! 一站式启动把「检查游戏完整性 → 登录 → 启动」组成一张任务图（见 [`crate::prepare`]）：
+//! 检查游戏完整性里依次是读取版本、检查并补全文件 / 选择 Java、解压 natives；启动里是
+//! 生成参数与起子进程。[`launch_chain`] 返回 `TaskGraph<GameMonitor>`，由调用者运行、
+//! 订阅事件，并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
 //!
 //! [`Account`] 是登录完成后用来拼命令行的只读快照；[`AccountSource`] 负责 `login` /
 //! `refresh`。登录节点等文件补全与 natives 都结束才开始，避免在线会话在长时间下载中过期。
@@ -36,7 +36,7 @@
 //!     None,
 //! );
 //!
-//! // 读取版本 → 检查完整性 / 选 Java → 解压 natives → 登录 → 生成参数 → 启动子进程
+//! // 检查游戏完整性 → 登录 → 启动
 //! let monitor = launch_chain(option, game, None)
 //!     .run(|event| println!("{event}"))
 //!     .await?;

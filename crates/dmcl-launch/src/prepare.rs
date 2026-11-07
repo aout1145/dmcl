@@ -15,9 +15,10 @@
 //! * [`LaunchTask`]（`Task<Arc<PreparedLaunch>, GameMonitor>`）——用已生成的参数启动子进程，
 //!   产出**未 wait** 的 [`GameMonitor`]。
 //!
-//! [`launch_chain`] 把它们组成 `TaskGraph<GameMonitor>`：读取版本后，检查文件与选 Java
-//! 并行；natives 依赖两者；登录等文件补全和 natives 都结束才开始，避免会话在长时间下载中
-//! 过期；生成参数依赖账户与选好的 Java，启动是唯一的最终节点。
+//! [`launch_chain`] 把它们组成 `TaskGraph<GameMonitor>`，显示为「检查游戏完整性 → 登录 →
+//! 启动」三步：读取版本后，检查文件与选 Java 并行；natives 依赖两者；登录等文件补全和
+//! natives 都结束才开始，避免会话在长时间下载中过期；生成参数依赖账户与选好的 Java，
+//! 启动是唯一的最终节点。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -342,11 +343,11 @@ impl Task<Arc<PreparedLaunch>, GameMonitor> for LaunchTask {
     }
 }
 
-/// 组装「读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动」任务图。
+/// 组装「检查游戏完整性 → 登录 → 启动」任务图。
 ///
-/// 读取版本后，检查文件与选 Java 并行；natives 同时依赖版本与 Java；登录等文件补全和
-/// natives 都完成；生成参数同时依赖账户与选好的 java；最终节点「启动游戏」返回
-/// `GameMonitor`。
+/// 检查游戏完整性里，读取版本后检查文件与选 Java 并行，natives 同时依赖版本与 Java；
+/// 登录等文件补全和 natives 都完成；启动里生成参数同时依赖账户与选好的 java，最终节点
+/// 「启动游戏」返回 `GameMonitor`。
 pub fn launch_chain(
     option: LaunchOption,
     game: Arc<GameFilesOptions>,
@@ -357,29 +358,31 @@ pub fn launch_chain(
 
     let mut builder = TaskGraphBuilder::new("启动");
     let downloads = game.download_context(builder.progress());
-    let prepare = builder.step("准备");
+    let integrity = builder.step("检查游戏完整性");
 
-    let read = builder.add(prepare, "读取版本", (), ReadVersionTask::new(version));
+    let read = builder.add(integrity, "读取版本", (), ReadVersionTask::new(version));
     let files = builder.add(
-        prepare,
+        integrity,
         "检查并补全文件",
         read.clone(),
         PrepareLaunchFilesTask::new(game.clone(), downloads.clone()),
     );
     let java = builder.add(
-        prepare,
+        integrity,
         "选择 Java",
         read.clone(),
         SelectJavaTask::new(option.clone(), game.clone(), downloads.clone(), jre),
     );
     let natives = builder.add(
-        prepare,
+        integrity,
         "解压 natives",
         (read, java.clone()),
         PrepareNativesTask::new(game, downloads),
     );
+
+    let login_step = builder.step("登录");
     let account = builder.add(
-        prepare,
+        login_step,
         "登录",
         (files, natives),
         LoginTask::new(account_source),
