@@ -118,7 +118,7 @@ impl DownloadContext {
         ctx.log(format!("待下载 {} 个文件", missing.len()));
         let mut handles = Vec::with_capacity(missing.len());
         for item in missing {
-            let name = item.name.clone();
+            let name = format!("下载 {}", item.name);
             handles.push(ctx.add_task(step, name, (), self.task(item))?);
         }
         Ok(handles)

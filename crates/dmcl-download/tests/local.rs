@@ -404,7 +404,10 @@ async fn precheck_skips_complete_files_and_does_not_count_them_in_total() {
         })
         .collect();
     assert_eq!(added.len(), 2, "静态准备节点 + 1 个动态文件任务");
-    assert!(added.iter().any(|name| name == "missing.bin"), "{added:?}");
+    assert!(
+        added.iter().any(|name| name == "下载 missing.bin"),
+        "{added:?}"
+    );
     assert!(
         !added.iter().any(|name| name == "existing.bin"),
         "{added:?}"
@@ -473,7 +476,7 @@ async fn a_failed_file_fails_the_graph() {
     assert!(!dir.join("missing.bin.part").exists());
     assert!(
         events.iter().any(
-            |event| matches!(event, TaskEvent::TaskFailed { task } if task.name() == "missing.bin")
+            |event| matches!(event, TaskEvent::TaskFailed { task } if task.name() == "下载 missing.bin")
         ),
         "{events:?}"
     );

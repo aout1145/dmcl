@@ -20,7 +20,7 @@ hash.rs     Checksum / HashAlgorithm，以及 file_ok / files_ok / files_ok_with
 | 关注点       | 做法                                                                                                                                 |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
 | 文件任务     | `DownloadContext::task(item)` 返回一个 `Task<(), ()>`；失败直接返回错误，由 DAG FailFast 处理                                        |
-| 准备节点     | `DownloadContext::prepare(ctx, step, items)`：预检 → `add_total` → `ctx.add_task` 动态创建文件任务；返回文件句柄，需要读文件时可 `wait` |
+| 准备节点     | `DownloadContext::prepare(ctx, step, items)`：预检 → `add_total` → `ctx.add_task` 动态创建文件任务（任务名为「下载 <文件名>」）；返回文件句柄，需要读文件时可 `wait` |
 | 三层并发     | `max_active_files`（文件）→ `max_connections`（HTTP / 分块）→ `max_workers`（预检 / 校验）；获取顺序固定                              |
 | 大文件分块   | 已知大小且超过阈值时，先发 `bytes=0-0` 探针确认 `Range`；每块占一个全局连接许可，单文件可占满全部连接                                  |
 | 不支持 Range | 自动退回单连接                                                                                                                       |
