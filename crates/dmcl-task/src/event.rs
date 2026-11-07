@@ -1,105 +1,173 @@
-//! 进度事件流。
+//! 任务图对外的事件与任务引用。
 
 use std::fmt;
+use std::sync::Arc;
 
-use crate::progress::Progress;
+use crate::graph::{StepDef, StepId};
 use crate::warning::WarningDecision;
 
-/// 任务链在运行过程中向订阅者推送的事件。
+/// 一个任务节点在某一时刻的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TaskStatus {
+    /// 已加入图，等待依赖完成。
+    Waiting,
+    /// 正在执行（包括等待动态子节点 / 警告答复）。
+    Running,
+    /// 成功完成。
+    Finished,
+    /// 失败或被取消。
+    Failed,
+    /// 依赖失败 / 全局取消，没有开始执行。
+    Skipped,
+}
+
+impl TaskStatus {
+    pub(crate) fn as_u8(self) -> u8 {
+        match self {
+            TaskStatus::Waiting => 0,
+            TaskStatus::Running => 1,
+            TaskStatus::Finished => 2,
+            TaskStatus::Failed => 3,
+            TaskStatus::Skipped => 4,
+        }
+    }
+
+    pub(crate) fn from_u8(value: u8) -> Self {
+        match value {
+            1 => TaskStatus::Running,
+            2 => TaskStatus::Finished,
+            3 => TaskStatus::Failed,
+            4 => TaskStatus::Skipped,
+            _ => TaskStatus::Waiting,
+        }
+    }
+}
+
+/// 事件里对某个任务节点的引用。
 ///
-/// 事件是**只进不退**的单向流：链运行结束后发送方被丢弃，订阅者的 `recv()` 会返回
-/// `Err`，循环自然结束。失败时先发一条 [`TaskEvent::Failed`] 再结束（链本身的错误
-/// 仍由 `run()` 的返回值给出）。
+/// 内部带一个图内唯一的序号用于 `Hash` / `Debug`，但它不是公开的节点 ID：外部只能
+/// 通过 [`TaskRef::step`] / [`TaskRef::name`] / [`TaskRef::status`] 使用它。
+#[derive(Clone)]
+pub struct TaskRef {
+    id: usize,
+    step: StepId,
+    name: Arc<str>,
+    status: TaskStatus,
+}
+
+impl TaskRef {
+    pub(crate) fn new(id: usize, step: StepId, name: Arc<str>, status: TaskStatus) -> Self {
+        Self {
+            id,
+            step,
+            name,
+            status,
+        }
+    }
+
+    /// 所属的显示步骤。
+    pub fn step(&self) -> StepId {
+        self.step
+    }
+
+    /// 显示名。
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// 事件发生时的状态。
+    pub fn status(&self) -> TaskStatus {
+        self.status
+    }
+}
+
+impl fmt::Debug for TaskRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskRef")
+            .field("id", &self.id)
+            .field("step", &self.step)
+            .field("name", &self.name)
+            .field("status", &self.status)
+            .finish()
+    }
+}
+
+impl fmt::Display for TaskRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+impl PartialEq for TaskRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for TaskRef {}
+
+impl std::hash::Hash for TaskRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+/// 任务图运行过程中向订阅者推送的事件。
+///
+/// 事件是**只进不退**的单向流：图结束后事件总线关闭，订阅者排空事件后
+/// [`crate::EventReceiver::recv`] 返回 `None`。
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
-    /// 整条链开始运行。
-    Started { name: String, steps: usize },
-    /// 第 `step` 个步骤开始。
-    StepStarted {
-        step: usize,
-        steps: usize,
-        name: String,
-    },
-    /// 第 `step` 个步骤的一条**日志**：一次性的文字说明。
-    ///
-    /// 前端应把它当成"一行输出"逐条打印，**不要**像进度那样原地覆盖（例如命令行的
-    /// 每一行输出、缺件清单的每一条）。同一步骤可以发很多条。
+    /// 图开始运行，一次性带出全部静态 Step。
+    GraphStarted { name: String, steps: Vec<StepDef> },
+
+    /// 一个节点已加入图（初始为等待中）。
+    TaskAdded { task: TaskRef },
+    /// 一个节点开始执行。
+    TaskStarted { task: TaskRef },
+    /// 一个节点成功完成。
+    TaskFinished { task: TaskRef },
+    /// 一个节点失败或被取消。
+    TaskFailed { task: TaskRef },
+    /// 一个节点依赖失败 / 全局取消，没有执行。
+    TaskSkipped { task: TaskRef },
+
+    /// 全局下载进度快照。
+    Progress { downloaded: u64, total: u64 },
+
+    /// 一条一次性日志。
     Log {
-        step: usize,
-        steps: usize,
-        name: String,
+        task: Option<TaskRef>,
         message: String,
     },
-    /// 第 `step` 个步骤的**进度**：带工作量的、可原地刷新的进度（同一个位置反复更新）。
-    Progress {
-        step: usize,
-        steps: usize,
-        name: String,
-        progress: Progress,
-    },
-    /// 一条需要前端决策的**警告**：任务会**阻塞等待**答复。
-    ///
-    /// 前端用 [`WarningDecision::accept`] 继续、用 [`WarningDecision::abort`] 中止
-    /// （中止会让任务被取消）。若没有订阅者，任务不会阻塞、直接继续。
+
+    /// 一条需要前端决策的警告；当前任务会阻塞等待答复。
     Warning {
-        step: usize,
-        steps: usize,
-        name: String,
+        task: Option<TaskRef>,
         message: String,
         decision: WarningDecision,
     },
-    /// 第 `step` 个步骤成功结束。
-    StepFinished {
-        step: usize,
-        steps: usize,
-        name: String,
-    },
-    /// 第 `step` 个步骤失败，链就此中止。
-    ///
-    /// 只带“哪一步失败了”的结构信息；**错误详情在 `run()` / `run_with()` 的返回值里**，
-    /// 由调用者打印一次，避免事件流和返回值把同一条错误各打一遍。
-    Failed {
-        step: usize,
-        steps: usize,
-        name: String,
-    },
-    /// 整条链成功结束。
-    Finished { name: String },
+
+    /// 整张图成功结束。
+    GraphFinished,
+    /// 整张图失败 / 被取消。
+    GraphFailed,
 }
 
 impl TaskEvent {
-    /// 事件所属的名字（链名或步骤名）。
-    pub fn name(&self) -> &str {
+    /// 事件关联的任务（图级事件为 `None`）。
+    pub fn task(&self) -> Option<&TaskRef> {
         match self {
-            TaskEvent::Started { name, .. }
-            | TaskEvent::StepStarted { name, .. }
-            | TaskEvent::Log { name, .. }
-            | TaskEvent::Progress { name, .. }
-            | TaskEvent::Warning { name, .. }
-            | TaskEvent::StepFinished { name, .. }
-            | TaskEvent::Failed { name, .. }
-            | TaskEvent::Finished { name } => name,
-        }
-    }
-
-    /// 事件对应的步骤下标（链级事件为 0）。
-    pub fn step(&self) -> usize {
-        match self {
-            TaskEvent::Started { .. } | TaskEvent::Finished { .. } => 0,
-            TaskEvent::StepStarted { step, .. }
-            | TaskEvent::Log { step, .. }
-            | TaskEvent::Progress { step, .. }
-            | TaskEvent::Warning { step, .. }
-            | TaskEvent::StepFinished { step, .. }
-            | TaskEvent::Failed { step, .. } => *step,
-        }
-    }
-
-    /// 最新的进度（非进度事件为 `None`）。
-    pub fn progress(&self) -> Option<&Progress> {
-        match self {
-            TaskEvent::Progress { progress, .. } => Some(progress),
-            _ => None,
+            TaskEvent::TaskAdded { task }
+            | TaskEvent::TaskStarted { task }
+            | TaskEvent::TaskFinished { task }
+            | TaskEvent::TaskFailed { task }
+            | TaskEvent::TaskSkipped { task } => Some(task),
+            TaskEvent::Log { task, .. } | TaskEvent::Warning { task, .. } => task.as_ref(),
+            TaskEvent::GraphStarted { .. }
+            | TaskEvent::Progress { .. }
+            | TaskEvent::GraphFinished
+            | TaskEvent::GraphFailed => None,
         }
     }
 }
@@ -107,64 +175,30 @@ impl TaskEvent {
 impl fmt::Display for TaskEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TaskEvent::Started { name, steps } => write!(f, "{name}: 开始（{steps} 个步骤）"),
-            TaskEvent::StepStarted { step, steps, name } => {
-                write!(f, "[{}/{steps}] {name}", step + 1)
+            TaskEvent::GraphStarted { name, steps } => {
+                write!(f, "{name}: 开始（{} 个步骤）", steps.len())
             }
-            TaskEvent::Log {
-                step,
-                steps,
-                name,
-                message,
-            } => write!(f, "[{}/{steps}] {name}: {message}", step + 1),
-            TaskEvent::Progress {
-                step,
-                steps,
-                name,
-                progress,
-            } => write!(f, "[{}/{steps}] {name}: {progress}", step + 1),
-            TaskEvent::Warning {
-                step,
-                steps,
-                name,
-                message,
-                ..
-            } => write!(f, "[{}/{steps}] {name}: 警告: {message}", step + 1),
-            TaskEvent::StepFinished { step, steps, name } => {
-                write!(f, "[{}/{steps}] {name}: 完成", step + 1)
-            }
-            TaskEvent::Failed { step, steps, name } => {
-                write!(f, "[{}/{steps}] {name}: 失败", step + 1)
-            }
-            TaskEvent::Finished { name } => write!(f, "{name}: 全部完成"),
+            TaskEvent::TaskAdded { task } => write!(f, "{}: 等待", task.name()),
+            TaskEvent::TaskStarted { task } => write!(f, "{}: 执行中", task.name()),
+            TaskEvent::TaskFinished { task } => write!(f, "{}: 完成", task.name()),
+            TaskEvent::TaskFailed { task } => write!(f, "{}: 失败", task.name()),
+            TaskEvent::TaskSkipped { task } => write!(f, "{}: 跳过", task.name()),
+            TaskEvent::Progress { downloaded, total } => write!(
+                f,
+                "进度: {} / {}",
+                crate::progress::human_bytes(*downloaded),
+                crate::progress::human_bytes(*total)
+            ),
+            TaskEvent::Log { task, message } => match task {
+                Some(task) => write!(f, "{}: {message}", task.name()),
+                None => f.write_str(message),
+            },
+            TaskEvent::Warning { task, message, .. } => match task {
+                Some(task) => write!(f, "{}: 警告: {message}", task.name()),
+                None => write!(f, "警告: {message}"),
+            },
+            TaskEvent::GraphFinished => f.write_str("全部完成"),
+            TaskEvent::GraphFailed => f.write_str("已中止"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn events_render_the_step_and_progress() {
-        let started = TaskEvent::StepStarted {
-            step: 2,
-            steps: 5,
-            name: "下载".to_string(),
-        };
-        assert_eq!(started.to_string(), "[3/5] 下载");
-
-        let progress = TaskEvent::Progress {
-            step: 0,
-            steps: 1,
-            name: "x".to_string(),
-            progress: Progress::new(1, Some(2), "f.jar", Some(50.0)),
-        };
-        assert_eq!(progress.progress().unwrap().current, 1);
-        assert_eq!(progress.to_string(), "[1/1] x: 50.0% (1 B / 2 B) f.jar");
-
-        assert!(TaskEvent::Finished { name: "x".into() }
-            .progress()
-            .is_none());
     }
 }

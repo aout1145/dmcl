@@ -1,8 +1,4 @@
 //! [`Task`] 接口本身，以及用闭包实现任务的适配器。
-//!
-//! 任务不是"无产出的副作用动作"，而是**接收一个输入、产出一个输出**的异步步骤；
-//! [`TaskChain`] 用 `then` 把上一个任务的输出接到下一个任务的输入上，直到最后一个
-//! 任务把最终结果返回给调用者（见 `TaskChain` 的 `run` / `run_with`）。
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -11,55 +7,48 @@ use anyhow::Result;
 
 use crate::context::TaskContext;
 
-/// 一个可等待、可上报进度的异步动作：接收输入 `I`，产出输出 `O`。
+/// 一个可等待的异步动作：接收输入 `I`，产出输出 `O`。
 ///
-/// 因为 trait 里要写 `async fn`，这里统一用装箱的 future（[`BoxFuture`]）表达，
-/// 好处是 `Box<dyn Task<I, O>>` 可以直接作为 trait 对象使用，而且不需要引入
-/// `async-trait` 依赖。实现者只多写一行 `Box::pin`：
+/// 输入通过依赖注入传入（见 [`crate::Deps`]）；没有依赖时 `I = ()`，
+/// 有一个依赖时 `I = Arc<T>`，多个依赖时 `I = (Arc<A>, Arc<B>, …)`。
 ///
 /// ```no_run
-/// use dmcl_task::{BoxFuture, Task, TaskContext};
+/// use dmcl_task::{Task, TaskContext};
 ///
 /// struct AddOne;
 ///
+/// #[async_trait::async_trait]
 /// impl Task<i32, i32> for AddOne {
-///     fn run<'a>(&'a self, input: i32, ctx: TaskContext) -> BoxFuture<'a, anyhow::Result<i32>> {
-///         Box::pin(async move {
-///             ctx.log(format!("输入 {input}"));
-///             Ok(input + 1)
-///         })
+///     async fn run(&self, input: i32, ctx: TaskContext) -> anyhow::Result<i32> {
+///         ctx.log(format!("输入 {input}"));
+///         Ok(input + 1)
 ///     }
 /// }
 /// ```
-///
-/// 步骤在链里显示的名字由 [`crate::TaskChain::then`] 传入，任务本身不带名字，
-/// 因此同一个任务可以以不同的名字出现在不同的链里。
+#[async_trait::async_trait]
 pub trait Task<I, O>: Send + Sync
 where
     I: Send + 'static,
     O: Send + 'static,
 {
-    /// 执行任务。`input` 是上一步传下来的值（首个任务通常是 `()`），
-    /// `ctx` 用于上报进度和检查取消；出错即表示该步骤失败。
-    fn run<'a>(&'a self, input: I, ctx: TaskContext) -> BoxFuture<'a, Result<O>>;
+    /// 执行任务；`ctx` 用于日志、取消、动态节点与回滚登记。
+    async fn run(&self, input: I, ctx: TaskContext) -> Result<O>;
 }
 
+#[async_trait::async_trait]
 impl<I, O> Task<I, O> for Box<dyn Task<I, O>>
 where
     I: Send + 'static,
     O: Send + 'static,
 {
-    fn run<'a>(&'a self, input: I, ctx: TaskContext) -> BoxFuture<'a, Result<O>> {
-        (**self).run(input, ctx)
+    async fn run(&self, input: I, ctx: TaskContext) -> Result<O> {
+        (**self).run(input, ctx).await
     }
 }
 
-/// 装箱的 future，用于在 [`Task`] 里表达 `async fn`。
-pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
 /// 用闭包实现的任务，省去为每个小步骤定义一个 `struct`。
 ///
-/// 一般通过 [`task_fn`]（无输入）或 [`task_fn_io`]（带输入）构造。
+/// 一般通过 [`task_fn`] 构造。
 pub struct FnTask<I, O, F> {
     run: F,
     marker: PhantomData<fn(I) -> O>,
@@ -74,6 +63,7 @@ impl<I, O, F> FnTask<I, O, F> {
     }
 }
 
+#[async_trait::async_trait]
 impl<I, O, F, Fut> Task<I, O> for FnTask<I, O, F>
 where
     I: Send + 'static,
@@ -81,57 +71,16 @@ where
     F: Fn(I, TaskContext) -> Fut + Send + Sync,
     Fut: Future<Output = Result<O>> + Send + 'static,
 {
-    fn run<'a>(&'a self, input: I, ctx: TaskContext) -> BoxFuture<'a, Result<O>> {
-        Box::pin((self.run)(input, ctx))
+    async fn run(&self, input: I, ctx: TaskContext) -> Result<O> {
+        (self.run)(input, ctx).await
     }
 }
 
-/// 用闭包构造一个**无输入**的任务（输入为 `()`）。
+/// 用闭包构造任务：闭包统一接收依赖注入的输入与 [`TaskContext`]。
 ///
-/// 这是最常见的情形：配置通过 `Arc<Options>` 注入、闭包只关心上报进度。
-///
-/// ```no_run
-/// # use dmcl_task::{task_fn, TaskChain};
-/// # async fn run() -> anyhow::Result<()> {
-/// let chain = TaskChain::new("安装").then(
-///     task_fn(|ctx| async move {
-///         ctx.log("writing");
-///         Ok(())
-///     }),
-///     "写配置文件",
-/// );
-/// # let _ = chain;
-/// # Ok(())
-/// # }
-/// ```
-pub fn task_fn<O, F, Fut>(run: F) -> FnTask<(), O, impl Fn((), TaskContext) -> Fut>
-where
-    O: Send + 'static,
-    F: Fn(TaskContext) -> Fut + Send + Sync,
-    Fut: Future<Output = Result<O>> + Send + 'static,
-{
-    FnTask {
-        run: move |_, ctx| (run)(ctx),
-        marker: PhantomData,
-    }
-}
-
-/// 用闭包构造一个**带输入**的任务：闭包拿到上一步传下来的 `input`。
-///
-/// ```no_run
-/// # use dmcl_task::{task_fn, task_fn_io, TaskChain};
-/// # async fn run() -> anyhow::Result<()> {
-/// let chain = TaskChain::new("数字")
-///     .then(task_fn(|_ctx| async move { Ok(5i32) }), "起点")
-///     .then(
-///         task_fn_io(|input: i32, _ctx| async move { Ok(input * 2) }),
-///         "翻倍",
-///     );
-/// # let _ = chain;
-/// # Ok(())
-/// # }
-/// ```
-pub fn task_fn_io<I, O, F, Fut>(run: F) -> FnTask<I, O, F>
+/// 没有依赖时输入是 `()`；有一个依赖时是 `Arc<T>`；多个依赖时是
+/// `(Arc<A>, Arc<B>, …)`。
+pub fn task_fn<I, O, F, Fut>(run: F) -> FnTask<I, O, F>
 where
     I: Send + 'static,
     O: Send + 'static,
@@ -139,41 +88,4 @@ where
     Fut: Future<Output = Result<O>> + Send + 'static,
 {
     FnTask::new(run)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::chain::TaskChain;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn closure_tasks_run_and_report() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let seen = counter.clone();
-        let chain = TaskChain::new("t").then(
-            task_fn(move |ctx| {
-                let seen = seen.clone();
-                async move {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    ctx.log("counted");
-                    Ok(())
-                }
-            }),
-            "count",
-        );
-        chain.run(()).await.unwrap();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn a_task_with_input_receives_the_previous_output() {
-        let chain = TaskChain::new("数字")
-            .then(task_fn(|_ctx| async move { Ok(10i32) }), "起点")
-            .then(task_fn_io(|n: i32, _ctx| async move { Ok(n + 1) }), "加一")
-            .then(task_fn_io(|n: i32, _ctx| async move { Ok(n * 2) }), "翻倍");
-        let result = chain.run(()).await.unwrap();
-        assert_eq!(result, 22);
-    }
 }

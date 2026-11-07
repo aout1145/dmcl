@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use dmcl_download::DownloadReport;
+use dmcl_download::DownloadContext;
 use dmcl_game::{ensure_client_jar, ensure_files, resolve_version, ResolvedVersion, VersionRef};
 use dmcl_mcmeta::layout::version_dir;
-use dmcl_task::{task_fn, task_fn_io, BoxFuture, Task, TaskChain, TaskContext};
+use dmcl_task::{task_fn, Task, TaskContext, TaskGraph, TaskGraphBuilder};
 
-use crate::fabric::install_fabric_task;
-use crate::forge::install_forge_task;
-use crate::neoforge::install_neoforge_task;
-use crate::optifine::install_optifine_task;
+use crate::fabric::install_fabric;
+use crate::forge::install_forge;
+use crate::neoforge::install_neoforge;
+use crate::optifine::install_optifine;
 use crate::options::InstallOptions;
 use crate::vanilla::download_vanilla;
 
@@ -59,34 +59,6 @@ pub struct LoaderRequest {
     pub kind: LoaderKind,
     /// 要安装的加载器版本（调用者负责确定具体版本，`dmcl-install` 不查最新）。
     pub version: String,
-}
-
-impl LoaderRequest {
-    /// 变成对应加载器的安装任务链。
-    ///
-    /// `loaders` 是本次安装的完整请求列表：OptiFine 用它判断是否同时装了 Forge。
-    pub fn task(
-        &self,
-        options: Arc<InstallOptions>,
-        version_name: String,
-        mc_version: String,
-        loaders: &[LoaderRequest],
-    ) -> TaskChain<(), ()> {
-        let name = version_name.clone();
-        match self.kind {
-            LoaderKind::Fabric => {
-                install_fabric_task(options, name, mc_version, self.version.clone())
-            }
-            LoaderKind::Forge => install_forge_task(options, name, self.version.clone()),
-            LoaderKind::NeoForge => install_neoforge_task(options, name, self.version.clone()),
-            LoaderKind::OptiFine => {
-                let has_forge = loaders
-                    .iter()
-                    .any(|request| request.kind == LoaderKind::Forge);
-                install_optifine_task(options, name, mc_version, self.version.clone(), has_forge)
-            }
-        }
-    }
 }
 
 /// 一次安装的完整计划。
@@ -156,18 +128,17 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
 #[derive(Debug, Clone)]
 pub struct InstallOutcome {
     pub version: VersionRef,
-    pub report: DownloadReport,
 }
 
 /// 占用版本目录：已存在就直接报错，不存在则创建它。
 ///
-/// 删除动作由安装链在**这一步成功之后**通过 `on_rollback` 登记；因此版本已存在时
-/// 回滚不会生效，也就不会误删用户已有的版本。
+/// 删除动作在**这一步成功之后**才通过 `on_rollback` 登记；因此版本已存在时回滚不会
+/// 生效，也就不会误删用户已有的版本。
 fn create_version_dir(
     root_path: PathBuf,
     version_name: String,
 ) -> impl Task<(), VersionRef> + 'static {
-    task_fn(move |_ctx| {
+    task_fn(move |_: (), ctx| {
         let root_path = root_path.clone();
         let version_name = version_name.clone();
         async move {
@@ -178,7 +149,16 @@ fn create_version_dir(
                     .with_context(|| format!("无法创建 {}", parent.display()))?;
             }
             match tokio::fs::create_dir(&dir).await {
-                Ok(()) => Ok(VersionRef::new(root_path, version_name)),
+                Ok(()) => {
+                    let cleanup_root = root_path.clone();
+                    let cleanup_name = version_name.clone();
+                    ctx.on_rollback(move |ctx| {
+                        let root_path = cleanup_root.clone();
+                        let version_name = cleanup_name.clone();
+                        async move { remove_version_dir(&root_path, &version_name, &ctx).await }
+                    });
+                    Ok(VersionRef::new(root_path, version_name))
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::bail!("版本「{version_name}」已存在：{}", dir.display())
                 }
@@ -192,24 +172,17 @@ fn create_version_dir(
 ///
 /// 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚；只要版本目录不在，
 /// 这个版本就不会被当成已安装，下次安装会重新补齐。
-fn remove_version_dir_rollback(
-    root_path: PathBuf,
-    version_name: String,
-) -> impl Fn(TaskContext) -> BoxFuture<'static, ()> + Send + Sync + 'static {
-    move |ctx| {
-        let path = version_dir(&root_path, &version_name);
-        Box::pin(async move {
-            match tokio::fs::remove_dir_all(&path).await {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    ctx.log(format!(
-                        "警告：无法删除未完成的安装 {}：{err}",
-                        path.display()
-                    ));
-                }
-            }
-        })
+async fn remove_version_dir(root_path: &std::path::Path, version_name: &str, ctx: &TaskContext) {
+    let path = version_dir(root_path, version_name);
+    match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            ctx.log(format!(
+                "警告：无法删除未完成的安装 {}：{err}",
+                path.display()
+            ));
+        }
     }
 }
 
@@ -217,11 +190,12 @@ fn remove_version_dir_rollback(
 fn vanilla_metadata_step(
     options: Arc<InstallOptions>,
     version_id: String,
-) -> impl Task<VersionRef, ResolvedVersion> + 'static {
-    task_fn_io(move |reference: VersionRef, ctx: TaskContext| {
+) -> impl Task<Arc<VersionRef>, ResolvedVersion> + 'static {
+    task_fn(move |reference: Arc<VersionRef>, ctx: TaskContext| {
         let options = options.clone();
         let version_id = version_id.clone();
         async move {
+            let reference = (*reference).clone();
             ctx.log(format!("查询版本列表并保存 {}.json", reference.name));
             download_vanilla(&options, &version_id, &reference.name).await?;
             ctx.log(format!("{}.json 已写入", reference.name));
@@ -233,37 +207,14 @@ fn vanilla_metadata_step(
 /// 确保客户端 jar 就位（加载器 processor 之前需要）。
 fn ensure_client_jar_step(
     options: Arc<InstallOptions>,
-) -> impl Task<ResolvedVersion, ResolvedVersion> + 'static {
-    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
+    downloads: Arc<DownloadContext>,
+) -> impl Task<Arc<ResolvedVersion>, ResolvedVersion> + 'static {
+    task_fn(move |version: Arc<ResolvedVersion>, ctx: TaskContext| {
         let options = options.clone();
+        let downloads = downloads.clone();
         async move {
-            ensure_client_jar(&version, &options.game, &ctx).await?;
-            Ok(version)
-        }
-    })
-}
-
-/// 运行一个加载器的安装子链，然后重新读回它更新后的版本 JSON。
-fn loader_step(
-    options: Arc<InstallOptions>,
-    request: LoaderRequest,
-    mc_version: String,
-    all_loaders: Vec<LoaderRequest>,
-) -> impl Task<ResolvedVersion, ResolvedVersion> + 'static {
-    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
-        let options = options.clone();
-        let request = request.clone();
-        let mc_version = mc_version.clone();
-        let all_loaders = all_loaders.clone();
-        async move {
-            let chain = request.task(
-                options,
-                version.reference.name.clone(),
-                mc_version,
-                &all_loaders,
-            );
-            Task::<(), ()>::run(&chain, (), ctx).await?;
-            resolve_version(&version.reference).await
+            ensure_client_jar(&version, &options.game, &downloads, &ctx).await?;
+            Ok((*version).clone())
         }
     })
 }
@@ -271,60 +222,127 @@ fn loader_step(
 /// 补齐版本需要的全部文件，并产出安装结果。
 fn materialize_step(
     options: Arc<InstallOptions>,
-) -> impl Task<ResolvedVersion, InstallOutcome> + 'static {
-    task_fn_io(move |version: ResolvedVersion, ctx: TaskContext| {
+    downloads: Arc<DownloadContext>,
+) -> impl Task<Arc<ResolvedVersion>, InstallOutcome> + 'static {
+    task_fn(move |version: Arc<ResolvedVersion>, ctx: TaskContext| {
         let options = options.clone();
+        let downloads = downloads.clone();
         async move {
-            let report = ensure_files(&version, &options.game, &ctx).await?;
+            ensure_files(&version, &options.game, &downloads, &ctx).await?;
             Ok(InstallOutcome {
-                version: version.reference,
-                report,
+                version: version.reference.clone(),
             })
         }
     })
 }
 
-/// 完整的安装链：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
+/// 完整的安装任务图：原版元数据 → 客户端 jar → 各加载器 → 游戏文件。
 ///
 /// 顺序不能变：客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的
 /// processor 要读它来生成 patched client（`{MINECRAFT_JAR}`）。
 ///
 /// 安装是「版本级原子」的：先占用 `versions/<version_name>`，目录已存在时直接报错
-/// （不会碰已有版本）；只有占用成功后才会走到 `on_rollback` 登记删除动作，之后任何一步
-/// 失败或被取消，都会删掉本次新建的版本目录，不留下半装的版本。
-pub fn install_task(
-    options: Arc<InstallOptions>,
-    spec: InstallSpec,
-) -> TaskChain<(), InstallOutcome> {
+/// （不会碰已有版本）；只有占用成功后才会登记回滚动作，之后任何一步失败或被取消，都会
+/// 删掉本次新建的版本目录，不留下半装的版本。
+pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGraph<InstallOutcome> {
     // 加载器的先后顺序由调用方决定；这里不额外调整顺序或检查组合兼容性。
-    let mut chain = TaskChain::new(format!("安装 {}", spec.version_name))
-        .then(
-            create_version_dir(options.root_path.clone(), spec.version_name.clone()),
-            "创建版本目录",
-        )
-        .on_rollback(remove_version_dir_rollback(
-            options.root_path.clone(),
-            spec.version_name.clone(),
-        ))
-        .then(
-            vanilla_metadata_step(options.clone(), spec.version_id.clone()),
-            "获取版本 json",
-        )
-        .then(ensure_client_jar_step(options.clone()), "下载客户端 jar");
+    let mut builder = TaskGraphBuilder::new(format!("安装 {}", spec.version_name));
+    let downloads = options.game.download_context(builder.progress());
 
+    let prepare = builder.step("准备");
+    let created = builder.add(
+        prepare,
+        "创建版本目录",
+        (),
+        create_version_dir(options.root_path.clone(), spec.version_name.clone()),
+    );
+    let resolved = builder.add(
+        prepare,
+        "获取版本 json",
+        created,
+        vanilla_metadata_step(options.clone(), spec.version_id.clone()),
+    );
+    let mut previous = builder.add(
+        prepare,
+        "下载客户端 jar",
+        resolved,
+        ensure_client_jar_step(options.clone(), downloads.clone()),
+    );
+
+    let has_forge = spec
+        .loaders
+        .iter()
+        .any(|request| request.kind == LoaderKind::Forge);
     for request in &spec.loaders {
-        chain = chain.then(
-            loader_step(
-                options.clone(),
-                request.clone(),
-                spec.version_id.clone(),
-                spec.loaders.clone(),
-            ),
+        let step = builder.step(format!("安装 {}", request.kind.display_name()));
+        let options = options.clone();
+        let downloads = downloads.clone();
+        let request = request.clone();
+        let version_name = spec.version_name.clone();
+        let mc_version = spec.version_id.clone();
+        previous = builder.add(
+            step,
             format!("安装 {}", request.kind.display_name()),
+            previous.clone(),
+            task_fn(move |version: Arc<ResolvedVersion>, ctx| {
+                let options = options.clone();
+                let downloads = downloads.clone();
+                let request = request.clone();
+                let version_name = version_name.clone();
+                let mc_version = mc_version.clone();
+                async move {
+                    match request.kind {
+                        LoaderKind::Fabric => {
+                            install_fabric(&options, &version_name, &mc_version, &request.version)
+                                .await?
+                        }
+                        LoaderKind::Forge => {
+                            install_forge(
+                                &options,
+                                &downloads,
+                                &version_name,
+                                &request.version,
+                                &ctx,
+                            )
+                            .await?
+                        }
+                        LoaderKind::NeoForge => {
+                            install_neoforge(
+                                &options,
+                                &downloads,
+                                &version_name,
+                                &request.version,
+                                &ctx,
+                            )
+                            .await?
+                        }
+                        LoaderKind::OptiFine => {
+                            install_optifine(
+                                &options,
+                                &downloads,
+                                &version_name,
+                                &mc_version,
+                                &request.version,
+                                has_forge,
+                                &ctx,
+                            )
+                            .await?
+                        }
+                    }
+                    resolve_version(&version.reference).await
+                }
+            }),
         );
     }
 
-    chain.then(materialize_step(options), "下载游戏文件")
+    let download_step = builder.step("下载游戏文件");
+    let sink = builder.add(
+        download_step,
+        "下载游戏文件",
+        previous,
+        materialize_step(options, downloads),
+    );
+    builder.build(sink).expect("安装图的最终节点由构造保证")
 }
 
 #[cfg(test)]
@@ -368,19 +386,23 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&root).await;
         let dir = version_dir(&root, "1.0");
 
-        let chain = TaskChain::new("安装 1.0")
-            .then(
-                create_version_dir(root.clone(), "1.0".into()),
-                "检查版本是否已存在",
-            )
-            .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
-            .then(
-                dmcl_task::task_fn_io(|_version: VersionRef, _ctx| async move {
-                    Err::<(), _>(anyhow::anyhow!("故意失败"))
-                }),
-                "会失败的一步",
-            );
-        chain.run(()).await.unwrap_err();
+        let mut builder = TaskGraphBuilder::new("安装 1.0");
+        let step = builder.step("准备");
+        let created = builder.add(
+            step,
+            "创建版本目录",
+            (),
+            create_version_dir(root.clone(), "1.0".into()),
+        );
+        let sink = builder.add(
+            step,
+            "会失败的一步",
+            created,
+            task_fn(|_version: Arc<VersionRef>, _ctx| async move {
+                Err::<(), _>(anyhow::anyhow!("故意失败"))
+            }),
+        );
+        builder.build(sink).unwrap().run(|_| {}).await.unwrap_err();
 
         assert!(!dir.exists(), "失败的安装不应留下版本目录");
         let _ = tokio::fs::remove_dir_all(&root).await;
@@ -392,17 +414,21 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(&root).await;
         let dir = version_dir(&root, "1.0");
 
-        let chain = TaskChain::new("安装 1.0")
-            .then(
-                create_version_dir(root.clone(), "1.0".into()),
-                "检查版本是否已存在",
-            )
-            .on_rollback(remove_version_dir_rollback(root.clone(), "1.0".into()))
-            .then(
-                dmcl_task::task_fn_io(|_version: VersionRef, _ctx| async move { Ok(()) }),
-                "成功的一步",
-            );
-        chain.run(()).await.unwrap();
+        let mut builder = TaskGraphBuilder::new("安装 1.0");
+        let step = builder.step("准备");
+        let created = builder.add(
+            step,
+            "创建版本目录",
+            (),
+            create_version_dir(root.clone(), "1.0".into()),
+        );
+        let sink = builder.add(
+            step,
+            "成功的一步",
+            created,
+            task_fn(|_version: Arc<VersionRef>, _ctx| async move { Ok(()) }),
+        );
+        builder.build(sink).unwrap().run(|_| {}).await.unwrap();
 
         assert!(dir.exists(), "成功的安装必须保留版本目录");
         let _ = tokio::fs::remove_dir_all(&root).await;
@@ -418,7 +444,7 @@ mod tests {
 
         let options = options(root.clone());
         let err = install_task(options, InstallSpec::new("1.0", "1.0"))
-            .run(())
+            .run(|_| {})
             .await
             .unwrap_err();
 
@@ -466,8 +492,8 @@ mod tests {
             .iter()
             .map(|request| format!("安装 {}", request.kind.display_name()))
             .collect();
-        let chain = install_task(options, spec);
-        let names: Vec<_> = chain.step_names().collect();
+        let graph = install_task(options, spec);
+        let names: Vec<_> = graph.steps().iter().map(|step| step.name.clone()).collect();
         let positions: Vec<_> = steps
             .iter()
             .map(|step| {

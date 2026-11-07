@@ -87,7 +87,7 @@ pub(crate) async fn run(args: InstallArgs, config: &Config, root_path: &Path) ->
     let options = Arc::new(config.install_options(source, root_path)?);
     let mut printer = ProgressPrinter::new();
     let result = install_task(options, spec)
-        .run_with((), |event| handle_event(&mut printer, event))
+        .run(|event| handle_event(&mut printer, event))
         .await
         .map(|_| ());
     printer.finish();

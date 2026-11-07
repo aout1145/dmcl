@@ -1,94 +1,106 @@
 # dmcl-task
 
-与 Minecraft 无关的通用异步任务抽象：每个任务**接收一个输入、产出一个输出**，用
-`TaskChain` 按顺序串起来；进度和日志只通过 `TaskEvent` 事件流上报。
+与 Minecraft 无关的通用异步任务图：节点之间只有依赖边，下游通过依赖注入直接拿到上游
+返回值；Step 只用于显示，全局进度只有 `downloaded / total` 字节数。
 
-`dmcl-task` 是 workspace 最底层的叶子 crate，不依赖其他成员 crate（只用 `tokio` 与
-`anyhow`）。它不读配置，也不持有全局状态：所有输入由调用者通过任务本身传入。
+`dmcl-task` 是 workspace 最底层的叶子 crate，不依赖其他成员 crate（只用 `tokio`、
+`anyhow` 与 `async-trait`）。它不读配置，也不持有全局状态。
 
 ## 模块布局
 
 ```text
-task.rs      Task trait、BoxFuture、闭包适配器 task_fn / task_fn_io
-chain.rs     TaskChain：串联、运行、事件订阅、中止回滚；自身也实现 Task，可嵌套
-context.rs   TaskContext（进度 / 日志 / 取消）与 CancelHandle
-event.rs     TaskEvent 事件流
-progress.rs  Progress 快照与 human_bytes
-command.rs   CommandTask：运行外部程序
-warning.rs   WarningDecision：需要前端决策的警告
+task.rs        Task trait、闭包适配器 task_fn
+deps.rs        Deps、Handle / DynamicHandle、TaskHandle / WaitableTaskHandle、Dependency
+graph.rs       TaskGraphBuilder / TaskGraph、StepId / StepDef、构图检查
+runtime.rs     调度器、节点状态、FailFast、取消、动态节点、清理
+context.rs     TaskContext、CancelHandle、AddTaskError、cleanup 注册
+event.rs       TaskEvent / TaskRef / TaskStatus
+bus.rs         可增长事件总线
+progress.rs    ProgressHandle / ProgressSnapshot / human_bytes
+command.rs     CommandTask：运行外部程序
+warning.rs     WarningDecision：需要前端决策的警告
 ```
 
 ## 设计要点
 
-### Task 与 TaskChain
+### 只有 DAG，没有任务树
 
-- `Task` 的 `run` 接收输入 `I`、产出输出 `O`，用装箱 future（`BoxFuture`）表达，
-  因此 `Box<dyn Task>` 可以直接当 trait 对象用，**不需要 `async-trait` 依赖**；
-- `TaskChain::then(任务, 显示名)` 把上一个任务的输出接到下一个任务的输入上，
-  **任一步失败即中止后续**并把错误原样返回；步骤的显示名由链传入，同一个任务可以以
-  不同名字出现在不同链里；
-- `run` 传入初始输入并返回最终输出；`run_with` 是「一边跑一边把事件交给回调」的便捷
-  写法；`subscribe` 拿到一条事件流，适合自己控制消费节奏的前端；
-- `TaskChain` 本身也实现 `Task`，所以子链可以当成父链的一个步骤；子链的事件会**原样
-  转发**到父上下文（链级的开始 / 结束除外），父链订阅者能看到嵌套的每一步。
+- `TaskGraphBuilder::add(step, name, deps, task)` 原地追加静态节点，只返回该节点的
+  `Handle<O>`；
+- 依赖只能指向已经创建的静态节点，因此构图天然无环；
+- `build(sink)` 显式指定唯一最终节点，并检查：
+  - sink 属于这张图；
+  - sink 没有 dependent；
+  - 除 sink 外每个静态节点都有 dependent；
+- `run(|event| …)` 返回最终节点的 `Arc<O>`；不关心事件时传 `|_| {}`。
 
-```rust
-let chain = TaskChain::new("安装 1.20.1")
-    .then(vanilla_metadata_task(..), "获取原版元数据")
-    .then(install_fabric_task(..), "安装 Fabric")
-    .then(game_files_task(..), "下载游戏文件");
-
-// 事件流：一边跑一边打印（`()` 是这条链的初始输入）
-chain.run_with((), |event| println!("{event}")).await?;
-```
-
-手动订阅（GUI 场景）：
+### Task 与依赖注入
 
 ```rust
-let mut chain = /* … */;
-let mut rx = chain.subscribe();
-let handle = tokio::spawn(async move { chain.run(()).await });
-while let Ok(event) = rx.recv().await { /* 实时进度 */ }
-handle.await??;
+#[async_trait::async_trait]
+pub trait Task<I, O>: Send + Sync {
+    async fn run(&self, input: I, ctx: TaskContext) -> anyhow::Result<O>;
+}
 ```
 
-### 进度、日志与事件
+- 没有依赖：`I = ()`；
+- 一个依赖：`I = Arc<T>`；
+- 多个依赖：`I = (Arc<A>, Arc<B>, …)`；
+- `task_fn(|input, ctx| async move { … })` 统一接收输入与上下文；
+- 依赖值不需要时写 `_` 或解构时忽略。
 
-- `TaskContext::progress(current, total, message, percent)` 上报**可原地刷新**的量化进度；
-  百分比由任务自己算好，`None` 表示没有有意义的百分比；
-- `TaskContext::log` 上报**一次性文字**（命令行输出、缺件清单等），前端逐行打印，
-  不要像进度那样覆盖；
-- `TaskEvent` 走 `broadcast` 通道，一个任务可以上报任意多次，也可以被多个前端同时消费；
-  链结束（成功或失败）后发送方被丢弃，订阅者的 `recv()` 返回 `Err`，循环自然结束；
-- 链套链时，子链的**步骤级**事件会原样转发到父链（含 `StepStarted` / `StepFinished`），
-  只有链级的 `Started` / `Finished` 丢弃。前端据此用**栈**还原嵌套层级：进入
-  `StepStarted` push、`StepFinished` pop；
-- 失败时先发一条 `Failed`（只带「哪一步失败」），错误详情在 `run` / `run_with` 的返回值里，
-  避免事件流和返回值把同一条错误各打一遍。
+### 两种句柄
 
-每个操作都是一个 `TaskChain`；进度**只走 `TaskEvent` 事件流**，不用轮询、也不用全局状态
-汇报，**不引入全局可变配置**。
+- `Handle<O>`：静态句柄，**没有 `wait`**，只能作为下游节点的 deps 被注入；
+- `DynamicHandle<O>`：运行期动态节点，额外提供 `wait()`（等待 + 强制取值）；
+- `DynamicHandle` **不实现 `Deps`**，不能写进别的节点的 deps；
+- 两种句柄都能通过 `.task_ref()` 变成事件 / UI 用的 `TaskRef`。
 
-### 取消与回滚
+### 动态节点
 
-- `CancelHandle` 可从任意线程（含 GUI 事件循环）触发取消；任务用
-  `check_cancelled` / `cancelled` 感知，取消时返回 `Cancelled` 错误；
-- `TaskChain::on_rollback` 在链的当前位置登记**中止回滚**动作：只有它前面的步骤都成功、
-  运行真正到达这里时才生效；链随后因取消或某一步失败而中止时按登记逆序执行
-  （成功结束不执行）。回滚是异步、尽力而为的，用于删掉写了一半的安装目录。
+- `TaskContext::add_task(step, name, deps, task)` 在运行期追加节点；
+- 动态节点自动成为创建者的依赖，创建者结束时它们必然已经结束；
+- 需要返回值时才保留 `DynamicHandle` 并 `wait()`；
+- 动态节点不能作为最终输出；最终输出是 `build(sink)` 指定的静态节点；
+- 动态任务使用已有 `StepId`；第一版不支持运行期新增 Step。
+
+### Step 与事件
+
+- `GraphStarted` 一次性带出全部静态 `StepDef`；
+- Step 计数由 `TaskAdded / TaskStarted / TaskFinished / TaskFailed / TaskSkipped` 推导；
+- 失败 / 跳过计入「已完成」，Step 额外记录 failed；
+- `TaskEvent::Progress` 是全局快照，不带任务；
+- 事件总线按订阅者 cursor 保留事件，慢订阅者不会丢事件；没有订阅者时不保留。
+
+### 失败、取消与回滚
+
+- 固定 `FailFast`：任一节点失败即全局取消；等待中节点 `Skipped`，运行中节点取消后
+  `Failed`；
+- `CancelHandle` 可从任意线程触发取消；
+- `TaskContext::on_rollback` 在**当前节点**登记清理动作：
+  - 节点失败 / 取消：立即按注册逆序执行；
+  - 节点成功：追加到图级清理栈；图最终失败时按完成逆序执行，成功时不执行；
+- 动态子节点也算创建者的一部分：任一动态子节点失败，创建者节点失败。
+
+### 全局进度
+
+- `ProgressHandle::add_total(i64)` / `add_downloaded(i64)` 支持正负调整；
+- 快照把负值 clamp 到 0；
+- 图每 100ms 左右发一条 `Progress`，结束时发最终快照；
+- 非下载任务不写进度，只改变 Step 计数。
 
 ### 运行外部程序
 
-`CommandTask` 跑外部程序，默认把 stdout / stderr **逐行变成日志事件**（Forge 的安装器
-processor 就是这么跑的），并保留末尾若干行用于失败时构造错误信息；`OutputMode::Inherit`
-可让子进程直接继承终端。取消时子进程被 `kill_on_drop` 杀掉。
+`CommandTask` 跑外部程序，默认把 stdout / stderr 逐行变成日志事件，并保留末尾若干行用于
+失败信息；`OutputMode::Inherit` 可让子进程直接继承终端。取消时子进程被 `kill_on_drop`
+杀掉。
 
 ### 警告确认
 
-`WarningDecision` 让任务发出「警告」事件并**阻塞等待**前端决定继续还是中止；中止会让
-任务被取消。若没有订阅者，任务不会阻塞、直接继续。
+`TaskContext::confirm` 发出警告并阻塞**当前节点**等待答复；其他节点继续调度。没有订阅者
+时直接继续；`abort` 会全局取消整张图。
 
 ## 相关文档
 
 - 总体结构与依赖关系：[ARCHITECTURE.md](../../ARCHITECTURE.md)
-- 下载任务如何实现 `Task`：[crates/dmcl-download/README.md](../dmcl-download/README.md)
+- 下载上下文如何创建单文件任务：[crates/dmcl-download/README.md](../dmcl-download/README.md)

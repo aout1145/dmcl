@@ -84,21 +84,25 @@ let resolved = dmcl_game::resolve_version(&option.version).await?;
 let status = dmcl_game::check_integrity(&resolved, &game).await?;
 if !status.is_complete() {
     // 由调用者决定：补全（已存在的文件会被跳过）
-    dmcl_game::ensure_files(&resolved, &game, &ctx).await?;
+    let downloads = game.download_context(ctx.progress_handle());
+    dmcl_game::ensure_files(&resolved, &game, &downloads, &ctx).await?;
 }
 
-// dmcl-launch 只负责拼参数，起进程走任务链；账户由登录源产出
+// dmcl-launch 只负责拼参数，起进程走任务图；账户由登录源产出
 let account = option.account_source.login().await?;
 let mut launcher = GameLauncher::new(option.clone(), account).await?;
-let _command = launcher.generate_command().await?; // 展示 / 复制用
+// ctx 来自任务图节点里的 TaskContext
+let _command = launcher.generate_command(&ctx).await?; // 展示 / 复制用
 
-let mut monitor = launch_chain(option, game, None).run(()).await?;
+let monitor = launch_chain(option, game, None).run(|_| {}).await?;
+let mut monitor = std::sync::Arc::try_unwrap(monitor)
+    .map_err(|_| anyhow::anyhow!("游戏监控句柄仍被共享"))?;
 monitor.wait().await?;
 ```
 
 ### 一站式启动链
 
-`launch_chain(option, game, jre)` 把六步串成 `TaskChain<(), GameMonitor>`：
+`launch_chain(option, game, jre)` 组成 `TaskGraph<GameMonitor>`：
 
 1. **检查并补全文件** —— `resolve_version` + `dmcl_game::check_integrity`；缺件时
    `ensure_files`，产出 `ResolvedVersion`；
@@ -107,18 +111,18 @@ monitor.wait().await?;
 3. **解压 natives** —— 按当前平台的 os 与已选 Java 的 arch 跑
    `dmcl_game::ensure_natives`（下载 + 解压到 `natives_dir`，即
    `<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`）；
-4. **登录** —— 让 `AccountSource` 产出可用会话；失败就中止，不会继续生成参数或启动；
-5. **生成启动参数** —— 只在文件齐备、Java 选好、账户可用后才拼，且复用同一个 Java；
+4. **登录** —— 与文件 / Java 准备**并行**；让 `AccountSource` 产出可用会话，失败就中止；
+5. **生成启动参数** —— 同时依赖账户与选好的 Java，只在两者都就绪后才拼；
 6. **启动游戏** —— 起子进程，产出**未 wait** 的 `GameMonitor`，由调用者决定等待退出
    还是中途停掉。
 
-前四步里只有登录需要账户，所以登录放在解压 natives 之后、生成参数之前；这样长时间下载时
-不会白跑一次登录，也不会让会话在下载期间过期。参数只在文件齐备后才拼，避免在缺件时生成
-一份用不了（或需要重拼）的命令行。
+登录与下载互不依赖，所以并行执行；参数只在文件齐备、Java 选好、账户可用后才拼，避免在缺件
+时生成一份用不了（或需要重拼）的命令行。整张图共享一个 `DownloadContext`，连接 / 文件 /
+worker 预算与全局进度都只有一份。
 
 ## 相关文档
 
 - 总体结构与依赖关系：[ARCHITECTURE.md](../../ARCHITECTURE.md)
 - 版本规划、完整性检查与 natives：[crates/dmcl-game/README.md](../dmcl-game/README.md)
 - Java 探测与 JRE 安装：[crates/dmcl-java/README.md](../dmcl-java/README.md)
-- 任务链与事件流：[crates/dmcl-task/README.md](../dmcl-task/README.md)
+- 任务图、Step 与事件：[crates/dmcl-task/README.md](../dmcl-task/README.md)

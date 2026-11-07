@@ -66,11 +66,14 @@ NeoForge / OptiFine 五个 `VersionSelect`。
 ### Init 与取数接口
 
 ```rust
-type FetchVersions =
-    Arc<dyn Fn(&str) -> BoxFuture<'_, Result<Vec<VersionItem>>> + Send + Sync>;
+#[async_trait::async_trait]
+pub(crate) trait VersionFetcher: Send + Sync {
+    async fn fetch(&self, context: &str) -> Result<Vec<VersionItem>>;
+}
+pub(crate) type FetchVersions = Arc<dyn VersionFetcher>;
 ```
 
-页面构造闭包时捕获 `DownloadSource`；组件不知道数据从哪来。动态取数带**代际计数**（`gen`）：
+页面用 `fetcher(closure)` 构造取数器并捕获 `DownloadSource`；组件不知道数据从哪来。动态取数带**代际计数**（`gen`）：
 换上下文就 +1，回来时代数不匹配的响应直接丢弃。上下文变化、或新列表里不再包含旧选择时，
 清空选择并发 `Changed(None)`。
 

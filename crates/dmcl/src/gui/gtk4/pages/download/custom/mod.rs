@@ -187,7 +187,6 @@ impl CustomPage {
         let handle = self.shell.run(
             format!("安装 {name}"),
             dmcl_install::install_task(options, spec),
-            (),
         );
         let category = category.trim().to_string();
         let shell = Rc::clone(&self.shell);

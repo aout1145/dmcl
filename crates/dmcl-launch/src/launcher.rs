@@ -175,16 +175,8 @@ impl GameLauncher {
         args
     }
 
-    /// 生成完整启动参数（java 可执行文件在最前）。
-    pub async fn gen_args(&mut self) -> Result<Vec<String>> {
-        self.gen_args_in(&TaskContext::detached("生成启动参数"))
-            .await
-    }
-
-    /// 同 [`GameLauncher::gen_args`]，但把需要用户确认的警告通过 `ctx` 上报。
-    ///
-    /// Java 版本 / 架构是否匹配由启动链的「选择 Java」步骤检查；这里只负责拼参数。
-    pub async fn gen_args_in(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
+    /// 生成完整启动参数（java 可执行文件在最前）；需要用户确认的警告通过 `ctx` 上报。
+    pub async fn gen_args(&mut self, ctx: &TaskContext) -> Result<Vec<String>> {
         // Java 路径；已经选好就直接用，否则按配置选一个。
         let java = match &self.java {
             Some(java) => java.clone(),
@@ -319,8 +311,8 @@ impl GameLauncher {
     }
 
     /// 展示 / 可复制执行的命令行（进入工作目录 + 启动参数）。
-    pub async fn generate_command(&mut self) -> Result<String> {
-        let args = self.gen_args().await?;
+    pub async fn generate_command(&mut self, ctx: &TaskContext) -> Result<String> {
+        let args = self.gen_args(ctx).await?;
         Ok(command_preview(&self.game_path, &args))
     }
 }
@@ -422,7 +414,20 @@ mod tests {
     use super::*;
     use crate::account::{AccountSource, OfflineAccountSource};
     use dmcl_mcmeta::os::Arch;
+    use dmcl_task::{task_fn, TaskContext, TaskGraphBuilder};
     use std::sync::Arc;
+
+    async fn run_node<O, F, Fut>(f: F) -> anyhow::Result<Arc<O>>
+    where
+        O: Send + Sync + 'static,
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<O>> + Send + 'static,
+    {
+        let mut builder = TaskGraphBuilder::new("测试");
+        let step = builder.step("测试");
+        let sink = builder.add(step, "测试", (), task_fn(move |_: (), ctx| f(ctx)));
+        builder.build(sink).unwrap().run(|_| {}).await
+    }
 
     /// "同名库保留最新版本"这一步现在依赖 `version-compare`。这些是 Minecraft
     /// 版本 JSON 里真实出现过的版本形态，用来钉住我们依赖的语义。
@@ -490,11 +495,15 @@ mod tests {
         )
         .unwrap();
 
-        let launcher = launcher_with(json, root.clone()).await;
-        let classpath = launcher
-            .get_libraries(&TaskContext::detached("t"))
-            .await
-            .unwrap();
+        let launcher = Arc::new(launcher_with(json, root.clone()).await);
+        let launcher_for_task = launcher.clone();
+        let classpath = run_node(move |ctx| {
+            let launcher = launcher_for_task.clone();
+            async move { launcher.get_libraries(&ctx).await }
+        })
+        .await
+        .unwrap();
+        let classpath = (*classpath).clone();
 
         assert!(classpath.contains("lwjgl-3.3.2.jar"), "{classpath}");
         assert!(!classpath.contains("lwjgl-3.3.1.jar"), "{classpath}");
@@ -546,7 +555,14 @@ mod tests {
             .option
             .additional_jvm
             .push("-Ddmcl.test.extra=1.0".to_string());
-        let args = launcher.gen_args().await.unwrap();
+        let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+        let args = run_node(move |ctx| {
+            let launcher = launcher.clone();
+            async move { launcher.lock().await.gen_args(&ctx).await }
+        })
+        .await
+        .unwrap();
+        let args = (*args).clone();
 
         // 第一个参数是已选定的 java 可执行文件
         assert!(args[0].contains("java"), "{}", args[0]);
@@ -611,7 +627,14 @@ mod tests {
 
         assert_eq!(launcher.version_path, root.join("versions").join("1.0"));
         assert_eq!(launcher.game_path, root);
-        let args = launcher.gen_args().await.unwrap();
+        let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+        let args = run_node(move |ctx| {
+            let launcher = launcher.clone();
+            async move { launcher.lock().await.gen_args(&ctx).await }
+        })
+        .await
+        .unwrap();
+        let args = (*args).clone();
         assert!(
             args.contains(&root.to_string_lossy().into_owned()),
             "{args:?}"

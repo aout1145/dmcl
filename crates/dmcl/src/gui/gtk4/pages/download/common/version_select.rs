@@ -30,7 +30,7 @@ use relm4::adw::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 
-use dmcl_task::BoxFuture;
+use std::future::Future;
 
 /// 一个可选项。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,8 +81,34 @@ impl KindChip {
 
 /// 取数器：按上下文（当前是 MC 版本 id；MC 版本清单的取数器忽略上下文）取可用版本。
 /// `DownloadSource` 由页面在构造闭包时捕获并传入，组件不认识它。
-pub(crate) type FetchVersions =
-    Arc<dyn Fn(&str) -> BoxFuture<'_, Result<Vec<VersionItem>>> + Send + Sync>;
+#[async_trait::async_trait]
+pub(crate) trait VersionFetcher: Send + Sync {
+    async fn fetch(&self, context: &str) -> Result<Vec<VersionItem>>;
+}
+
+pub(crate) type FetchVersions = Arc<dyn VersionFetcher>;
+
+/// 用一个 `Fn(&str) -> Future` 实现 [`VersionFetcher`]。
+pub(crate) fn fetcher<F, Fut>(f: F) -> FetchVersions
+where
+    F: Fn(&str) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Vec<VersionItem>>> + Send + 'static,
+{
+    struct Adapter<F>(F);
+
+    #[async_trait::async_trait]
+    impl<F, Fut> VersionFetcher for Adapter<F>
+    where
+        F: Fn(&str) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<Vec<VersionItem>>> + Send + 'static,
+    {
+        async fn fetch(&self, context: &str) -> Result<Vec<VersionItem>> {
+            (self.0)(context).await
+        }
+    }
+
+    Arc::new(Adapter(f))
+}
 
 /// 组件 Init。
 pub(crate) struct VersionSelectInit {
@@ -356,7 +382,10 @@ impl VersionSelect {
         let fetch = self.fetch.clone();
         let sender = sender.clone();
         relm4::spawn(async move {
-            let result = fetch(&context).await.map_err(|err| format!("{err:#}"));
+            let result = fetch
+                .fetch(&context)
+                .await
+                .map_err(|err| format!("{err:#}"));
             // 页面可能已经关掉（例如点安装后立即关页）：组件通道关了只说明没人要结果，
             // 用 `input_sender().send` 静默丢弃，别让后台取数把进程 panic 掉。
             let _ = sender.input_sender().send(SelectIn::Loaded { gen, result });

@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_task::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, AccountSource};
@@ -84,9 +83,10 @@ pub struct StoredCredential {
 /// 微软凭据的持久化。
 ///
 /// 应用层用系统钥匙串实现；测试或没有钥匙串的环境可以换成内存实现。
+#[async_trait::async_trait]
 pub trait RefreshTokenStore: Send + Sync {
-    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>>;
-    fn save<'a>(&'a self, credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>>;
+    async fn load(&self) -> Result<Option<StoredCredential>>;
+    async fn save(&self, credential: &StoredCredential) -> Result<()>;
 }
 
 /// 启动链使用的微软账户源：只做静默刷新。
@@ -119,40 +119,37 @@ impl MicrosoftAccountSource {
     }
 }
 
+#[async_trait::async_trait]
 impl AccountSource for MicrosoftAccountSource {
     fn name(&self) -> &str {
         &self.name
     }
 
-    fn login<'a>(&'a self) -> BoxFuture<'a, Result<Account>> {
-        self.refresh()
+    async fn login(&self) -> Result<Account> {
+        self.refresh().await
     }
 
-    fn refresh<'a>(&'a self) -> BoxFuture<'a, Result<Account>> {
-        Box::pin(async move {
-            let credential = self.store.load().await?;
-            let credential = match credential {
-                Some(credential) if same_profile(&credential.uuid, &self.uuid) => credential,
-                _ => return Err(anyhow!("账户「{}」尚未登录", self.name)),
-            };
+    async fn refresh(&self) -> Result<Account> {
+        let credential = self.store.load().await?;
+        let credential = match credential {
+            Some(credential) if same_profile(&credential.uuid, &self.uuid) => credential,
+            _ => return Err(anyhow!("账户「{}」尚未登录", self.name)),
+        };
 
-            match refresh_session(&self.http, &credential.refresh_token).await {
-                Ok(session) => {
-                    if let Some(token) = session.rotated_refresh_token {
-                        let credential = StoredCredential {
-                            uuid: session.account.uuid.clone(),
-                            refresh_token: token,
-                        };
-                        self.store.save(&credential).await?;
-                    }
-                    Ok(session.account)
+        match refresh_session(&self.http, &credential.refresh_token).await {
+            Ok(session) => {
+                if let Some(token) = session.rotated_refresh_token {
+                    let credential = StoredCredential {
+                        uuid: session.account.uuid.clone(),
+                        refresh_token: token,
+                    };
+                    self.store.save(&credential).await?;
                 }
-                Err(SessionError::InvalidGrant) => {
-                    Err(anyhow!("账户「{}」的登录已过期", self.name))
-                }
-                Err(SessionError::Other(err)) => Err(err),
+                Ok(session.account)
             }
-        })
+            Err(SessionError::InvalidGrant) => Err(anyhow!("账户「{}」的登录已过期", self.name)),
+            Err(SessionError::Other(err)) => Err(err),
+        }
     }
 }
 
@@ -660,25 +657,27 @@ mod tests {
 
     struct NoTokenStore;
 
+    #[async_trait::async_trait]
     impl RefreshTokenStore for NoTokenStore {
-        fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
-            Box::pin(async { Ok(None) })
+        async fn load(&self) -> Result<Option<StoredCredential>> {
+            Ok(None)
         }
 
-        fn save<'a>(&'a self, _credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async { Ok(()) })
+        async fn save(&self, _credential: &StoredCredential) -> Result<()> {
+            Ok(())
         }
     }
 
     struct FixedStore(StoredCredential);
 
+    #[async_trait::async_trait]
     impl RefreshTokenStore for FixedStore {
-        fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
-            Box::pin(async { Ok(Some(self.0.clone())) })
+        async fn load(&self) -> Result<Option<StoredCredential>> {
+            Ok(Some(self.0.clone()))
         }
 
-        fn save<'a>(&'a self, _credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
-            Box::pin(async { Ok(()) })
+        async fn save(&self, _credential: &StoredCredential) -> Result<()> {
+            Ok(())
         }
     }
 

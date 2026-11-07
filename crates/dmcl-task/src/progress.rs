@@ -1,66 +1,69 @@
-//! 进度快照。
+//! 全局下载进度。
 
-use std::fmt;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
-/// 一个任务步骤的进度快照。
-///
-/// `current` / `total` 的单位由任务自己定义（字节数、文件个数……），前端只负责把它们
-/// 渲染成字节数；**百分比只看 [`Progress::percent`]**：它由任务自己算好（有些任务的
-/// 百分比不是 `current / total`），为 `None` 时表示这次进度没有有意义的百分比可显示。
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Progress {
-    /// 已完成的工作量（用于显示字节数）。
-    pub current: u64,
-    /// 总工作量；未知时为 `None`。
-    pub total: Option<u64>,
-    /// 面向用户的说明，例如当前正在下载的文件名。
-    pub message: String,
-    /// 有意义的百分比（0.0~100.0）；`None` 表示没有百分比可显示。
-    pub percent: Option<f64>,
+/// 整个任务图共享的下载进度。
+#[derive(Clone)]
+pub struct ProgressHandle {
+    state: Arc<ProgressState>,
 }
 
-impl Progress {
-    pub fn new(
-        current: u64,
-        total: Option<u64>,
-        message: impl Into<String>,
-        percent: Option<f64>,
-    ) -> Self {
+struct ProgressState {
+    downloaded: AtomicI64,
+    total: AtomicI64,
+}
+
+impl Default for ProgressHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProgressHandle {
+    pub fn new() -> Self {
         Self {
-            current,
-            total,
-            message: message.into(),
-            percent,
+            state: Arc::new(ProgressState {
+                downloaded: AtomicI64::new(0),
+                total: AtomicI64::new(0),
+            }),
+        }
+    }
+
+    /// 调整总字节数。正数增加，负数减少（服务器实际大小更小、失败回滚等）。
+    pub fn add_total(&self, delta: i64) {
+        add_saturating(&self.state.total, delta);
+    }
+
+    /// 调整已下载字节。正数增加，负数扣回（重试前撤销本轮已报告字节等）。
+    pub fn add_downloaded(&self, delta: i64) {
+        add_saturating(&self.state.downloaded, delta);
+    }
+
+    /// 当前快照；负值被 clamp 到 0。
+    pub fn snapshot(&self) -> ProgressSnapshot {
+        ProgressSnapshot {
+            downloaded: clamp_u64(self.state.downloaded.load(Ordering::SeqCst)),
+            total: clamp_u64(self.state.total.load(Ordering::SeqCst)),
         }
     }
 }
 
-impl fmt::Display for Progress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(percent) = self.percent {
-            write!(
-                f,
-                "{percent:.1}% ({} / {})",
-                human_bytes(self.current),
-                human_bytes(self.total.unwrap_or(0))
-            )?;
-            if !self.message.is_empty() {
-                write!(f, " {}", self.message)?;
-            }
-        } else if self.current > 0 {
-            // 有字节数但总量未知
-            write!(f, "({})", human_bytes(self.current))?;
-            if !self.message.is_empty() {
-                write!(f, " {}", self.message)?;
-            }
-        } else if self.message.is_empty() {
-            write!(f, "…")?;
-        } else {
-            // 纯状态：只要文字，不带没意义的 "(0 B)"
-            write!(f, "{}", self.message)?;
-        }
-        Ok(())
-    }
+fn add_saturating(value: &AtomicI64, delta: i64) {
+    let _ = value.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        Some(current.saturating_add(delta))
+    });
+}
+
+fn clamp_u64(value: i64) -> u64 {
+    value.max(0) as u64
+}
+
+/// 全局进度的只读快照。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProgressSnapshot {
+    pub downloaded: u64,
+    pub total: u64,
 }
 
 /// 把字节数渲染成人类可读的形式（1024 进制）。
@@ -91,37 +94,49 @@ mod tests {
         assert_eq!(human_bytes(1024 * 1024 * 3 / 2), "1.5 MiB");
     }
 
-    /// 百分比只由 `percent` 字段决定：没给就显示不出百分比。
     #[test]
-    fn display_uses_the_percent_field() {
-        // 没给百分比：只显示字节
+    fn totals_and_downloaded_can_increase_and_decrease() {
+        let progress = ProgressHandle::new();
+        progress.add_total(100);
+        progress.add_downloaded(40);
         assert_eq!(
-            Progress::new(512, Some(1024), "a.jar", None).to_string(),
-            "(512 B) a.jar"
+            progress.snapshot(),
+            ProgressSnapshot {
+                downloaded: 40,
+                total: 100
+            }
         );
+
+        // 服务器实际更小：总大小减少。
+        progress.add_total(-30);
+        // 重试：扣回已报告字节。
+        progress.add_downloaded(-25);
         assert_eq!(
-            Progress::new(512, Some(1024), "a.jar", Some(50.0)).to_string(),
-            "50.0% (512 B / 1.0 KiB) a.jar"
-        );
-        // 起点：百分比 0 也照样显示成 0.0%
-        assert_eq!(
-            Progress::new(0, Some(0), "0/35 个文件", Some(0.0)).to_string(),
-            "0.0% (0 B / 0 B) 0/35 个文件"
+            progress.snapshot(),
+            ProgressSnapshot {
+                downloaded: 15,
+                total: 70
+            }
         );
     }
 
     #[test]
-    fn display_without_a_percent_falls_back_to_bytes_or_message() {
-        // 纯文字：不要出现 "(0 B)"
-        assert_eq!(
-            Progress::new(0, None, "scanning", None).to_string(),
-            "scanning"
-        );
-        // 有字节数但总量未知
-        assert_eq!(
-            Progress::new(2048, None, "x", None).to_string(),
-            "(2.0 KiB) x"
-        );
-        assert_eq!(Progress::new(0, None, "", None).to_string(), "…");
+    fn snapshot_never_reports_negative_values() {
+        let progress = ProgressHandle::new();
+        progress.add_total(-10);
+        progress.add_downloaded(-20);
+        assert_eq!(progress.snapshot(), ProgressSnapshot::default());
+    }
+
+    #[test]
+    fn arithmetic_saturates_instead_of_overflowing() {
+        let progress = ProgressHandle::new();
+        progress.add_total(i64::MAX);
+        progress.add_total(i64::MAX);
+        assert_eq!(progress.snapshot().total, i64::MAX as u64);
+
+        progress.add_downloaded(i64::MIN);
+        progress.add_downloaded(i64::MIN);
+        assert_eq!(progress.snapshot().downloaded, 0);
     }
 }

@@ -28,6 +28,7 @@ gtk4 = ["dep:relm4", "dep:sysinfo", "dep:notify"]
 
 [dependencies]
 dmcl-task.workspace = true
+async-trait.workspace = true
 dmcl-mcmeta.workspace = true
 dmcl-download.workspace = true
 dmcl-game.workspace = true

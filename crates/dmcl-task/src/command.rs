@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 
 use crate::context::{Cancelled, TaskContext};
-use crate::task::{BoxFuture, Task};
+use crate::task::Task;
 
 /// 出错时最多保留多少行输出（防止把整份日志塞进错误信息）。
 const TAIL_LINES: usize = 40;
@@ -118,9 +118,10 @@ impl CommandTask {
     }
 }
 
+#[async_trait::async_trait]
 impl Task<(), ()> for CommandTask {
-    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
+    async fn run(&self, _input: (), ctx: TaskContext) -> Result<()> {
+        {
             ctx.check_cancelled()?;
 
             let line = self.command_line();
@@ -173,7 +174,7 @@ impl Task<(), ()> for CommandTask {
                 anyhow::bail!("{message}");
             }
             Ok(())
-        })
+        }
     }
 }
 
@@ -217,51 +218,57 @@ fn tail_text(tail: &Mutex<VecDeque<String>>) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::chain::TaskChain;
+    use crate::event::TaskEvent;
+    use crate::graph::{TaskGraph, TaskGraphBuilder};
     use std::time::Duration;
+
+    fn single(task: CommandTask) -> TaskGraph<()> {
+        let mut builder = TaskGraphBuilder::new("run");
+        let step = builder.step("步骤");
+        let sink = builder.add(step, "命令", (), task);
+        builder.build(sink).unwrap()
+    }
 
     #[tokio::test]
     async fn captured_output_becomes_logs() {
-        let chain =
-            TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("echo hello"), "echo");
-        let mut rx = chain.subscribe();
-        let handle = tokio::spawn(async move { chain.run(()).await });
+        let graph = single(CommandTask::new("sh").arg("-c").arg("echo hello"));
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected = events.clone();
+        graph
+            .run(move |event| collected.lock().unwrap().push(event))
+            .await
+            .unwrap();
 
-        let mut messages = Vec::new();
-        while let Ok(event) = rx.recv().await {
-            if let crate::event::TaskEvent::Log { message, .. } = event {
-                messages.push(message);
-            }
-        }
-        handle.await.unwrap().unwrap();
-        assert!(messages.iter().any(|line| line == "hello"), "{messages:?}");
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                TaskEvent::Log { message, .. } if message == "hello"
+            )),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]
     async fn a_non_zero_exit_is_an_error() {
-        let chain =
-            TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("exit 3"), "失败命令");
-        let err = chain.run(()).await.unwrap_err();
+        let graph = single(CommandTask::new("sh").arg("-c").arg("exit 3"));
+        let err = graph.run(|_| {}).await.unwrap_err();
         let text = format!("{err:#}");
-        assert!(text.contains("失败命令"), "{text}");
+        assert!(text.contains("命令"), "{text}");
     }
 
     #[tokio::test]
     async fn a_missing_program_is_reported_with_its_command_line() {
-        let chain = TaskChain::new("run").then(
-            CommandTask::new("/definitely/not/here").arg("--x"),
-            "坏命令",
-        );
-        let err = chain.run(()).await.unwrap_err();
+        let graph = single(CommandTask::new("/definitely/not/here").arg("--x"));
+        let err = graph.run(|_| {}).await.unwrap_err();
         assert!(format!("{err:#}").contains("/definitely/not/here --x"));
     }
 
     #[tokio::test]
     async fn cancelling_kills_the_child() {
-        let chain =
-            TaskChain::new("run").then(CommandTask::new("sh").arg("-c").arg("sleep 30"), "长命令");
-        let cancel = chain.cancel_handle();
-        let handle = tokio::spawn(async move { chain.run(()).await });
+        let graph = single(CommandTask::new("sh").arg("-c").arg("sleep 30"));
+        let cancel = graph.cancel_handle();
+        let handle = tokio::spawn(async move { graph.run(|_| {}).await });
 
         tokio::time::sleep(Duration::from_millis(200)).await;
         cancel.cancel();
@@ -271,15 +278,16 @@ mod tests {
             .expect("取消应当立刻结束命令")
             .unwrap()
             .unwrap_err();
-        assert!(err.downcast_ref::<Cancelled>().is_some());
+        assert!(
+            err.chain()
+                .any(|cause| cause.downcast_ref::<Cancelled>().is_some()),
+            "{err:#}"
+        );
     }
 
     #[tokio::test]
     async fn inherit_mode_just_waits() {
-        let chain = TaskChain::new("run").then(
-            CommandTask::new("sh").arg("-c").arg("true").inherit_stdio(),
-            "true",
-        );
-        chain.run(()).await.unwrap();
+        let graph = single(CommandTask::new("sh").arg("-c").arg("true").inherit_stdio());
+        graph.run(|_| {}).await.unwrap();
     }
 }

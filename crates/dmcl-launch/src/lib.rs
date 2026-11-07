@@ -9,13 +9,13 @@
 //!    窗口尺寸、内存设置等全部通过 [`LaunchOption`] 由调用者传入；内存可以留空，
 //!    由 [`resolve_memory`] 按系统可用内存与所选 Java 的架构自动决定。
 //!
-//! 一站式启动把「检查并补全 → 选择 Java → 解压 natives → 登录 → 生成参数 → 启动」串成
-//! 一条任务链（见 [`crate::prepare`]）：[`launch_chain`] 返回
-//! `TaskChain<(), GameMonitor>`，由调用者运行、订阅事件，并在拿到**未 wait** 的
+//! 一站式启动把「检查并补全 → 选择 Java → 解压 natives / 登录 → 生成参数 → 启动」组成
+//! 一张任务图（见 [`crate::prepare`]）：[`launch_chain`] 返回
+//! `TaskGraph<GameMonitor>`，由调用者运行、订阅事件，并在拿到**未 wait** 的
 //! [`GameMonitor`] 后决定何时等待或停掉。
 //!
 //! [`Account`] 是登录完成后用来拼命令行的只读快照；[`AccountSource`] 负责 `login` /
-//! `refresh`，启动链在解压 natives 之后调用它。
+//! `refresh`，登录节点与文件 / Java 准备并行执行。
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -37,9 +37,11 @@
 //! );
 //!
 //! // 检查完整性 → 选 Java → 解压 natives → 登录 → 生成启动参数 → 启动子进程
-//! let mut monitor = launch_chain(option, game, None)
-//!     .run_with((), |event| println!("{event}"))
+//! let monitor = launch_chain(option, game, None)
+//!     .run(|event| println!("{event}"))
 //!     .await?;
+//! let mut monitor = std::sync::Arc::try_unwrap(monitor)
+//!     .map_err(|_| anyhow::anyhow!("游戏监控句柄仍被共享"))?;
 //! monitor.wait().await?;
 //! # Ok(())
 //! # }

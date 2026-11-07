@@ -705,6 +705,7 @@ name = "dmcl"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "built",
  "clap",
  "dialoguer",
@@ -732,6 +733,7 @@ name = "dmcl-download"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "dmcl-task",
  "hex",
  "md-5",
@@ -776,6 +778,7 @@ name = "dmcl-java"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "dmcl-download",
  "dmcl-mcmeta",
  "dmcl-task",
@@ -790,6 +793,8 @@ name = "dmcl-launch"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "dmcl-download",
  "dmcl-game",
  "dmcl-java",
  "dmcl-mcmeta",
@@ -824,6 +829,7 @@ name = "dmcl-task"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "tokio",
 ]
 

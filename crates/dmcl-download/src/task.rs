@@ -1,304 +1,180 @@
-//! 下载任务本体。
+//! 下载上下文与单文件任务。
+//!
+//! 每个文件是一个独立的 DAG 节点；并发由 [`DownloadContext`] 里的三层信号量控制：
+//! 活跃文件数、全局连接数（同时约束分块）、CPU 密集任务（校验 / 预检）。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use path_clean::PathClean;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit};
 use tokio::task::JoinSet;
 
-use dmcl_task::{human_bytes, BoxFuture, Cancelled, Progress, Task, TaskContext};
+use dmcl_task::{human_bytes, Cancelled, DynamicHandle, ProgressHandle, StepId, Task, TaskContext};
 
-use crate::hash::{files_ok, hash_file, FileCheck};
+use crate::hash::{files_ok_with, hash_file, FileCheck};
 use crate::item::DownloadItem;
 use crate::options::DownloadOptions;
-use crate::report::{DownloadFailure, DownloadReport};
 
-/// 进度事件的节流间隔（避免每 64 KiB 就刷一次事件）。
-const REPORT_INTERVAL: Duration = Duration::from_millis(100);
-/// 建立连接的时限（TCP / TLS）。
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 两次读之间的空闲时限：超过它就认为连接僵死，报错并交给重试。
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 把一组文件下载到本地。
-///
-/// 见 crate 文档了解并发 / 分块 / `.part` 策略。
-#[derive(Debug)]
-pub struct DownloadTask {
-    items: Vec<DownloadItem>,
-    options: DownloadOptions,
+/// 一份下载计划共享的客户端、并发预算与全局进度。
+pub struct DownloadContext {
     client: reqwest::Client,
+    options: DownloadOptions,
+    file_semaphore: Arc<Semaphore>,
+    connection_semaphore: Arc<Semaphore>,
+    worker_semaphore: Arc<Semaphore>,
+    progress: ProgressHandle,
 }
 
-impl DownloadTask {
-    pub fn new(options: DownloadOptions) -> Self {
+impl DownloadContext {
+    pub fn new(
+        client: reqwest::Client,
+        options: DownloadOptions,
+        progress: ProgressHandle,
+    ) -> Arc<Self> {
         let options = options.normalized();
-        // 配置里只有 UA 和超时，构建失败只可能是 TLS 后端无法初始化 —— 那种情况下
-        // 任何下载都做不了，直接在这里暴露出来，不要静默退化成没有超时的默认客户端。
-        let client = reqwest::Client::builder()
-            .user_agent(options.user_agent.clone())
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .build()
-            .expect("无法初始化 HTTP 客户端");
-        Self {
-            items: Vec::new(),
-            options,
+        Arc::new(Self {
             client,
-        }
-    }
-
-    /// 用外部提供的 http 客户端（例如复用一个连接池）。
-    pub fn with_client(mut self, client: reqwest::Client) -> Self {
-        self.client = client;
-        self
-    }
-
-    pub fn push(&mut self, item: DownloadItem) -> &mut Self {
-        self.items.push(item);
-        self
-    }
-
-    pub fn extend(&mut self, items: impl IntoIterator<Item = DownloadItem>) -> &mut Self {
-        self.items.extend(items);
-        self
-    }
-
-    /// [`DownloadTask::push`] 的链式版本。
-    pub fn with_item(mut self, item: DownloadItem) -> Self {
-        self.items.push(item);
-        self
-    }
-
-    pub fn items(&self) -> &[DownloadItem] {
-        &self.items
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+            file_semaphore: Arc::new(Semaphore::new(options.max_active_files)),
+            connection_semaphore: Arc::new(Semaphore::new(options.max_connections)),
+            worker_semaphore: Arc::new(Semaphore::new(options.max_workers)),
+            progress,
+            options,
+        })
     }
 
     pub fn options(&self) -> &DownloadOptions {
         &self.options
     }
 
-    /// 已知大小的文件的总字节数。
-    pub fn known_total_bytes(&self) -> u64 {
-        self.items.iter().filter_map(|item| item.size).sum()
+    /// 单文件下载任务（下载 → 校验 → rename）。失败直接返回错误，由 DAG FailFast 处理。
+    pub fn task(self: &Arc<Self>, item: DownloadItem) -> impl Task<(), ()> + 'static {
+        FileDownloadTask {
+            context: self.clone(),
+            item,
+        }
     }
 
-    /// 执行下载并返回完整报告。
+    /// 下载准备节点：预检本地文件、增加总字节数、为缺失文件动态创建下载任务。
     ///
-    /// 单个文件失败**不会**让这里返回 `Err`（唯一例外是被取消）——失败项都在报告里。
-    /// 任务链里的语义由 [`Task`] 的实现给出（默认"有失败就报错"）。
-    pub async fn execute(&self, ctx: &TaskContext) -> Result<DownloadReport> {
-        let options = Arc::new(self.options.normalized());
-        let report = Arc::new(Mutex::new(DownloadReport::default()));
-
-        // 候选项不能为空：没有候选地址就无从下载，直接报错
-        for item in &self.items {
+    /// 返回文件任务的句柄；动态任务自动成为当前节点的依赖，调用方不需要逐个 `wait`
+    /// 才能 join。但如果准备节点接下来要读取下载好的文件（资源索引、natives、JRE），
+    /// 就必须先 `wait`，否则文件还没落盘。
+    pub async fn prepare(
+        self: &Arc<Self>,
+        ctx: &TaskContext,
+        step: StepId,
+        items: Vec<DownloadItem>,
+    ) -> Result<Vec<DynamicHandle<()>>> {
+        for item in &items {
             if item.urls.is_empty() {
                 anyhow::bail!("下载项没有候选地址：{}", item.save_to.display());
             }
         }
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        // 先做本地判断：已经是最新（校验值 / 大小一致）的文件不占用连接。
-        // 哈希按 CPU 线程数并发，避免几千个文件串行扫一遍。
-        let oks = files_ok(self.items.iter().map(|item| FileCheck {
+        let checks = items.iter().map(|item| FileCheck {
             path: absolute(&item.save_to),
             checksum: item.checksum.clone(),
             size: item.size,
-        }))
-        .await?;
+        });
+        let cancel = ctx.cancel_handle();
+        let oks = tokio::select! {
+            checked = files_ok_with(checks, self.worker_semaphore.clone()) => checked?,
+            _ = cancel.cancelled() => return Err(anyhow::Error::new(Cancelled)),
+        };
 
-        let mut pending: Vec<DownloadItem> = Vec::new();
-        for (item, ok) in self.items.iter().zip(oks) {
+        let mut missing = Vec::new();
+        let mut skipped = 0usize;
+        let mut total = 0i64;
+        for (item, ok) in items.into_iter().zip(oks) {
             if ok {
-                report.lock().unwrap().skipped += 1;
-            } else {
-                pending.push(item.clone());
+                skipped += 1;
+                continue;
             }
-        }
-
-        // 进度总量按规划里已知的大小预填；服务器给出 `Content-Length` /
-        // `Content-Range` 后再修订（见 `Tracker::record_size`）。跳过的项不计入。
-        let tracker = Arc::new(Tracker::new(pending.iter().map(|item| item.size)));
-        let connections = Arc::new(Semaphore::new(options.max_connections));
-
-        if !pending.is_empty() {
-            ctx.log(format!("待下载 {} 个文件", pending.len()));
-            // 立刻显示文件数量与按规划预填的字节总量，不用等服务器响应
-            tracker.initial_report(ctx);
-        }
-
-        let mut set: JoinSet<ItemOutcome> = JoinSet::new();
-        for item in pending {
-            let options = options.clone();
-            let tracker = tracker.clone();
-            let connections = connections.clone();
-            let client = self.client.clone();
-            let ctx = ctx.clone();
-            set.spawn(async move {
-                download_one(&client, &options, &tracker, &connections, item, &ctx).await
-            });
-        }
-
-        let mut cancelled = false;
-        while let Some(joined) = set.join_next().await {
-            let outcome = match joined {
-                Ok(outcome) => outcome,
-                Err(join_error) => {
-                    report.lock().unwrap().failed.push(DownloadFailure {
-                        path: PathBuf::new(),
-                        url: String::new(),
-                        error: format!("下载任务异常终止: {join_error}"),
-                    });
-                    continue;
-                }
-            };
-            match outcome.result {
-                Ok(bytes) => {
-                    {
-                        let mut report = report.lock().unwrap();
-                        report.downloaded += 1;
-                        report.bytes += bytes;
-                    }
-                    ctx.log(format!("{} 完成", outcome.item.name));
-                }
-                Err(err) if err.downcast_ref::<Cancelled>().is_some() => {
-                    cancelled = true;
-                    set.abort_all();
-                }
-                Err(err) => {
-                    report.lock().unwrap().failed.push(DownloadFailure {
-                        path: outcome.item.save_to.clone(),
-                        url: outcome.url.clone(),
-                        error: format!("{err:#}"),
-                    });
-                }
+            if let Some(size) = item.size {
+                total = total.saturating_add(to_i64(size));
             }
-            // 不管成败，这个文件都算"处理完一个"
-            tracker.file_finished(outcome.sized, ctx);
+            missing.push(item);
         }
 
-        if cancelled {
-            return Err(anyhow::Error::new(Cancelled));
+        if skipped > 0 {
+            ctx.log(format!("跳过 {skipped} 个已完整的文件"));
+        }
+        if missing.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let report = std::mem::take(&mut *report.lock().unwrap());
-        tracker.finish(ctx, &report);
-        Ok(report)
+        self.progress.add_total(total);
+        ctx.log(format!("待下载 {} 个文件", missing.len()));
+        let mut handles = Vec::with_capacity(missing.len());
+        for item in missing {
+            let name = item.name.clone();
+            handles.push(ctx.add_task(step, name, (), self.task(item))?);
+        }
+        Ok(handles)
     }
-}
 
-impl Task<(), DownloadReport> for DownloadTask {
-    fn run<'a>(&'a self, _input: (), ctx: TaskContext) -> BoxFuture<'a, Result<DownloadReport>> {
-        Box::pin(async move {
-            let report = self.execute(&ctx).await?;
-            if report.failed.is_empty() || self.options.ignore_failures {
-                Ok(report)
-            } else {
-                Err(anyhow!(
-                    "有 {} 个文件下载失败：\n{}",
-                    report.failed.len(),
-                    report.failure_summary(5)
-                ))
-            }
-        })
+    /// 用下载上下文的 worker 预算并发检查本地文件。
+    pub async fn files_ok(&self, files: impl IntoIterator<Item = FileCheck>) -> Result<Vec<bool>> {
+        files_ok_with(files, self.worker_semaphore.clone()).await
     }
-}
 
-struct ItemOutcome {
-    item: DownloadItem,
-    /// 完成时是否已经知道实际大小（决定它算「已知」还是「未知」的完成）。
-    sized: bool,
-    /// 最后一次尝试用的地址（失败上报用）。
-    url: String,
-    result: Result<u64>,
-}
-
-/// 一次任务运行里所有文件共享的东西。
-struct Downloader<'a> {
-    client: &'a reqwest::Client,
-    options: &'a DownloadOptions,
-    tracker: &'a Arc<Tracker>,
-    connections: &'a Arc<Semaphore>,
-    ctx: &'a TaskContext,
-}
-
-impl Downloader<'_> {
-    /// 一个文件的完整流程（含重试）。每次尝试**换用下一个候选地址**（A B A …）。
-    async fn download_one(&self, item: DownloadItem) -> ItemOutcome {
+    /// 一个文件从第一次尝试到成功 / 耗尽重试。
+    async fn download_file(&self, item: &DownloadItem, ctx: &TaskContext) -> Result<u64> {
         let save_to = absolute(&item.save_to);
         let mut last_error: Option<anyhow::Error> = None;
-        // 这一项在进度里的份额：是否已知实际大小、记了多少。整项失败时回滚。
-        // 计划里已知大小的项先预填进去，服务器返回真实大小时再修订。
-        let share = Share::planned(item.size);
-        // 最后尝试过的地址（失败上报用）；还没试过就退回首选
-        let mut last_url = item.urls.first().cloned().unwrap_or_default();
-
+        let total = TotalContribution::new(item.size, self.progress.clone());
         let attempts = self.options.max_retries.saturating_add(1);
+
         for attempt in 1..=attempts {
-            if let Err(err) = self.ctx.check_cancelled() {
-                self.tracker.rollback_item(&share);
-                return ItemOutcome {
-                    item,
-                    sized: share.is_sized(),
-                    url: last_url,
-                    result: Err(err),
-                };
-            }
+            ctx.check_cancelled()?;
             // 轮换候选源：第 n 次尝试用 urls[(n-1) % len]
             let url = item.urls[candidate_index(&item.urls, attempt)].clone();
-            last_url = url.clone();
             if attempt > 1 {
-                self.ctx.log(format!(
+                ctx.log(format!(
                     "{} 重试（{}/{}）",
                     item.name,
                     attempt - 1,
                     self.options.max_retries
                 ));
             }
-            // 每次尝试单独记账：失败重试时把这一轮已经上报的字节数减回去，
-            // 否则进度会变成"100% 了还在涨"。
-            let recorder =
-                Recorder::new(self.tracker.clone(), self.ctx.clone(), share.sized.clone());
-            match self.attempt(&item, &url, &save_to, &recorder, &share).await {
+
+            // 每次尝试单独记账：失败重试时把这一轮已经上报的字节减回去，
+            // 否则进度会变成「100% 了还在涨」。
+            let recorder = Recorder::new(self.progress.clone());
+            match self
+                .attempt(item, &url, &save_to, &recorder, &total, ctx)
+                .await
+            {
                 Ok(bytes) => {
                     recorder.commit();
-                    return ItemOutcome {
-                        item,
-                        sized: share.is_sized(),
-                        url: last_url,
-                        result: Ok(bytes),
-                    };
+                    return Ok(bytes);
                 }
-                Err(err) => {
+                Err(error) => {
                     recorder.discard();
-                    // 失败后清掉半成品，下一轮从头来过
                     let _ = tokio::fs::remove_file(item.part_path()).await;
-                    last_error = Some(err.context(format!("下载 {} 失败", item.name)));
+                    let cancelled = error
+                        .chain()
+                        .any(|cause| cause.downcast_ref::<Cancelled>().is_some());
+                    if cancelled {
+                        return Err(error);
+                    }
+                    last_error = Some(error.context(format!("下载 {} 失败", item.name)));
                 }
             }
         }
 
-        // 全部尝试都失败：把这一项从进度里回滚掉
-        self.tracker.rollback_item(&share);
-        ItemOutcome {
-            item,
-            sized: share.is_sized(),
-            url: last_url,
-            result: Err(last_error.unwrap_or_else(|| anyhow!("下载失败"))),
-        }
+        Err(last_error.unwrap_or_else(|| anyhow!("下载 {} 失败", item.name)))
     }
 
     /// 一次尝试：下载 → 校验 → 改名。失败时不会留下最终文件。
@@ -308,7 +184,8 @@ impl Downloader<'_> {
         url: &str,
         save_to: &Path,
         recorder: &Recorder,
-        share: &Share,
+        total: &TotalContribution,
+        ctx: &TaskContext,
     ) -> Result<u64> {
         if let Some(parent) = save_to.parent() {
             tokio::fs::create_dir_all(parent).await.ok();
@@ -316,24 +193,36 @@ impl Downloader<'_> {
         let part = item.part_path();
         let _ = tokio::fs::remove_file(&part).await;
 
+        // file 许可覆盖网络 + 写 `.part`，不覆盖最终哈希校验。
+        let file_permit = acquire(&self.file_semaphore, ctx).await?;
+
         // 已知大小且足够大 → 先探测服务器是否支持 Range，再决定分块还是单连接
         let chunked_total = match item.size {
-            Some(size) if self.options.should_chunk(size) => probe_range(self.client, url).await,
+            Some(size) if self.options.should_chunk(size) => {
+                let _connection = acquire(&self.connection_semaphore, ctx).await?;
+                probe_range(&self.client, url, ctx).await?
+            }
             _ => None,
         };
 
         let bytes = match chunked_total {
-            Some(total) => {
-                // 分块的总量来自 `Content-Range`（服务器实际大小）
-                self.tracker.record_size(share, total);
-                self.chunked(url, &part, total, recorder).await?
+            Some(actual) => {
+                total.observe(actual);
+                self.chunked(url, &part, actual, recorder, ctx).await?
             }
-            None => self.single(url, &part, recorder, share).await?,
+            None => self.single(url, &part, recorder, total, ctx).await?,
         };
 
-        // 校验：校验值优先（用哪个算法由它决定），其次大小
+        // 网络阶段结束：先释放 file，再进入 CPU 校验。
+        drop(file_permit);
+
+        let worker_permit = acquire(&self.worker_semaphore, ctx).await?;
         if let Some(checksum) = item.checksum.as_ref() {
-            let actual = hash_file(&part, checksum.algorithm()).await?;
+            let cancel = ctx.cancel_handle();
+            let actual = tokio::select! {
+                actual = hash_file(&part, checksum.algorithm()) => actual?,
+                _ = cancel.cancelled() => return Err(anyhow::Error::new(Cancelled)),
+            };
             if actual != checksum.hex() {
                 anyhow::bail!(
                     "{} 校验失败（期望 {}，实际 {actual}）",
@@ -346,6 +235,7 @@ impl Downloader<'_> {
                 anyhow::bail!("大小不匹配（期望 {size} 字节，实际 {bytes} 字节）");
             }
         }
+        drop(worker_permit);
 
         tokio::fs::rename(&part, save_to)
             .await
@@ -359,18 +249,19 @@ impl Downloader<'_> {
         url: &str,
         part: &Path,
         recorder: &Recorder,
-        share: &Share,
+        total: &TotalContribution,
+        ctx: &TaskContext,
     ) -> Result<u64> {
-        let _permit = self.connections.acquire().await?;
-        let mut response = send_get(self.client, url, None).await?.error_for_status()?;
-        // 服务器给的实际大小：这一项转入「已知」组
+        let _connection = acquire(&self.connection_semaphore, ctx).await?;
+        let mut response = send_get(&self.client, url, None, ctx)
+            .await?
+            .error_for_status()?;
         if let Some(actual) = response.content_length() {
-            self.tracker.record_size(share, actual);
+            total.observe(actual);
         }
         let mut file = tokio::fs::File::create(part).await?;
         let mut written = 0u64;
-        while let Some(chunk) = response.chunk().await? {
-            recorder.check_cancelled()?;
+        while let Some(chunk) = next_chunk(&mut response, ctx).await? {
             file.write_all(&chunk).await?;
             written += chunk.len() as u64;
             recorder.add(chunk.len() as u64);
@@ -379,144 +270,189 @@ impl Downloader<'_> {
         Ok(written)
     }
 
-    /// 分块并发下载。
-    async fn chunked(&self, url: &str, part: &Path, size: u64, recorder: &Recorder) -> Result<u64> {
+    /// 分块并发下载：每块占一个全局连接许可，单个大文件可以占满全部连接。
+    async fn chunked(
+        &self,
+        url: &str,
+        part: &Path,
+        size: u64,
+        recorder: &Recorder,
+        ctx: &TaskContext,
+    ) -> Result<u64> {
         // 预分配出目标大小：各分块各自 seek 到自己的偏移写入，互不干扰
         {
             let file = tokio::fs::File::create(part).await?;
             file.set_len(size).await?;
         }
 
-        let file_semaphore = Arc::new(Semaphore::new(self.options.max_chunks_per_file));
         let chunk_size = self.options.chunk_size;
         let mut set: JoinSet<Result<u64>> = JoinSet::new();
+        let mut written = 0u64;
 
         let mut start = 0u64;
         while start < size {
+            // 先占一个全局连接名额，再 spawn 这一块；permit 随块任务释放
+            let permit = acquire_owned(&self.connection_semaphore, ctx).await?;
             let end = (start + chunk_size - 1).min(size - 1);
-            let client = self.client.clone();
-            let connections = self.connections.clone();
-            let file_semaphore = file_semaphore.clone();
-            let recorder = recorder.clone();
-            let url = url.to_string();
-            let part = part.to_path_buf();
-            set.spawn(async move {
-                // 先占"单文件块数"名额，再占全局连接名额
-                let _file_permit = file_semaphore.acquire_owned().await?;
-                let _permit = connections.acquire_owned().await?;
-                fetch_range(&client, &url, start, end, &part, &recorder).await
-            });
+            let request = ChunkRequest {
+                client: self.client.clone(),
+                url: url.to_string(),
+                start,
+                end,
+                part: part.to_path_buf(),
+                recorder: recorder.clone(),
+                ctx: ctx.clone(),
+            };
+            set.spawn(async move { request.run(permit).await });
             start = end + 1;
+
+            while let Some(joined) = set.try_join_next() {
+                written += handle_chunk(joined, &mut set)?;
+            }
         }
 
-        let mut written = 0u64;
         while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok(Ok(bytes)) => written += bytes,
-                Ok(Err(err)) => {
-                    set.abort_all();
-                    return Err(err);
-                }
-                Err(join_error) => {
-                    set.abort_all();
-                    return Err(anyhow!("分块下载任务异常终止: {join_error}"));
-                }
-            }
+            written += handle_chunk(joined, &mut set)?;
         }
         Ok(written)
     }
 }
 
-/// 一个文件的重试循环。
-async fn download_one(
-    client: &reqwest::Client,
-    options: &Arc<DownloadOptions>,
-    tracker: &Arc<Tracker>,
-    connections: &Arc<Semaphore>,
+/// 单文件任务。
+struct FileDownloadTask {
+    context: Arc<DownloadContext>,
     item: DownloadItem,
-    ctx: &TaskContext,
-) -> ItemOutcome {
-    let downloader = Downloader {
-        client,
-        options,
-        tracker,
-        connections,
-        ctx,
-    };
-    downloader.download_one(item).await
 }
 
-/// 抓取 `[start, end]` 区间的字节并写到文件的对应偏移。
-async fn fetch_range(
-    client: &reqwest::Client,
-    url: &str,
+#[async_trait::async_trait]
+impl Task<(), ()> for FileDownloadTask {
+    async fn run(&self, _input: (), ctx: TaskContext) -> Result<()> {
+        let bytes = self.context.download_file(&self.item, &ctx).await?;
+        ctx.log(format!("{} 完成（{}）", self.item.name, human_bytes(bytes)));
+        Ok(())
+    }
+}
+
+/// 处理一个已完成的分块；失败时中止其余分块。
+fn handle_chunk(
+    joined: std::result::Result<Result<u64>, tokio::task::JoinError>,
+    set: &mut JoinSet<Result<u64>>,
+) -> Result<u64> {
+    match joined {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => {
+            set.abort_all();
+            Err(error)
+        }
+        Err(join_error) => {
+            set.abort_all();
+            Err(anyhow!("分块下载任务异常终止: {join_error}"))
+        }
+    }
+}
+
+/// 一个分块请求；持有全局连接许可直到请求结束。
+struct ChunkRequest {
+    client: reqwest::Client,
+    url: String,
     start: u64,
     end: u64,
-    part: &Path,
-    recorder: &Recorder,
-) -> Result<u64> {
-    let range = format!("bytes={start}-{end}");
-    let mut response = send_get(client, url, Some(range))
-        .await?
-        .error_for_status()?;
-    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        anyhow::bail!("服务器没有按 Range 请求返回 206（{}）", response.status());
-    }
+    part: PathBuf,
+    recorder: Recorder,
+    ctx: TaskContext,
+}
 
-    let mut file = tokio::fs::OpenOptions::new().write(true).open(part).await?;
-    file.seek(std::io::SeekFrom::Start(start)).await?;
+impl ChunkRequest {
+    /// 抓取 `[start, end]` 区间的字节并写到文件的对应偏移。
+    async fn run(self, _permit: OwnedSemaphorePermit) -> Result<u64> {
+        let range = format!("bytes={}-{}", self.start, self.end);
+        let mut response = send_get(&self.client, &self.url, Some(&range), &self.ctx)
+            .await?
+            .error_for_status()?;
+        if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+            anyhow::bail!("服务器没有按 Range 请求返回 206（{}）", response.status());
+        }
 
-    let mut written = 0u64;
-    while let Some(chunk) = response.chunk().await? {
-        recorder.check_cancelled()?;
-        file.write_all(&chunk).await?;
-        written += chunk.len() as u64;
-        recorder.add(chunk.len() as u64);
-    }
-    file.flush().await?;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.part)
+            .await?;
+        file.seek(std::io::SeekFrom::Start(self.start)).await?;
 
-    let expected = end - start + 1;
-    if written != expected {
-        anyhow::bail!("分块 {start}-{end} 长度不符（期望 {expected}，实际 {written}）");
+        let mut written = 0u64;
+        while let Some(chunk) = next_chunk(&mut response, &self.ctx).await? {
+            file.write_all(&chunk).await?;
+            written += chunk.len() as u64;
+            self.recorder.add(chunk.len() as u64);
+        }
+        file.flush().await?;
+
+        let expected = self.end - self.start + 1;
+        if written != expected {
+            anyhow::bail!(
+                "分块 {}-{} 长度不符（期望 {expected}，实际 {written}）",
+                self.start,
+                self.end
+            );
+        }
+        Ok(written)
     }
-    Ok(written)
 }
 
 /// 发一个 GET 请求，等待响应头也有时限（防止服务器 accept 之后僵住不回包）。
 async fn send_get(
     client: &reqwest::Client,
     url: &str,
-    range: Option<String>,
+    range: Option<&str>,
+    ctx: &TaskContext,
 ) -> Result<reqwest::Response> {
     let mut request = client.get(url);
     if let Some(range) = range {
         request = request.header(reqwest::header::RANGE, range);
     }
-    tokio::time::timeout(READ_TIMEOUT, request.send())
-        .await
-        .map_err(|_| anyhow!("等待服务器响应超时（{} 秒）", READ_TIMEOUT.as_secs()))?
-        .map_err(Into::into)
+    let cancel = ctx.cancel_handle();
+    let sent = tokio::select! {
+        sent = tokio::time::timeout(READ_TIMEOUT, request.send()) => {
+            sent.map_err(|_| anyhow!("等待服务器响应超时（{} 秒）", READ_TIMEOUT.as_secs()))?
+        }
+        _ = cancel.cancelled() => return Err(anyhow::Error::new(Cancelled)),
+    };
+    Ok(sent?)
+}
+
+/// 读下一段响应体；取消时立刻返回。
+async fn next_chunk(
+    response: &mut reqwest::Response,
+    ctx: &TaskContext,
+) -> Result<Option<Vec<u8>>> {
+    let cancel = ctx.cancel_handle();
+    tokio::select! {
+        chunk = response.chunk() => Ok(chunk?.map(|chunk| chunk.to_vec())),
+        _ = cancel.cancelled() => Err(anyhow::Error::new(Cancelled)),
+    }
 }
 
 /// 探测服务器是否支持 Range，返回资源总大小。
 ///
 /// 只发一个 `bytes=0-0` 的请求；不支持（不是 206、或没有 `Content-Range`）时返回
 /// `None`，调用者就退回单连接下载。
-async fn probe_range(client: &reqwest::Client, url: &str) -> Option<u64> {
-    let fut = client
-        .get(url)
-        .header(reqwest::header::RANGE, "bytes=0-0")
-        .send();
-    let response = tokio::time::timeout(READ_TIMEOUT, fut).await.ok()?.ok()?;
+async fn probe_range(
+    client: &reqwest::Client,
+    url: &str,
+    ctx: &TaskContext,
+) -> Result<Option<u64>> {
+    let response = send_get(client, url, Some("bytes=0-0"), ctx).await?;
     if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-        return None;
+        return Ok(None);
     }
-    let header = response
+    let Some(header) = response
         .headers()
-        .get(reqwest::header::CONTENT_RANGE)?
-        .to_str()
-        .ok()?;
-    parse_content_range(header)
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|header| header.to_str().ok())
+    else {
+        return Ok(None);
+    };
+    Ok(parse_content_range(header))
 }
 
 /// 从 `bytes 0-0/1234` 里取出总长度。
@@ -529,266 +465,85 @@ fn candidate_index(urls: &[String], attempt: u32) -> usize {
     (attempt.saturating_sub(1) as usize) % urls.len()
 }
 
-// ---------------------------------------------------------------------------
-// 进度记账
-// ---------------------------------------------------------------------------
-
-/// 一个文件在进度里的份额状态：是否已知实际大小、记了多少。
-///
-/// `sized` 用 `Arc` 是为了让 [`Recorder`]（分块下载时会克隆进各个分块任务）共享
-/// 同一个开关。
-struct Share {
-    sized: Arc<AtomicBool>,
-    recorded: AtomicU64,
+/// 可取消地获取一个信号量许可。
+async fn acquire<'a>(semaphore: &'a Semaphore, ctx: &TaskContext) -> Result<SemaphorePermit<'a>> {
+    let cancel = ctx.cancel_handle();
+    tokio::select! {
+        permit = semaphore.acquire() => Ok(permit.context("下载信号量已关闭")?),
+        _ = cancel.cancelled() => Err(anyhow::Error::new(Cancelled)),
+    }
 }
 
-impl Share {
-    /// 按计划里已知的大小预填：一开始就归入「已知」组，
-    /// 服务器返回真实大小时再由 [`Tracker::record_size`] 修订。
-    fn planned(size: Option<u64>) -> Self {
+/// 可取消地获取一个 owned 信号量许可（分块任务需要）。
+async fn acquire_owned(
+    semaphore: &Arc<Semaphore>,
+    ctx: &TaskContext,
+) -> Result<OwnedSemaphorePermit> {
+    let cancel = ctx.cancel_handle();
+    tokio::select! {
+        permit = semaphore.clone().acquire_owned() => Ok(permit.context("下载信号量已关闭")?),
+        _ = cancel.cancelled() => Err(anyhow::Error::new(Cancelled)),
+    }
+}
+
+/// 一个文件在全局 `total` 里的当前贡献；服务器报告实际大小时修订。
+struct TotalContribution {
+    progress: ProgressHandle,
+    current: AtomicI64,
+}
+
+impl TotalContribution {
+    fn new(planned: Option<u64>, progress: ProgressHandle) -> Self {
         Self {
-            sized: Arc::new(AtomicBool::new(size.is_some())),
-            recorded: AtomicU64::new(size.unwrap_or(0)),
+            progress,
+            current: AtomicI64::new(planned.map(to_i64).unwrap_or(0)),
         }
     }
 
-    fn is_sized(&self) -> bool {
-        self.sized.load(Ordering::Relaxed)
+    /// 学到实际大小：把这一项的贡献从旧值修订成实际值（重复调用幂等）。
+    fn observe(&self, actual: u64) {
+        let actual = to_i64(actual);
+        let previous = self.current.swap(actual, Ordering::SeqCst);
+        self.progress.add_total(actual.saturating_sub(previous));
     }
 }
 
-/// 一次任务运行里所有文件共享的进度汇总。
-///
-/// 分两类分别记账：
-///
-/// * **已知大小**的项：字节进度 `KD / KB`（已下载 / 总量）；
-/// * **不知道大小**的项：数量进度 `UD / U`（已完成个数 / 未知项总数），字节按
-///   「下载多少算多少」——它的已下载字节同时进分子和分母。
-///
-/// 整体百分比按**文件数占比**加权两类各自的进度：
-///
-/// `percent = UD / N + (K / N) · (KD / KB)`
-///
-/// （`N` 总数，`U` 当前未知数，`K = N - U`）。当 `N == K`（都已知道大小）时退化成
-/// 纯字节百分比；当 `N == U` 时退化成纯数量百分比。字节显示为 `(KD+UB) / (KB+UB)`。
-///
-/// 总量**按规划大小预填**：调用方建 tracker 时把计划里已知的大小算进「已知」组，
-/// 随后每个文件从服务器实际拿到的 `Content-Length` / `Content-Range` 会把该项修订成
-/// 真实值（`record_size`），整项失败时回滚（`rollback_item`）。
-struct Tracker {
-    files_total: usize,
-    /// 所有处理完的文件（成功或失败），用于 `X/N 个文件`。
-    files_done: AtomicUsize,
-    /// 计划里也不知道大小、且还没处理完的项数 `U`（含还没开始下载的）。
-    unsized_files: AtomicUsize,
-    /// 未知大小且已处理完的项数 `UD`。
-    unsized_done_files: AtomicUsize,
-    /// 已知大小项的已下载字节 `KD`。
-    sized_done_bytes: AtomicU64,
-    /// 已知大小项的总字节 `KB`。
-    sized_total_bytes: AtomicU64,
-    /// 未知大小项的已下载字节（同时进分子分母）。
-    unsized_done_bytes: AtomicU64,
-    last: Mutex<Instant>,
-}
-
-impl Tracker {
-    /// `planned` 是每个待下载项在计划里的已知大小（`None` 表示计划里也不知道）。
-    fn new(planned: impl IntoIterator<Item = Option<u64>>) -> Self {
-        let mut files_total = 0usize;
-        let mut planned_sized = 0usize;
-        let mut planned_bytes = 0u64;
-        for size in planned {
-            files_total += 1;
-            if let Some(size) = size {
-                planned_sized += 1;
-                planned_bytes += size;
-            }
-        }
-        Self {
-            files_total,
-            files_done: AtomicUsize::new(0),
-            unsized_files: AtomicUsize::new(files_total - planned_sized),
-            unsized_done_files: AtomicUsize::new(0),
-            sized_done_bytes: AtomicU64::new(0),
-            sized_total_bytes: AtomicU64::new(planned_bytes),
-            unsized_done_bytes: AtomicU64::new(0),
-            last: Mutex::new(Instant::now()),
-        }
-    }
-
-    /// 学到某一项的实际大小：把它记进「已知」组，并把计划预填的值修订成实际值。
-    ///
-    /// 重复调用幂等，实际值变了就修正（重试 / 服务器前后不一致都安全）。预填过计划大小的
-    /// 项已经在「已知」组，这里只做修订；计划未知的项在这里从「未知」组转入「已知」组。
-    /// 转组发生在读取正文之前（`single` / `chunked` 都是先拿到大小再下字节），所以转组时
-    /// 这一项还没有字节记在「未知」组里。
-    fn record_size(&self, share: &Share, actual: u64) {
-        let prev = share.recorded.swap(actual, Ordering::Relaxed);
-        match actual.cmp(&prev) {
-            std::cmp::Ordering::Greater => {
-                self.sized_total_bytes
-                    .fetch_add(actual - prev, Ordering::Relaxed);
-            }
-            std::cmp::Ordering::Less => {
-                self.sized_total_bytes
-                    .fetch_sub(prev - actual, Ordering::Relaxed);
-            }
-            std::cmp::Ordering::Equal => {}
-        }
-        if !share.sized.swap(true, Ordering::Relaxed) {
-            self.unsized_files.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-
-    /// 某一项彻底失败：把它已记入「已知」组的字节从总量里回滚。
-    fn rollback_item(&self, share: &Share) {
-        let amount = share.recorded.swap(0, Ordering::Relaxed);
-        if amount > 0 {
-            self.sized_total_bytes.fetch_sub(amount, Ordering::Relaxed);
-        }
-    }
-
-    /// 累计下载字节：按这一项在「已知 / 未知」哪组分别记账。
-    fn add(&self, bytes: u64, sized: &AtomicBool, ctx: &TaskContext) {
-        if sized.load(Ordering::Relaxed) {
-            self.sized_done_bytes.fetch_add(bytes, Ordering::Relaxed);
-        } else {
-            self.unsized_done_bytes.fetch_add(bytes, Ordering::Relaxed);
-        }
-        self.maybe_report(ctx);
-    }
-
-    /// 重试失败时把这一轮已经上报的字节减回去。
-    fn rollback(&self, bytes: u64, sized: &AtomicBool) {
-        if sized.load(Ordering::Relaxed) {
-            self.sized_done_bytes.fetch_sub(bytes, Ordering::Relaxed);
-        } else {
-            self.unsized_done_bytes.fetch_sub(bytes, Ordering::Relaxed);
-        }
-    }
-
-    /// 一个文件处理完（成功或失败）。
-    fn file_finished(&self, sized: bool, ctx: &TaskContext) {
-        self.files_done.fetch_add(1, Ordering::Relaxed);
-        if !sized {
-            self.unsized_done_files.fetch_add(1, Ordering::Relaxed);
-        }
-        self.maybe_report(ctx);
-    }
-
-    fn message(&self) -> String {
-        format!(
-            "{}/{} 个文件",
-            self.files_done.load(Ordering::Relaxed),
-            self.files_total
-        )
-    }
-
-    /// 整体百分比（0.0~100.0），见类型文档的公式。
-    fn percent(&self) -> f64 {
-        if self.files_total == 0 {
-            return 0.0;
-        }
-        let total = self.files_total as f64;
-        let unsized_count = self.unsized_files.load(Ordering::Relaxed) as f64;
-        let sized = total - unsized_count;
-        let unsized_done = self.unsized_done_files.load(Ordering::Relaxed) as f64;
-        let sized_total = self.sized_total_bytes.load(Ordering::Relaxed) as f64;
-        let sized_done = self.sized_done_bytes.load(Ordering::Relaxed) as f64;
-        let sized_progress = if sized_total > 0.0 {
-            (sized_done / sized_total).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        (((unsized_done + sized * sized_progress) / total) * 100.0).clamp(0.0, 100.0)
-    }
-
-    /// 当前进度快照（百分比用 [`Tracker::percent`]，字节按两类合并显示）。
-    fn snapshot(&self) -> Progress {
-        let unsized_bytes = self.unsized_done_bytes.load(Ordering::Relaxed);
-        let current = self.sized_done_bytes.load(Ordering::Relaxed) + unsized_bytes;
-        let total = self.sized_total_bytes.load(Ordering::Relaxed) + unsized_bytes;
-        Progress::new(current, Some(total), self.message(), Some(self.percent()))
-    }
-
-    /// 开跑时立刻上报一次，先把文件数量与预填的字节总量显示出来。
-    fn initial_report(&self, ctx: &TaskContext) {
-        ctx.report(self.snapshot());
-    }
-
-    fn maybe_report(&self, ctx: &TaskContext) {
-        let due = match self.last.lock() {
-            Ok(mut last) => {
-                if last.elapsed() >= REPORT_INTERVAL {
-                    *last = Instant::now();
-                    true
-                } else {
-                    false
-                }
-            }
-            Err(_) => false,
-        };
-        if due {
-            ctx.report(self.snapshot());
-        }
-    }
-
-    /// 收尾时强制上报一次，并给出汇总。
-    fn finish(&self, ctx: &TaskContext, report: &DownloadReport) {
-        if self.files_total > 0 {
-            ctx.report(self.snapshot());
-        }
-        ctx.log(format!(
-            "下载完成：新下载 {} 个，跳过 {} 个，失败 {} 个（{}）",
-            report.downloaded,
-            report.skipped,
-            report.failed.len(),
-            human_bytes(report.bytes)
-        ));
-    }
-}
-
-/// 一次下载尝试的字节记账：既累计进整体进度，也记下这一轮写了多少，
-/// 失败重试时好把那部分减回去（[`Recorder::discard`]）。
+/// 一次下载尝试的字节记账：累计进全局进度，失败重试时把那部分减回去。
 #[derive(Clone)]
 struct Recorder {
-    tracker: Arc<Tracker>,
-    ctx: TaskContext,
-    /// 这一项是否已经知道实际大小（共享给分块任务的同一个开关）。
-    sized: Arc<AtomicBool>,
+    progress: ProgressHandle,
     attempted: Arc<AtomicU64>,
 }
 
 impl Recorder {
-    fn new(tracker: Arc<Tracker>, ctx: TaskContext, sized: Arc<AtomicBool>) -> Self {
+    fn new(progress: ProgressHandle) -> Self {
         Self {
-            tracker,
-            ctx,
-            sized,
+            progress,
             attempted: Arc::new(AtomicU64::new(0)),
         }
     }
 
     fn add(&self, bytes: u64) {
-        self.attempted.fetch_add(bytes, Ordering::Relaxed);
-        self.tracker.add(bytes, &self.sized, &self.ctx);
+        self.attempted.fetch_add(bytes, Ordering::SeqCst);
+        self.progress.add_downloaded(to_i64(bytes));
     }
 
     /// 成功：这一轮的字节保留在整体进度里。
     fn commit(&self) {
-        self.attempted.store(0, Ordering::Relaxed);
+        self.attempted.store(0, Ordering::SeqCst);
     }
 
     /// 失败：把这一轮上报过的字节从整体进度里抹掉。
     fn discard(&self) {
-        let bytes = self.attempted.swap(0, Ordering::Relaxed);
-        self.tracker.rollback(bytes, &self.sized);
+        let bytes = self.attempted.swap(0, Ordering::SeqCst);
+        if bytes > 0 {
+            self.progress.add_downloaded(-to_i64(bytes));
+        }
     }
+}
 
-    fn check_cancelled(&self) -> Result<()> {
-        self.ctx.check_cancelled()
-    }
+fn to_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 /// 让目标路径变成绝对路径并归一化。
@@ -815,97 +570,16 @@ mod tests {
         assert_eq!(parse_content_range("bytes 0-0/*"), None);
     }
 
-    /// 混合「已知 / 未知大小」的进度模型：百分比按文件数占比加权两类。
     #[test]
-    fn the_tracker_blends_known_and_unknown_sizes() {
-        let ctx = TaskContext::detached("下载");
-        // N=2：一项计划已知 100 字节、一项计划未知
-        let tracker = Tracker::new([Some(100), None]);
-        let known = Share::planned(Some(100));
-        let unknown = Share::planned(None);
+    fn candidates_rotate_across_attempts() {
+        let two = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(candidate_index(&two, 1), 0); // A
+        assert_eq!(candidate_index(&two, 2), 1); // B
+        assert_eq!(candidate_index(&two, 3), 0); // 回到 A
 
-        // 开跑即预填：已知项的计划大小已经进分母
-        assert_eq!(tracker.snapshot().total, Some(100));
-
-        // 未知项先下了 10 字节；已知项下了 40
-        tracker.add(10, &unknown.sized, &ctx);
-        tracker.add(40, &known.sized, &ctx);
-
-        // percent = UD/N + (K/N)(KD/KB) = 0/2 + (1/2)(40/100) = 20%
-        assert!((tracker.percent() - 20.0).abs() < 1e-9);
-        let snapshot = tracker.snapshot();
-        // 字节 = (KD+UB) / (KB+UB) = (40+10) / (100+10)
-        assert_eq!(snapshot.current, 50);
-        assert_eq!(snapshot.total, Some(110));
-        assert_eq!(snapshot.percent, Some(20.0));
-
-        // 未知项完成 → UD=1 → percent = 1/2 + (1/2)(0.4) = 70%
-        tracker.file_finished(false, &ctx);
-        assert!((tracker.percent() - 70.0).abs() < 1e-9);
-        assert_eq!(tracker.message(), "1/2 个文件");
-    }
-
-    /// 已知项的字节累加幂等、可修正，失败可整项回滚；学到大小时从「未知」转组。
-    #[test]
-    fn record_size_is_idempotent_correctable_and_rollbackable() {
-        let tracker = Tracker::new([None, None, None]);
-        let share = Share::planned(None);
-
-        tracker.record_size(&share, 100);
-        tracker.record_size(&share, 100); // 重试重记：幂等
-        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 100);
-        assert_eq!(tracker.unsized_files.load(Ordering::Relaxed), 2);
-
-        tracker.record_size(&share, 130); // 服务器前后不一致：修正
-        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 130);
-        assert_eq!(tracker.unsized_files.load(Ordering::Relaxed), 2);
-
-        tracker.rollback_item(&share); // 整项失败：回滚
-        assert_eq!(tracker.sized_total_bytes.load(Ordering::Relaxed), 0);
-    }
-
-    /// 计划大小预填进分母、服务器实际大小到达后修订、整项失败则回滚。
-    #[test]
-    fn planned_sizes_prefill_the_total_and_are_revised_by_the_server() {
-        // 一项计划 100 字节，一项计划未知
-        let tracker = Tracker::new([Some(100), None]);
-        let sized = Share::planned(Some(100));
-
-        // 开跑：计划大小已经在分母里（总量不再是 0）
-        let snapshot = tracker.snapshot();
-        assert_eq!(snapshot.total, Some(100));
-        assert_eq!(tracker.percent(), 0.0);
-
-        // 服务器说实际 130：把计划值修订上去
-        tracker.record_size(&sized, 130);
-        assert_eq!(tracker.snapshot().total, Some(130));
-
-        // 整项失败：把预填的大小从分母里回滚
-        tracker.rollback_item(&sized);
-        assert_eq!(tracker.snapshot().total, Some(0));
-    }
-
-    /// 纯未知大小的项：百分比只按数量走，字节「下载多少算多少」。
-    #[test]
-    fn unknown_size_progress_is_count_based_with_self_growing_bytes() {
-        let ctx = TaskContext::detached("下载");
-        let tracker = Tracker::new([None]);
-        let share = Share::planned(None);
-
-        assert_eq!(tracker.percent(), 0.0);
-        let snapshot = tracker.snapshot();
-        assert_eq!((snapshot.current, snapshot.total), (0, Some(0)));
-
-        // 下了 1 MiB 但还没完成：百分比仍是 0%，字节变成 1 MiB / 1 MiB
-        tracker.add(1024 * 1024, &share.sized, &ctx);
-        assert_eq!(tracker.percent(), 0.0);
-        let snapshot = tracker.snapshot();
-        assert_eq!(snapshot.current, 1024 * 1024);
-        assert_eq!(snapshot.total, Some(1024 * 1024));
-
-        // 完成 → 100%
-        tracker.file_finished(false, &ctx);
-        assert_eq!(tracker.percent(), 100.0);
+        let one = vec!["only".to_string()];
+        assert_eq!(candidate_index(&one, 1), 0);
+        assert_eq!(candidate_index(&one, 3), 0);
     }
 
     #[test]
@@ -917,7 +591,6 @@ mod tests {
 
     #[test]
     fn chunk_ranges_cover_the_file_exactly() {
-        // 与 `chunked` 里的循环保持一致：分块必须刚好覆盖 [0, size)
         let size = 10_000u64;
         let chunk_size = 4096u64;
         let mut ranges = Vec::new();
@@ -934,72 +607,84 @@ mod tests {
     }
 
     #[test]
-    fn candidates_rotate_across_attempts() {
-        let two = vec!["a".to_string(), "b".to_string()];
-        assert_eq!(candidate_index(&two, 1), 0); // A
-        assert_eq!(candidate_index(&two, 2), 1); // B
-        assert_eq!(candidate_index(&two, 3), 0); // 回到 A
+    fn total_contribution_is_revised_idempotently() {
+        let progress = ProgressHandle::new();
+        // 预检已经按计划大小把 100 加进 total。
+        progress.add_total(100);
+        let total = TotalContribution::new(Some(100), progress.clone());
+        assert_eq!(progress.snapshot().total, 100);
 
-        let one = vec!["only".to_string()];
-        assert_eq!(candidate_index(&one, 1), 0);
-        assert_eq!(candidate_index(&one, 3), 0);
-    }
-
-    /// 没有候选地址的项直接报错，不会去碰网络。
-    #[tokio::test]
-    async fn an_item_without_candidates_fails_fast() {
-        let task = DownloadTask::new(DownloadOptions::default()).with_item(DownloadItem::new(
-            Vec::<String>::new(),
-            "/tmp/dmcl-no-candidate",
-        ));
-        let err = task
-            .execute(&TaskContext::detached("下载"))
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("没有候选地址"), "{err:#}");
+        total.observe(100);
+        assert_eq!(progress.snapshot().total, 100);
+        total.observe(100);
+        assert_eq!(progress.snapshot().total, 100);
+        total.observe(80);
+        assert_eq!(progress.snapshot().total, 80);
+        total.observe(130);
+        assert_eq!(progress.snapshot().total, 130);
     }
 
     #[test]
-    fn the_task_reports_its_items() {
-        let mut task = DownloadTask::new(DownloadOptions::default()).with_item(
-            DownloadItem::new(["https://example.com/a.jar".to_string()], "/tmp/a.jar")
-                .with_size(Some(10)),
-        );
-        task.push(DownloadItem::new(
-            ["https://example.com/b.jar".to_string()],
-            "/tmp/b.jar",
-        ));
-        assert_eq!(task.len(), 2);
-        assert!(!task.is_empty());
-        // 只有知道大小的文件计入分母
-        assert_eq!(task.known_total_bytes(), 10);
-        assert_eq!(task.items()[0].name, "a.jar");
-    }
-
-    /// 重试时进度要回滚：一次失败尝试把已上报的字节减回去。
-    #[test]
-    fn a_recorder_rolls_back_a_discarded_attempt() {
-        let ctx = TaskContext::detached("下载");
-        let tracker = Arc::new(Tracker::new([None]));
-        let share = Share::planned(None);
-        let recorder = Recorder::new(tracker.clone(), ctx, share.sized.clone());
-
+    fn a_discarded_attempt_rolls_back_its_bytes() {
+        let progress = ProgressHandle::new();
+        let recorder = Recorder::new(progress.clone());
         recorder.add(40);
         recorder.add(60);
-        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 100);
+        assert_eq!(progress.snapshot().downloaded, 100);
 
-        // 这次尝试作废，字节要抹掉
         recorder.discard();
-        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(progress.snapshot().downloaded, 0);
 
-        // 成功的尝试则保留
-        let recorder = Recorder::new(
-            tracker.clone(),
-            TaskContext::detached("下载"),
-            share.sized.clone(),
-        );
+        let recorder = Recorder::new(progress.clone());
         recorder.add(50);
         recorder.commit();
-        assert_eq!(tracker.unsized_done_bytes.load(Ordering::Relaxed), 50);
+        assert_eq!(progress.snapshot().downloaded, 50);
+    }
+
+    #[test]
+    fn a_retry_does_not_double_count_bytes() {
+        let progress = ProgressHandle::new();
+        let first = Recorder::new(progress.clone());
+        first.add(100);
+        first.discard();
+
+        let second = Recorder::new(progress.clone());
+        second.add(100);
+        second.commit();
+        assert_eq!(progress.snapshot().downloaded, 100);
+    }
+
+    #[tokio::test]
+    async fn an_item_without_candidates_fails_before_creating_tasks() {
+        let mut builder = dmcl_task::TaskGraphBuilder::new("测试");
+        let step = builder.step("下载");
+        let downloads = DownloadContext::new(
+            reqwest::Client::new(),
+            DownloadOptions::default(),
+            ProgressHandle::new(),
+        );
+        let sink = builder.add(
+            step,
+            "准备",
+            (),
+            dmcl_task::task_fn(move |_: (), ctx| {
+                let downloads = downloads.clone();
+                async move {
+                    downloads
+                        .prepare(
+                            &ctx,
+                            step,
+                            vec![DownloadItem::new(
+                                Vec::<String>::new(),
+                                std::env::temp_dir().join("dmcl-no-candidate"),
+                            )],
+                        )
+                        .await
+                        .map(|_| ())
+                }
+            }),
+        );
+        let error = builder.build(sink).unwrap().run(|_| {}).await.unwrap_err();
+        assert!(format!("{error:#}").contains("没有候选地址"), "{error:#}");
     }
 }

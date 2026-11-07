@@ -2,7 +2,7 @@
 //!
 //! 它是**通用**的「跑任务 + 公共 UI」服务，不知道实例/游戏是什么：
 //!
-//! * [`Shell::run`] 把一条任务链跑起来，把进度事件转发给任务 popup，并返回一个
+//! * [`Shell::run`] 把一张任务图跑起来，把进度事件转发给任务 popup，并返回一个
 //!   **可 `await` 的结果句柄**（不是回调）；
 //! * [`Shell::open_tasks`] 主动打开任务对话框；
 //! * [`Shell::global_toast`] / [`Shell::page_toast`] 在主界面弹提示，前者始终显示，
@@ -10,18 +10,20 @@
 
 use std::cell::Cell;
 
-use dmcl_task::{Cancelled, TaskChain};
+use std::sync::Arc;
+
+use dmcl_task::{Cancelled, TaskGraph};
 
 use super::tasks::TaskMsg;
 use super::toast::{PageToast, ToastService};
 
-/// 任务结果句柄：`finished().await` 拿到任务产出。
+/// 任务结果句柄：`finished().await` 拿到最终节点的 `Arc<O>`。
 pub(crate) struct TaskHandle<O> {
-    rx: tokio::sync::oneshot::Receiver<Result<O, String>>,
+    rx: tokio::sync::oneshot::Receiver<Result<Arc<O>, String>>,
 }
 
 impl<O> TaskHandle<O> {
-    pub async fn finished(self) -> Result<O, String> {
+    pub async fn finished(self) -> Result<Arc<O>, String> {
         self.rx.await.unwrap_or_else(|_| Err("任务已结束".into()))
     }
 }
@@ -44,24 +46,23 @@ impl Shell {
         }
     }
 
-    /// 跑一个任务：事件喂给任务 popup，返回结果句柄。
-    pub fn run<I, O>(&self, name: String, chain: TaskChain<I, O>, input: I) -> TaskHandle<O>
+    /// 跑一张任务图：事件喂给任务 popup，返回结果句柄。
+    pub fn run<O>(&self, name: String, graph: TaskGraph<O>) -> TaskHandle<O>
     where
-        I: Send + 'static,
-        O: Send + 'static,
+        O: Send + Sync + 'static,
     {
         let id = self.next_id.get();
         self.next_id.set(id + 1);
 
-        let cancel = chain.cancel_handle();
+        let cancel = graph.cancel_handle();
         let _ = self.tasks.send(TaskMsg::Start { id, name, cancel });
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         let events = self.tasks.clone();
         let done = self.tasks.clone();
         relm4::spawn(async move {
-            let raw = chain
-                .run_with(input, move |event| {
+            let raw = graph
+                .run(move |event| {
                     let _ = events.send(TaskMsg::Event { id, event });
                 })
                 .await;

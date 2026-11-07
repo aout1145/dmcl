@@ -5,7 +5,6 @@
 //! `LoginTask` 和以后的账号管理页都只是它的调用方。
 
 use anyhow::Result;
-use dmcl_task::BoxFuture;
 use md5::{Digest, Md5};
 
 /// 登录完成后用于拼命令行的只读快照。
@@ -29,15 +28,16 @@ pub struct Account {
 /// `login` 的语义是「确保拿到一个可用会话」：在线实现在内部静默 refresh；refresh
 /// 不可用时返回错误，由调用方的交互式登录流程重新授权，而不是在启动游戏时
 /// 突然要求用户去浏览器操作。
+#[async_trait::async_trait]
 pub trait AccountSource: Send + Sync {
     /// 账户名，用于日志和 [`crate::LaunchOption`] 的 Debug 输出。
     fn name(&self) -> &str;
 
     /// 确保拿到一个可用会话。
-    fn login<'a>(&'a self) -> BoxFuture<'a, Result<Account>>;
+    async fn login(&self) -> Result<Account>;
 
     /// 刷新已有会话。
-    fn refresh<'a>(&'a self) -> BoxFuture<'a, Result<Account>>;
+    async fn refresh(&self) -> Result<Account>;
 }
 
 /// 离线（未登录）账户。
@@ -79,17 +79,18 @@ impl OfflineAccountSource {
     }
 }
 
+#[async_trait::async_trait]
 impl AccountSource for OfflineAccountSource {
     fn name(&self) -> &str {
         &self.username
     }
 
-    fn login<'a>(&'a self) -> BoxFuture<'a, Result<Account>> {
-        Box::pin(async move { Ok(self.account()) })
+    async fn login(&self) -> Result<Account> {
+        Ok(self.account())
     }
 
-    fn refresh<'a>(&'a self) -> BoxFuture<'a, Result<Account>> {
-        Box::pin(async move { Ok(self.account()) })
+    async fn refresh(&self) -> Result<Account> {
+        Ok(self.account())
     }
 }
 

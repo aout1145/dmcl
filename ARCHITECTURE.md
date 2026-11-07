@@ -15,7 +15,7 @@
 dmcl-rs/
 ├── Cargo.toml                 # 纯 workspace（members + 统一的依赖版本）
 └── crates/
-    ├── dmcl-task/             # 通用任务链 + 进度事件流（与 MC 无关）
+    ├── dmcl-task/             # 通用任务 DAG + Step / 进度事件（与 MC 无关）
     ├── dmcl-mcmeta/           # MC 元数据文档、下载源、URL 模板、本地目录布局
     ├── dmcl-download/         # 并发 / 分块下载（实现 dmcl-task 的 Task）
     ├── dmcl-game/             # 版本引用、文件规划 / 完整性 / 补全、natives
@@ -63,7 +63,7 @@ dmcl ───────────► 全部
 | --------------- | ------------------------------------------------------------------------------------- |
 | `dmcl-task`     | 无（纯任务抽象）                                                                      |
 | `dmcl-mcmeta`   | `DownloadSource`（镜像 + http 客户端）、URL 模板字符串                                |
-| `dmcl-download` | `DownloadOptions`（并发数、分块阈值 / 大小、单文件重试次数、失败是否忽略、UA）        |
+| `dmcl-download` | `DownloadOptions`（连接 / 活跃文件 / worker 并发、分块阈值 / 大小、重试次数、UA）        |
 | `dmcl-game`     | `GameFilesOptions`（下载源、下载策略、是否跳过音乐）                                  |
 | `dmcl-java`     | `JavaResolver`（选 Java）、`JavaRuntimeOptions` + `JreInstallRequest`（装 JRE）       |
 | `dmcl-install`  | `InstallOptions`（根目录、游戏文件选项、Java 解析器、JRE 安装位置）                   |
@@ -78,7 +78,7 @@ dmcl ───────────► 全部
 
 | crate | 一句话职责 | 文档 |
 | --- | --- | --- |
-| `dmcl-task` | 通用任务链、进度 / 日志事件、取消与回滚 | [crates/dmcl-task/README.md](crates/dmcl-task/README.md) |
+| `dmcl-task` | 通用任务 DAG、Step / 全局进度、取消与回滚 | [crates/dmcl-task/README.md](crates/dmcl-task/README.md) |
 | `dmcl-mcmeta` | 强类型元数据文档、URL 模板与下载源、目录布局 | [crates/dmcl-mcmeta/README.md](crates/dmcl-mcmeta/README.md) |
 | `dmcl-download` | 多文件并发 + 大文件分块的下载任务 | [crates/dmcl-download/README.md](crates/dmcl-download/README.md) |
 | `dmcl-game` | 版本引用、文件规划 / 完整性 / 补全、natives | [crates/dmcl-game/README.md](crates/dmcl-game/README.md) |
@@ -97,7 +97,7 @@ GTK4 前端文档按目录拆分，入口是
 ## 测试策略
 
 - **离线单测**（`cargo test --workspace`）：版本规划 / 完整性 / 补全、URL 模板化 / 解析、
-  规则判定、哈希与校验、任务链 / 事件转发、Java 探测与 JRE 组件选择、CLI 参数与配置
+  规则判定、哈希与校验、任务图 / 事件、Java 探测与 JRE 组件选择、CLI 参数与配置
   加载 / 实例覆盖；
 - **GTK4 前端**（`cargo test -p dmcl --features gtk4 --lib`）：不创建控件的纯逻辑单测
   （任务进度、版本过滤 / 适配等），不需要显示；界面验证用 Broadway + Chromium CDP，

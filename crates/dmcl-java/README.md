@@ -39,8 +39,9 @@ jre.rs       Mojang JRE 安装（raw / lzma）与组件选择
 
 ### JRE 安装
 
-`install_jre` 是唯一的公共安装入口。`JreInstallRequest` 强制要求 `major`，`component`
-可选：
+`install_jre` 是唯一的公共安装入口；它接收调用方共享的 `DownloadContext`，因此 JRE 文件
+与安装 / 启动图里的其它下载共用连接、文件、worker 预算与全局进度。`JreInstallRequest`
+强制要求 `major`，`component` 可选：
 
 - `None`：按 `major` 在所有组件里选，优先非 snapshot；没有匹配直接报错；
 - `Some(name)`：只检查该组件，它必须实际提供 `major`，否则直接报错。

@@ -5,7 +5,6 @@
 
 use anyhow::{anyhow, Result};
 use dmcl_java::{JavaDetails, JavaInstalledHook, JavaOption, JavaResolver};
-use dmcl_task::BoxFuture;
 
 use crate::config::{
     configured_java, merge_javas, resolve_from_config, scan_configs, unique_java_name, JavaChoice,
@@ -19,34 +18,33 @@ pub(crate) struct GuiJavaResolver {
     pub(crate) config: ConfigRef,
 }
 
+#[async_trait::async_trait]
 impl JavaResolver for GuiJavaResolver {
-    fn resolve<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
-        Box::pin(async move {
-            let configs = self.config.read().javas.clone();
-            if !self.choice.is_auto() {
-                return resolve_from_config(required_major, &self.choice, &configs, false).await;
-            }
+    async fn resolve(&self, required_major: u32) -> Result<JavaOption> {
+        let configs = self.config.read().javas.clone();
+        if !self.choice.is_auto() {
+            return resolve_from_config(required_major, &self.choice, &configs, false).await;
+        }
 
-            if let Some(java) = configured_java(required_major, &configs) {
-                return Ok(java);
-            }
+        if let Some(java) = configured_java(required_major, &configs) {
+            return Ok(java);
+        }
 
-            let found = scan_configs().await;
-            if found.is_empty() {
-                return Err(anyhow!(
-                    "未找到可用的 Java，请先安装 Java 或在配置中添加 Java 路径"
-                ));
-            }
-            let selected = configured_java(required_major, &found);
+        let found = scan_configs().await;
+        if found.is_empty() {
+            return Err(anyhow!(
+                "未找到可用的 Java，请先安装 Java 或在配置中添加 Java 路径"
+            ));
+        }
+        let selected = configured_java(required_major, &found);
 
-            // 扫描结果写回配置，供下次启动直接使用；保存失败不打断本次启动。
-            let _ = config_store::store()
-                .update_async(move |config| {
-                    merge_javas(&mut config.javas, &found);
-                })
-                .await;
-            selected.ok_or_else(|| anyhow!("未找到合适的 Java，请先安装 Java"))
-        })
+        // 扫描结果写回配置，供下次启动直接使用；保存失败不打断本次启动。
+        let _ = config_store::store()
+            .update_async(move |config| {
+                merge_javas(&mut config.javas, &found);
+            })
+            .await;
+        selected.ok_or_else(|| anyhow!("未找到合适的 Java，请先安装 Java"))
     }
 }
 
@@ -63,24 +61,23 @@ impl GuiJavaInstalledHook {
     }
 }
 
+#[async_trait::async_trait]
 impl JavaInstalledHook for GuiJavaInstalledHook {
-    fn on_installed<'a>(&'a self, details: &'a JavaDetails) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            let name = unique_java_name(&self.config.read().javas, details);
-            let found = JavaConfigs::from([(
-                name,
-                JavaConfig {
-                    path: details.option.path.clone(),
-                    major: details.option.major,
-                    arch: details.option.arch,
-                },
-            )]);
-            let _ = config_store::store()
-                .update_async(move |config| {
-                    merge_javas(&mut config.javas, &found);
-                })
-                .await;
-            Ok(())
-        })
+    async fn on_installed(&self, details: &JavaDetails) -> Result<()> {
+        let name = unique_java_name(&self.config.read().javas, details);
+        let found = JavaConfigs::from([(
+            name,
+            JavaConfig {
+                path: details.option.path.clone(),
+                major: details.option.major,
+                arch: details.option.arch,
+            },
+        )]);
+        let _ = config_store::store()
+            .update_async(move |config| {
+                merge_javas(&mut config.javas, &found);
+            })
+            .await;
+        Ok(())
     }
 }

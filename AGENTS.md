@@ -61,7 +61,7 @@ CI（GitHub Actions）在 **ubuntu 和 windows** 上都跑这四项，外加 `ca
 `README.md`（例如 [crates/dmcl-mcmeta/README.md](crates/dmcl-mcmeta/README.md)）；
 下面是通用编码约定。
 
-- 异步 trait 用**装箱 future**（`dmcl_task::BoxFuture`）表达，**不要引入 `async-trait`**。
+- 异步 trait 统一用 `#[async_trait]` 表达（workspace 依赖 `async-trait`）；不要手写装箱 future。
 - **不要引入日志框架**：直接用 `println!` / `eprintln!`。
 - 改了函数签名 / 实现 / 字段后，**把所有调用点一并改掉**；不要为了少改几处、或为了向后兼容，给
   接口加**隐式的默认行为**（给新参数一个默认值、漏字段时用默认值补齐、留一个只转发旧签名的包装

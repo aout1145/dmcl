@@ -10,7 +10,7 @@
 ## 概览
 
 - 与 CLI 一样是 `dmcl` 的一个前端：把 `Config` 翻译成各业务 crate 的 `*Options`、把
-  `TaskChain` 跑起来、把 `TaskEvent` 渲染成界面。业务 crate 一行不改。
+  `TaskGraph` 跑起来、把 `TaskEvent` 渲染成界面。业务 crate 一行不改。
 - 页面（主页、新建实例等）是 **relm4 组件**，各自拥有状态、消息与 widget；app 层的共享能力
   收在 `Shell` 服务里；根组件只做组装。
 - 整个前端共用一份配置（见下文「共享配置」），组件不各存一份 `Config`，也不会把配置
@@ -195,8 +195,8 @@ gtk4/
 
 跨组件的边界只有四条：
 
-- **页面 → `Shell`**：传 `TaskChain`，拿回可 `await` 的结果句柄；任务事件由 `Shell` 转发给
-  任务对话框。
+- **页面 → `Shell`**：传 `TaskGraph`，拿回可 `await` 的结果句柄（`Arc<最终输出>`）；
+  任务事件由 `Shell` 转发给任务对话框。
 - **页面 → 子组件**：通过组件输入消息推自动值、冲突与安装按钮状态。
 - **子组件 → 页面**：通过组件输出消息上报选择、名称变化和安装请求。
 - **页面 ↔ 共享配置**：直接向全局 `ConfigStore` 订阅 / 修改；写完后由订阅消息通知需要
@@ -231,7 +231,7 @@ cargo test -p dmcl --features gtk4 --lib
 GTK 这层的测试**不创建 widget**，因此不需要 `DISPLAY` / Broadway。relm4 组件里能抽出来的
 纯逻辑都放在同文件的 `#[cfg(test)]` 模块里：
 
-- 任务进度 reducer（`app/tasks/task_view.rs`）：顶层步骤计数、当前步骤进度、日志累积、
+- 任务进度 reducer（`app/tasks/task_view.rs`）：全部 Step 计数、全局进度、日志累积、
   结束状态、取消中 / 已取消的转换、进度说明拼法；
 - 版本目录监听（`pages/home/mod.rs`）：`notify` watch `versions`；目录不存在时 watch 最近祖先，
   事件合并后重新扫描；

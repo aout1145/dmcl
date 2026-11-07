@@ -14,6 +14,7 @@ use dmcl::config::{AccountConfig, Config};
 use dmcl_game::{check_integrity, resolve_version, VersionRef};
 use dmcl_java::JavaOption;
 use dmcl_launch::GameLauncher;
+use dmcl_task::{task_fn, TaskGraphBuilder};
 
 const VERSION: &str = "1.7.10";
 
@@ -27,7 +28,7 @@ fn config_for(root: PathBuf) -> Config {
     let mut config = Config::default();
     config.minecraft_roots.insert("test".to_string(), root);
     config.minecraft_root = "test".to_string();
-    config.download.max_tasks = 8;
+    config.download.max_connections = 8;
     config.download.chunk_threshold_mib = 1;
     config.accounts.insert(
         "player".to_string(),
@@ -77,7 +78,7 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .expect("launch_option");
     assert_eq!(option.account_source.name(), "player");
     let account = option.account_source.login().await.expect("login");
-    let mut launcher = GameLauncher::new(option, account)
+    let launcher = GameLauncher::new(option, account)
         .await
         .expect("GameLauncher");
 
@@ -100,7 +101,25 @@ async fn the_whole_chain_runs_from_a_config_document() {
     );
 
     // 命令行能生成；所有模板都必须被替换掉。
-    let command = launcher.generate_command().await.expect("generate_command");
+    let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+    let mut builder = TaskGraphBuilder::new("生成命令行");
+    let step = builder.step("生成命令行");
+    let sink = builder.add(
+        step,
+        "生成命令行",
+        (),
+        task_fn(move |_: (), ctx| {
+            let launcher = launcher.clone();
+            async move { launcher.lock().await.generate_command(&ctx).await }
+        }),
+    );
+    let command = builder
+        .build(sink)
+        .unwrap()
+        .run(|_| {})
+        .await
+        .expect("generate_command");
+    let command = (*command).clone();
     assert!(command.contains("--username player"), "{command}");
     assert!(!command.contains("${"), "还有未替换的模板: {command}");
 }

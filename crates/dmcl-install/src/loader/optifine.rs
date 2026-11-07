@@ -1,16 +1,15 @@
 //! OptiFine 的安装（查询见 [`dmcl_mcmeta::optifine`]）。
 
 use std::io::Cursor;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use dmcl_download::DownloadContext;
 use dmcl_game::{base_name, download_planned, PlannedFile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
-use dmcl_mcmeta::optifine::OptiFineVersionEntry;
 use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
-use dmcl_task::{task_fn, task_fn_io, TaskChain, TaskContext};
+use dmcl_task::TaskContext;
 
 use crate::archive::{has_entry, open_archive, read_entry};
 use crate::io::{write_json_safe, write_safe};
@@ -25,146 +24,89 @@ const LAUNCHWRAPPER_LIBRARY: &str = "net.minecraft:launchwrapper";
 const TWEAK_CLASS: &str = "--tweakClass";
 
 /// 下载并安装 OptiFine。`has_forge` 决定是否沿用 Forge 提供的 launchwrapper。
-pub fn install_optifine_task(
-    options: Arc<InstallOptions>,
-    version_name: String,
-    mc_version: String,
-    optifine_version: String,
+pub async fn install_optifine(
+    options: &InstallOptions,
+    downloads: &Arc<DownloadContext>,
+    version_name: &str,
+    mc_version: &str,
+    optifine_version: &str,
     has_forge: bool,
-) -> TaskChain<(), ()> {
-    TaskChain::new(format!("安装 OptiFine：{version_name}"))
-        .then(
-            task_fn({
-                let options = options.clone();
-                move |ctx: TaskContext| {
-                    let options = options.clone();
-                    let mc_version = mc_version.clone();
-                    let optifine_version = optifine_version.clone();
-                    async move {
-                        let listing = options
-                            .game
-                            .source
-                            .fetch_optifine_versions(&mc_version)
-                            .await?;
-                        let entry = listing
-                            .into_iter()
-                            .find(|entry| entry.version() == optifine_version)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "Minecraft {mc_version} 没有 OptiFine 版本 {optifine_version}"
-                                )
-                            })?;
-                        let library_version = entry.library_version(&mc_version);
-                        let path = libraries_dir(&options.root_path).join(lib_name_to_path(
-                            &format!("{OPTIFINE_LIBRARY}:{library_version}"),
-                        ));
-                        ctx.log(format!(
-                            "OptiFine {} → {}",
-                            entry.version(),
-                            base_name(&path)
-                        ));
-                        Ok(OptiFineJar {
-                            entry,
-                            library_version,
-                            path,
-                        })
-                    }
-                }
-            }),
-            "获取 OptiFine 版本",
-        )
-        .then(
-            task_fn_io({
-                let options = options.clone();
-                move |jar: OptiFineJar, ctx: TaskContext| {
-                    let options = options.clone();
-                    async move {
-                        let name = if jar.entry.filename.is_empty() {
-                            base_name(&jar.path)
-                        } else {
-                            jar.entry.filename.clone()
-                        };
-                        download_planned(
-                            &options.game,
-                            "OptiFine",
-                            vec![PlannedFile {
-                                url: jar.entry.download_url(),
-                                save_to: jar.path.clone(),
-                                checksum: None,
-                                size: None,
-                                name,
-                            }],
-                            &ctx,
-                        )
-                        .await?;
-                        Ok(jar)
-                    }
-                }
-            }),
-            "下载 OptiFine",
-        )
-        .then(
-            task_fn_io({
-                let options = options.clone();
-                move |jar: OptiFineJar, ctx: TaskContext| {
-                    let options = options.clone();
-                    async move {
-                        if has_forge {
-                            ctx.log("Forge 已提供 launchwrapper，跳过 OptiFine 自带的版本");
-                            return Ok((jar, None));
-                        }
-                        let bytes = tokio::fs::read(&jar.path)
-                            .await
-                            .with_context(|| format!("无法读取 {}", jar.path.display()))?;
-                        let mut archive = open_archive(bytes)?;
-                        let version = launchwrapper_version_from_archive(&mut archive)?;
-                        validate_launchwrapper_version(&version)?;
+    ctx: &TaskContext,
+) -> Result<()> {
+    let listing = options
+        .game
+        .source
+        .fetch_optifine_versions(mc_version)
+        .await?;
+    let entry = listing
+        .into_iter()
+        .find(|entry| entry.version() == optifine_version)
+        .ok_or_else(|| {
+            anyhow::anyhow!("Minecraft {mc_version} 没有 OptiFine 版本 {optifine_version}")
+        })?;
+    let library_version = entry.library_version(mc_version);
+    let path = libraries_dir(&options.root_path).join(lib_name_to_path(&format!(
+        "{OPTIFINE_LIBRARY}:{library_version}"
+    )));
+    ctx.log(format!(
+        "OptiFine {} → {}",
+        entry.version(),
+        base_name(&path)
+    ));
 
-                        let inner = format!("launchwrapper-of-{version}.jar");
-                        let bytes = read_entry(&mut archive, &inner)?;
-                        let target = libraries_dir(&options.root_path).join(lib_name_to_path(
-                            &format!("{LAUNCHWRAPPER_LIBRARY}:of-{version}"),
-                        ));
-                        write_safe(&target, &bytes).await?;
-                        ctx.log(format!("解出 {}", base_name(&target)));
-                        Ok((jar, Some(version)))
-                    }
-                }
-            }),
-            "准备 launchwrapper",
-        )
-        .then(
-            task_fn_io({
-                let options = options.clone();
-                let version_name = version_name.clone();
-                move |(jar, launchwrapper): (OptiFineJar, Option<String>), ctx: TaskContext| {
-                    let options = options.clone();
-                    let version_name = version_name.clone();
-                    async move {
-                        let path = version_json_path(&options.root_path, &version_name);
-                        let mut json = read_version_json(&path).await?;
-                        apply_optifine_version_json(
-                            &mut json,
-                            &jar.library_version,
-                            launchwrapper.as_deref(),
-                            has_forge,
-                        );
-                        finish_version_json(&mut json, &version_name, true);
-                        write_json_safe(&path, &json).await?;
-                        ctx.log("OptiFine 已写入版本元数据");
-                        Ok(())
-                    }
-                }
-            }),
-            "写入版本元数据",
-        )
-}
+    let name = if entry.filename.is_empty() {
+        base_name(&path)
+    } else {
+        entry.filename.clone()
+    };
+    download_planned(
+        &options.game,
+        downloads,
+        "OptiFine",
+        vec![PlannedFile {
+            url: entry.download_url(),
+            save_to: path.clone(),
+            checksum: None,
+            size: None,
+            name,
+        }],
+        ctx,
+    )
+    .await?;
 
-/// 在步骤之间传递的安装器。
-struct OptiFineJar {
-    entry: OptiFineVersionEntry,
-    library_version: String,
-    path: PathBuf,
+    let launchwrapper = if has_forge {
+        ctx.log("Forge 已提供 launchwrapper，跳过 OptiFine 自带的版本");
+        None
+    } else {
+        let bytes = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("无法读取 {}", path.display()))?;
+        let mut archive = open_archive(bytes)?;
+        let version = launchwrapper_version_from_archive(&mut archive)?;
+        validate_launchwrapper_version(&version)?;
+
+        let inner = format!("launchwrapper-of-{version}.jar");
+        let bytes = read_entry(&mut archive, &inner)?;
+        let target = libraries_dir(&options.root_path).join(lib_name_to_path(&format!(
+            "{LAUNCHWRAPPER_LIBRARY}:of-{version}"
+        )));
+        write_safe(&target, &bytes).await?;
+        ctx.log(format!("解出 {}", base_name(&target)));
+        Some(version)
+    };
+
+    let json_path = version_json_path(&options.root_path, version_name);
+    let mut json = read_version_json(&json_path).await?;
+    apply_optifine_version_json(
+        &mut json,
+        &library_version,
+        launchwrapper.as_deref(),
+        has_forge,
+    );
+    finish_version_json(&mut json, version_name, true);
+    write_json_safe(&json_path, &json).await?;
+    ctx.log("OptiFine 已写入版本元数据");
+    Ok(())
 }
 
 /// 把 OptiFine 的库与 tweakClass 写进版本 JSON。

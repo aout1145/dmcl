@@ -29,7 +29,7 @@
 //!     "官方启动器": "…"
 //!   },
 //!   "minecraft_root": "当前目录",
-//!   "download": { "max_tasks": 64, "skip_music": false, "java": "autoselect", … }
+//!   "download": { "max_connections": 64, "skip_music": false, "java": "autoselect", … }
 //! }
 //! ```
 //!
@@ -650,13 +650,13 @@ mod tests {
         let (config, warnings) = Config::parse(
             r#"{
                 "launch": { "window_width": -1, "window_height": 720, "max_memory": -2048 },
-                "download": { "max_tasks": 8 }
+                "download": { "max_connections": 8 }
             }"#,
         );
         assert_eq!(config.launch.window_width, 854);
         assert_eq!(config.launch.max_memory, None);
         assert_eq!(config.launch.window_height, 720);
-        assert_eq!(config.download.max_tasks, 8);
+        assert_eq!(config.download.max_connections, 8);
         assert_eq!(warnings.len(), 2);
         assert!(warnings
             .iter()
@@ -842,7 +842,7 @@ mod tests {
         let dir = temp_dir("install-options");
         let _ = std::fs::remove_dir_all(&dir);
         let mut config = Config::default();
-        config.download.max_tasks = 8;
+        config.download.max_connections = 8;
         config.download.skip_music = true;
         config.javas.insert(
             "jdk".to_string(),

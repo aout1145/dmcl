@@ -1,14 +1,12 @@
 //! 加载器下拉的静态定义、运行时槽位与初始化。
 
-use std::sync::Arc;
-
 use relm4::prelude::*;
 
 use dmcl_install::LoaderKind;
 use dmcl_mcmeta::source::DownloadSource;
 
 use crate::gui::gtk4::pages::download::common::version_select::{
-    KindChip, VersionItem, VersionSelect, VersionSelectInit,
+    fetcher, KindChip, VersionItem, VersionSelect, VersionSelectInit,
 };
 
 use super::versions::{fabric_items, forge_items, neoforge_items, optifine_items};
@@ -58,13 +56,13 @@ pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSe
         // 类别 chips 留给后续（TODO）。
         LoaderKind::Forge => VersionSelectInit {
             title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
+            fetch: fetcher(move |context: &str| {
                 let source = source.clone();
                 let context = context.to_string();
-                Box::pin(async move {
+                async move {
                     let entries = source.fetch_forge_versions(&context).await?;
                     Ok(forge_items(entries))
-                })
+                }
             }),
             chips: Vec::new(),
             show_search: false,
@@ -74,13 +72,13 @@ pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSe
         // Fabric：不区分版本类型；第一条「最新版本」，第一条 stable「推荐版本」。
         LoaderKind::Fabric => VersionSelectInit {
             title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
+            fetch: fetcher(move |context: &str| {
                 let source = source.clone();
                 let context = context.to_string();
-                Box::pin(async move {
+                async move {
                     let entries = source.fetch_fabric_loaders(&context).await?;
                     Ok(fabric_items(entries))
-                })
+                }
             }),
             chips: Vec::new(),
             show_search: false,
@@ -90,13 +88,13 @@ pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSe
         // NeoForge：只有 1.20.1 之后的版本，空列表是常态（Empty 状态）。
         LoaderKind::NeoForge => VersionSelectInit {
             title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
+            fetch: fetcher(move |context: &str| {
                 let source = source.clone();
                 let context = context.to_string();
-                Box::pin(async move {
+                async move {
                     let entries = source.fetch_neoforge_versions(&context).await?;
                     Ok(neoforge_items(entries))
-                })
+                }
             }),
             chips: Vec::new(),
             show_search: false,
@@ -106,13 +104,13 @@ pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSe
         // OptiFine：稳定版 / 预览版都可以选，最新两种各自置顶。
         LoaderKind::OptiFine => VersionSelectInit {
             title: format!("{} 版本", kind.display_name()),
-            fetch: Arc::new(move |context: &str| {
+            fetch: fetcher(move |context: &str| {
                 let source = source.clone();
                 let context = context.to_string();
-                Box::pin(async move {
+                async move {
                     let entries = source.fetch_optifine_versions(&context).await?;
                     Ok(optifine_items(entries))
-                })
+                }
             }),
             chips: vec![
                 KindChip::new("stable", "稳定版", true),

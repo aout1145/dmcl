@@ -9,9 +9,10 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_download::{file_ok, Checksum};
+use dmcl_download::{file_ok, Checksum, DownloadContext};
 use dmcl_game::{base_name, download_planned, plan_libraries, PlannedFile};
 use dmcl_mcmeta::layout::{libraries_dir, read_version_json, version_jar_path, version_json_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
@@ -36,12 +37,6 @@ pub(crate) struct Installer {
     pub(crate) path: PathBuf,
 }
 
-/// 安装器 + 已经选好的 java，供动态子链在「选择 Java」和「运行安装器」之间传递。
-pub(crate) struct InstallerWithJava {
-    pub(crate) installer: Installer,
-    pub(crate) java: PathBuf,
-}
-
 /// 安装器临时路径：`<tmp>/dmcl-installer-<label>/<file_name>`。
 pub(crate) fn installer_temp_path(label: &str, file_name: &str) -> PathBuf {
     std::env::temp_dir()
@@ -52,11 +47,13 @@ pub(crate) fn installer_temp_path(label: &str, file_name: &str) -> PathBuf {
 /// 下载安装器到临时路径。后续步骤按需重新打开，不把字节流长期攥在手里。
 pub(crate) async fn download_installer(
     options: &InstallOptions,
+    downloads: &Arc<DownloadContext>,
     installer: &Installer,
     ctx: &TaskContext,
 ) -> Result<()> {
     download_planned(
         &options.game,
+        downloads,
         "安装器",
         vec![PlannedFile {
             url: installer.url.clone(),
@@ -68,7 +65,6 @@ pub(crate) async fn download_installer(
         ctx,
     )
     .await
-    .map(|_| ())
 }
 
 /// 安装包里 `maven/` 下的文件直接铺到 `libraries/`。
@@ -97,6 +93,16 @@ pub(crate) async fn extract_maven_entries(
     Ok(())
 }
 
+/// 跑安装器 processor 需要的运行环境。
+pub(crate) struct InstallerRun<'a> {
+    pub options: &'a InstallOptions,
+    pub downloads: &'a Arc<DownloadContext>,
+    pub version_name: &'a str,
+    pub loader_label: &'a str,
+    pub java: &'a Path,
+    pub ctx: &'a TaskContext,
+}
+
 /// 跑 processor 时需要的一项（两种 profile 的 `Processor` 类型不同，由调用方传进来）。
 pub(crate) struct ProcessorSpec<'a> {
     pub jar: &'a str,
@@ -119,6 +125,7 @@ pub(crate) struct ProfileInputs<'a> {
 pub(crate) async fn select_installer_java(
     options: &InstallOptions,
     version_name: &str,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
     let mc_json = read_version_json(&version_json_path(&options.root_path, version_name)).await?;
@@ -128,7 +135,7 @@ pub(crate) async fn select_installer_java(
         .and_then(|java| java.component.as_deref())
         .filter(|component| !component.is_empty());
     options
-        .java_for_or_install(mc_json.required_java_major(), preferred, ctx)
+        .java_for_or_install(mc_json.required_java_major(), preferred, downloads, ctx)
         .await
 }
 
@@ -136,14 +143,18 @@ pub(crate) async fn select_installer_java(
 ///
 /// `java` 由调用方在单独的「选择 Java」步骤里准备好，这里不再重复选择。
 pub(crate) async fn run_installer_processors(
-    options: &InstallOptions,
-    version_name: &str,
-    loader_label: &str,
-    java: &Path,
+    run: InstallerRun<'_>,
     inputs: ProfileInputs<'_>,
     zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
-    ctx: &TaskContext,
 ) -> Result<()> {
+    let InstallerRun {
+        options,
+        downloads,
+        version_name,
+        loader_label,
+        java,
+        ctx,
+    } = run;
     let ProfileInputs {
         libraries: installer_libraries,
         data,
@@ -218,7 +229,7 @@ pub(crate) async fn run_installer_processors(
             mojmaps[index] = true;
         }
     }
-    download_planned(&options.game, "安装器依赖库", planned, ctx).await?;
+    download_planned(&options.game, downloads, "安装器依赖库", planned, ctx).await?;
 
     for (index, spec) in processors.iter().enumerate() {
         let jar_coord = spec.jar;
@@ -256,7 +267,7 @@ pub(crate) async fn run_installer_processors(
             .arg(&main_class)
             .args(args.iter().cloned())
             .current_dir(&scratch);
-        task.run((), ctx.child(jar_coord))
+        task.run((), ctx.clone())
             .await
             .with_context(|| format!("执行 {jar_coord} 失败"))?;
 

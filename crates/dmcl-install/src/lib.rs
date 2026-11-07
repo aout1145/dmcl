@@ -6,13 +6,13 @@
 //! * 怎么并发下 → 来自 [`dmcl_download`]；
 //! * 这个版本应该有哪些文件、怎么补齐 → 来自 [`dmcl_game`]；
 //! * 安装器 processor 用哪个 Java、缺 Java 时怎么装 → 来自 [`dmcl_java`]；
-//! * 进度怎么报、任务怎么串 → 来自 [`dmcl_task`]；
+//! * 进度怎么报、任务怎么组图 → 来自 [`dmcl_task`]；
 //! * 配置（`.`minecraft` 路径、镜像、并发度、是否跳过音乐）→ 由调用者通过
 //!   [`InstallOptions`] 传入，**这个 crate 不读任何配置文件**。
 //!
 //! # 用法
 //!
-//! 直接拿现成的任务链（cli 走这条）：
+//! 直接拿现成的任务图（cli 走这条）：
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -39,22 +39,22 @@
 //!     .with_loader(LoaderKind::Fabric, "0.15.0");
 //!
 //! install_task(options, spec)
-//!     .run_with((), |event| println!("{event}"))
+//!     .run(|event| println!("{event}"))
 //!     .await
 //!     .map(|_| ())
 //! # }
 //! ```
 //!
-//! 或者自己拼链条（gui 想自定义步骤时）：
+//! 或者自己拼图（gui 想自定义步骤时）：
 //!
 //! ```no_run
+//! use std::sync::Arc;
 //! use dmcl_game::{ensure_files, resolve_version, VersionRef};
 //! use dmcl_mcmeta::source::{DownloadSource, Mirror};
 //! use dmcl_install::InstallOptions;
 //! use dmcl_java::{JavaOption, JreAutoInstall};
 //! use dmcl_mcmeta::os::Arch;
-//! use dmcl_task::TaskContext;
-//! use std::sync::Arc;
+//! use dmcl_task::{TaskContext, TaskGraphBuilder};
 //!
 //! # async fn run() -> anyhow::Result<()> {
 //! let java = Arc::new(JavaOption {
@@ -68,8 +68,19 @@
 //!     java,
 //!     JreAutoInstall::new("/tmp/.minecraft/runtime"),
 //! );
-//! let version = resolve_version(&VersionRef::new("/tmp/.minecraft", "1.20.1")).await?;
-//! ensure_files(&version, &options.game, &TaskContext::detached("游戏文件")).await?;
+//!
+//! let mut builder = TaskGraphBuilder::new("补齐游戏文件");
+//! let step = builder.step("下载");
+//! let downloads = options.game.download_context(builder.progress());
+//! let sink = builder.add(step, "下载游戏文件", (), dmcl_task::task_fn(move |_: (), ctx| {
+//!     let options = options.clone();
+//!     let downloads = downloads.clone();
+//!     async move {
+//!         let version = resolve_version(&VersionRef::new("/tmp/.minecraft", "1.20.1")).await?;
+//!         ensure_files(&version, &options.game, &downloads, &ctx).await
+//!     }
+//! }));
+//! builder.build(sink)?.run(|_| {}).await?;
 //! # Ok(())
 //! # }
 //! ```

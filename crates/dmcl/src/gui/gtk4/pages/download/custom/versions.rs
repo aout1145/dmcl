@@ -1,21 +1,19 @@
 //! 版本清单适配：把各数据源转成 `VersionItem`，以及取数器。
 
-use std::sync::Arc;
-
 use dmcl_mcmeta::source::DownloadSource;
 
 use crate::gui::gtk4::pages::download::common::version_select::{
-    Badge, FetchVersions, VersionItem,
+    fetcher, Badge, FetchVersions, VersionItem,
 };
 
 /// Minecraft 版本清单的取数器：**忽略上下文**，一次取全清单。
 pub(super) fn mc_fetcher(source: DownloadSource) -> FetchVersions {
-    Arc::new(move |_context: &str| {
+    fetcher(move |_context: &str| {
         let source = source.clone();
-        Box::pin(async move {
+        async move {
             let manifest = source.fetch_version_manifest().await?;
             Ok(mc_items(manifest))
-        })
+        }
     })
 }
 

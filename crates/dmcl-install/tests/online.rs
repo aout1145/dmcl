@@ -16,7 +16,7 @@ use dmcl_java::{resolve_jre_component, JavaOption, JavaRuntimeOptions, JreAutoIn
 use dmcl_mcmeta::os::Arch;
 use dmcl_mcmeta::source::{DownloadSource, Mirror};
 use dmcl_mcmeta::vanilla::current_jre_platform;
-use dmcl_task::TaskContext;
+use dmcl_task::{task_fn, ProgressHandle, TaskGraphBuilder};
 
 const VERSION: &str = "1.7.10";
 
@@ -134,15 +134,31 @@ async fn a_few_planned_libraries_really_download() {
         .collect();
 
     let game = options.game.clone();
-    let report = download_planned(
-        &game,
-        "库文件",
-        small.clone(),
-        &TaskContext::detached("测试"),
-    )
-    .await
-    .expect("下载库文件");
-    assert_eq!(report.failed.len(), 0);
+    let downloads = game.download_context(ProgressHandle::new());
+    for _ in 0..2 {
+        let mut builder = TaskGraphBuilder::new("下载");
+        let step = builder.step("下载");
+        let game = game.clone();
+        let downloads = downloads.clone();
+        let small = small.clone();
+        let sink = builder.add(
+            step,
+            "下载库文件",
+            (),
+            task_fn(move |_: (), ctx| {
+                let game = game.clone();
+                let downloads = downloads.clone();
+                let small = small.clone();
+                async move { download_planned(&game, &downloads, "库文件", small, &ctx).await }
+            }),
+        );
+        builder
+            .build(sink)
+            .unwrap()
+            .run(|_| {})
+            .await
+            .expect("下载库文件");
+    }
     for file in &small {
         assert!(
             file.save_to.is_file(),
@@ -150,13 +166,6 @@ async fn a_few_planned_libraries_really_download() {
             file.save_to.display()
         );
     }
-
-    // 再跑一次：应当全部被跳过（sha1 一致）
-    let again = download_planned(&game, "库文件", small, &TaskContext::detached("测试"))
-        .await
-        .unwrap();
-    assert_eq!(again.skipped, 3);
-    assert_eq!(again.downloaded, 0);
 }
 
 #[tokio::test]
@@ -187,16 +196,37 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
     .unwrap();
 
     let options = options(root.clone());
-    dmcl_install::optifine::install_optifine_task(
-        options,
-        version_name.to_string(),
-        "1.12.2".to_string(),
-        "HD_U_G5".to_string(),
-        false,
-    )
-    .run(())
-    .await
-    .expect("安装 OptiFine");
+    let mut builder = TaskGraphBuilder::new("安装 OptiFine");
+    let step = builder.step("安装");
+    let downloads = options.game.download_context(builder.progress());
+    let sink = builder.add(
+        step,
+        "安装 OptiFine",
+        (),
+        task_fn(move |_: (), ctx| {
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let version_name = version_name.to_string();
+            async move {
+                dmcl_install::optifine::install_optifine(
+                    &options,
+                    &downloads,
+                    &version_name,
+                    "1.12.2",
+                    "HD_U_G5",
+                    false,
+                    &ctx,
+                )
+                .await
+            }
+        }),
+    );
+    builder
+        .build(sink)
+        .unwrap()
+        .run(|_| {})
+        .await
+        .expect("安装 OptiFine");
 
     // 1.12.2 G5 自带 launchwrapper 2.2
     assert!(root

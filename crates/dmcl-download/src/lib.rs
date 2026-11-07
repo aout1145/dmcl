@@ -1,49 +1,44 @@
-//! 文件下载：多文件并发 + 大文件分块并发 + 进度上报。
+//! 文件下载：单文件任务 + 共享并发预算 + 全局进度。
 //!
-//! 这里的 [`DownloadTask`] 是一个 [`dmcl_task::Task`]，因此可以直接塞进任务链，
-//! 由前端（cli / tui / gui）订阅事件流显示整体进度：
+//! 每个文件是一个独立的 [`dmcl_task::Task`]，由下载准备节点动态加入任务图：
 //!
 //! ```no_run
-//! use dmcl_download::{DownloadItem, DownloadOptions, DownloadTask};
-//! use dmcl_task::TaskChain;
+//! use dmcl_download::{DownloadContext, DownloadItem, DownloadOptions};
+//! use dmcl_task::{StepId, TaskContext};
 //!
-//! # async fn run() -> anyhow::Result<()> {
-//! let mut downloads = DownloadTask::new(DownloadOptions::default());
-//! downloads.push(DownloadItem::new(
-//!     ["https://example.com/a.jar".to_string()],
-//!     "/tmp/a.jar",
-//! ));
-//!
-//! let chain = TaskChain::new("下载").then(downloads, "下载文件");
-//! // 这条链的最终输出就是 DownloadReport
-//! let _report: dmcl_download::DownloadReport = chain.run_with((), |event| println!("{event}")).await?;
+//! # async fn run(ctx: TaskContext, step: StepId, items: Vec<DownloadItem>) -> anyhow::Result<()> {
+//! let downloads = DownloadContext::new(
+//!     reqwest::Client::new(),
+//!     DownloadOptions::default(),
+//!     ctx.progress_handle(),
+//! );
+//! // 在准备节点里：预检 → add_total → ctx.add_task 动态创建文件任务
+//! downloads.prepare(&ctx, step, items).await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
 //! 设计要点：
 //!
-//! * **并发靠 tokio**：整个启动器跑在多线程运行时上，因此这些并发任务是真的并行执行；
-//!   同时进行的连接数由 [`DownloadOptions::max_connections`] 通过信号量限制。
-//! * **本地判断也并发**：下载前的「已存在」检查与完整性检查都走 [`files_ok`]，
-//!   按 CPU 线程数并发哈希，不会串行扫几千个资源文件。
-//! * **分块**：已知大小且超过 [`DownloadOptions::chunk_threshold`] 的文件按
-//!   `Range` 请求切成若干块并发下载，单文件并发块数由
-//!   [`DownloadOptions::max_chunks_per_file`] 限制。
-//! * **先写 `.part` 再改名**：校验通过（给了校验值就比对摘要，否则比对大小）才改名为最终文件，
-//!   因此中断 / 失败不会留下一个"看起来完整"的坏文件。
-//! * **换源重试**：每个下载项可带一串**候选地址**（按优先级），第 `n` 次尝试轮换一个
-//!   （A B A …）；全失败才记为该文件失败。
+//! * **每个文件一个 DAG 节点**：文件任务由准备节点 `add_task` 创建，自动 join；
+//! * **三层并发预算**：`max_active_files`（文件）、`max_connections`（HTTP 请求 /
+//!   分块）、`max_workers`（预检与校验等 CPU 任务）；
+//! * **分块共享全局连接**：每块占一个 `max_connections` 许可，单个大文件可以占满全部
+//!   连接，多个文件共享同一预算；
+//! * **本地判断也并发**：预检走 [`files_ok_with`]，与下载后的校验共享 worker 预算；
+//! * **先写 `.part` 再改名**：校验通过才 rename，失败直接让节点失败，由 DAG FailFast
+//!   处理；
+//! * **换源重试**：每个下载项可带一串候选地址，第 `n` 次尝试轮换一个（A B A …）；
 //! * **不做断点续传**：失败即整份重来（首次之外最多重试 [`DownloadOptions::max_retries`] 次）。
 
 mod hash;
 mod item;
 mod options;
-mod report;
 mod task;
 
-pub use hash::{file_ok, files_ok, hash_bytes, hash_file, Checksum, FileCheck, HashAlgorithm};
+pub use hash::{
+    file_ok, files_ok, files_ok_with, hash_bytes, hash_file, Checksum, FileCheck, HashAlgorithm,
+};
 pub use item::DownloadItem;
 pub use options::{DownloadOptions, DEFAULT_USER_AGENT};
-pub use report::{DownloadFailure, DownloadReport};
-pub use task::DownloadTask;
+pub use task::DownloadContext;

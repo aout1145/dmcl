@@ -12,7 +12,6 @@ use dmcl_java::{
 };
 use dmcl_mcmeta::layout::absolute;
 use dmcl_mcmeta::os::{Arch, Os};
-use dmcl_task::BoxFuture;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -379,20 +378,18 @@ impl InstallJavaResolver {
     }
 }
 
+#[async_trait::async_trait]
 impl JavaResolver for InstallJavaResolver {
-    fn resolve<'a>(&'a self, required_major: u32) -> BoxFuture<'a, Result<JavaOption>> {
-        Box::pin(async move {
-            let java =
-                resolve_from_config(required_major, &self.choice, &self.configs, true).await?;
-            // 显式指定不按版本要求改选；自动选择必须精确匹配要求的 Java 大版本，
-            // 否则交给安装流程下载对应的 JRE。
-            if self.choice.is_auto() && java.major != required_major {
-                return Err(anyhow!(
-                    "没有找到匹配 Java {required_major} 的可用 Java，请先安装或在配置中添加 Java 路径"
-                ));
-            }
-            Ok(java)
-        })
+    async fn resolve(&self, required_major: u32) -> Result<JavaOption> {
+        let java = resolve_from_config(required_major, &self.choice, &self.configs, true).await?;
+        // 显式指定不按版本要求改选；自动选择必须精确匹配要求的 Java 大版本，
+        // 否则交给安装流程下载对应的 JRE。
+        if self.choice.is_auto() && java.major != required_major {
+            return Err(anyhow!(
+                "没有找到匹配 Java {required_major} 的可用 Java，请先安装或在配置中添加 Java 路径"
+            ));
+        }
+        Ok(java)
     }
 }
 

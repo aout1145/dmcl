@@ -5,6 +5,7 @@
 
 mod confirm;
 pub(crate) mod message;
+mod step_row;
 mod task_card;
 mod task_view;
 

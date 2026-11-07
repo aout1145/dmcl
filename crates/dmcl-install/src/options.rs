@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_download::DownloadOptions;
+use dmcl_download::{DownloadContext, DownloadOptions};
 use dmcl_game::{GameFilesOptions, VersionRef};
 use dmcl_java::{install_jre, JavaResolver, JavaRuntimeOptions, JreAutoInstall, JreInstallRequest};
 use dmcl_mcmeta::os::{Arch, Os};
@@ -70,6 +70,7 @@ impl InstallOptions {
         &self,
         major: u32,
         component: Option<&str>,
+        downloads: &Arc<DownloadContext>,
         ctx: &TaskContext,
     ) -> Result<PathBuf> {
         match self.java.resolve(major).await {
@@ -92,7 +93,7 @@ impl InstallOptions {
                 if let Some(component) = component.filter(|component| !component.is_empty()) {
                     request = request.with_component(component);
                 }
-                let installed = install_jre(&runtime, &request, ctx).await?;
+                let installed = install_jre(&runtime, &request, downloads, ctx).await?;
                 Ok(installed.java)
             }
         }

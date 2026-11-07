@@ -23,14 +23,10 @@ pub(crate) struct ConfigJavaResolver {
     pub(crate) configs: JavaConfigs,
 }
 
+#[async_trait::async_trait]
 impl JavaResolver for ConfigJavaResolver {
-    fn resolve<'a>(
-        &'a self,
-        required_major: u32,
-    ) -> dmcl_task::BoxFuture<'a, Result<dmcl_java::JavaOption>> {
-        Box::pin(async move {
-            resolve_from_config(required_major, &self.choice, &self.configs, false).await
-        })
+    async fn resolve(&self, required_major: u32) -> Result<dmcl_java::JavaOption> {
+        resolve_from_config(required_major, &self.choice, &self.configs, false).await
     }
 }
 
@@ -53,11 +49,13 @@ pub(crate) async fn run(vername: &str, config: &Config, root_path: &Path) -> Res
     let game = Arc::new(config.game_files_options(config.download_source()));
 
     let mut printer = ProgressPrinter::new();
-    let mut monitor = dmcl_launch::launch_chain(option, game, None)
-        .run_with((), |event| handle_event(&mut printer, event))
+    let monitor = dmcl_launch::launch_chain(option, game, None)
+        .run(|event| handle_event(&mut printer, event))
         .await?;
     printer.finish();
 
+    let mut monitor =
+        Arc::try_unwrap(monitor).map_err(|_| anyhow::anyhow!("游戏监控句柄仍被其他地方共享"))?;
     monitor.wait().await?;
     Ok(())
 }

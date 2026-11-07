@@ -11,7 +11,7 @@
 //! use dmcl_mcmeta::os::{Arch, Os};
 //! use dmcl_mcmeta::source::DownloadSource;
 //!
-//! # async fn run() -> anyhow::Result<()> {
+//! # async fn run(ctx: dmcl_task::TaskContext) -> anyhow::Result<()> {
 //! let options = JavaRuntimeOptions {
 //!     source: DownloadSource::official(),
 //!     download: DownloadOptions::default(),
@@ -24,7 +24,8 @@
 //! .with_component("java-runtime-gamma")
 //! .with_format(JreFileFormat::Lzma);
 //!
-//! let installed = install_jre(&options, &request, &dmcl_task::TaskContext::detached("JRE")).await?;
+//! let downloads = options.download_context(ctx.progress_handle());
+//! let installed = install_jre(&options, &request, &downloads, &ctx).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -38,9 +39,10 @@
 //! [`JreFileFormat::Raw`]。
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use dmcl_download::{files_ok, Checksum, DownloadItem, DownloadReport, DownloadTask, FileCheck};
+use dmcl_download::{Checksum, DownloadContext, DownloadItem, FileCheck};
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{jre_platform_key, JreFileType, JreManifest, JreRuntimeManifest};
 use dmcl_task::TaskContext;
@@ -139,6 +141,7 @@ pub struct JreInstalled {
 }
 
 /// 已解析出组件名和目标目录之后，真正下载并展开时用的请求。
+#[derive(Clone)]
 struct JreManifestInstall {
     component: String,
     platform: (Os, Arch),
@@ -253,6 +256,7 @@ fn runtime_manifest_url<'a>(
 pub async fn install_jre(
     options: &JavaRuntimeOptions,
     request: &JreInstallRequest,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<JreInstalled> {
     let index = options.source.fetch_jre_manifest().await?;
@@ -272,7 +276,7 @@ pub async fn install_jre(
         target_dir,
         format: request.format,
     };
-    let java = install_jre_manifest(options, &manifest, &install, ctx).await?;
+    let java = install_jre_manifest(options, &manifest, &install, downloads, ctx).await?;
 
     Ok(JreInstalled {
         component: component.name,
@@ -314,13 +318,15 @@ struct JreFileDownload {
 /// `dmcl-java` 不依赖 `dmcl-game`，所以这里直接构造 [`DownloadItem`]。
 async fn download_jre_planned(
     options: &JavaRuntimeOptions,
+    downloads: &Arc<DownloadContext>,
     name: &str,
     planned: Vec<JreFileDownload>,
     ctx: &TaskContext,
-) -> Result<DownloadReport> {
+) -> Result<()> {
     if planned.is_empty() {
-        return Ok(DownloadReport::default());
+        return Ok(());
     }
+    let step = ctx.step();
     let items: Vec<DownloadItem> = planned
         .into_iter()
         .map(|file| {
@@ -330,18 +336,17 @@ async fn download_jre_planned(
                 .named(file.name)
         })
         .collect();
-    let mut task =
-        DownloadTask::new(options.download.clone()).with_client(options.source.client().clone());
-    task.extend(items);
-    let report = task.execute(ctx).await?;
-    if !report.is_success() {
-        anyhow::bail!(
-            "{name}: {} 个文件下载失败：\n{}",
-            report.failed.len(),
-            report.failure_summary(5)
-        );
+    let handles = downloads
+        .prepare(ctx, step, items)
+        .await
+        .with_context(|| format!("{name}: 准备下载失败"))?;
+    for handle in handles {
+        handle
+            .wait()
+            .await
+            .with_context(|| format!("{name}: 下载失败"))?;
     }
-    Ok(report)
+    Ok(())
 }
 
 /// 路径的最后一段（用于进度显示）。
@@ -356,6 +361,7 @@ async fn install_jre_manifest(
     options: &JavaRuntimeOptions,
     manifest: &JreRuntimeManifest,
     request: &JreManifestInstall,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
     // 规划阶段只看文档、不写盘；这里失败时目标目录还是原样，不需要清理入口。
@@ -366,7 +372,7 @@ async fn install_jre_manifest(
         request.platform.1.name()
     ));
     let plan = plan_jre_files(manifest, &request.target_dir, request.format)?;
-    match install_jre_plan(options, &plan, request, ctx).await {
+    match install_jre_plan(options, &plan, request, downloads, ctx).await {
         Ok(java) => Ok(java),
         Err(err) => {
             // 半成品不能看起来像一个可用的 Java。
@@ -380,6 +386,7 @@ async fn install_jre_plan(
     options: &JavaRuntimeOptions,
     plan: &JrePlan,
     request: &JreManifestInstall,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<PathBuf> {
     let target = &request.target_dir;
@@ -401,7 +408,7 @@ async fn install_jre_plan(
             size: file.final_size,
         })
         .collect();
-    let checked = files_ok(checks).await?;
+    let checked = downloads.files_ok(checks).await?;
     let mut done = vec![false; plan.files.len()];
     let mut index = 0;
     for (position, file) in plan.files.iter().enumerate() {
@@ -421,7 +428,7 @@ async fn install_jre_plan(
             planned.push(download.clone());
         }
     }
-    download_jre_planned(options, "Java 运行时", planned, ctx).await?;
+    download_jre_planned(options, downloads, "Java 运行时", planned, ctx).await?;
 
     for (position, file) in plan.files.iter().enumerate() {
         if !file.compressed || done[position] {
@@ -755,14 +762,28 @@ fn create_symlink(_path: &Path, _target: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future::Future;
     use std::sync::Arc;
 
     use dmcl_download::{hash_bytes, DownloadOptions, HashAlgorithm};
     use dmcl_mcmeta::source::DownloadSource;
+    use dmcl_task::{task_fn, ProgressHandle, TaskGraphBuilder};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     use super::*;
+
+    async fn run_node<O, F, Fut>(f: F) -> anyhow::Result<Arc<O>>
+    where
+        O: Send + Sync + 'static,
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = anyhow::Result<O>> + Send + 'static,
+    {
+        let mut builder = TaskGraphBuilder::new("测试");
+        let step = builder.step("测试");
+        let sink = builder.add(step, "测试", (), task_fn(move |_: (), ctx| f(ctx)));
+        builder.build(sink).unwrap().run(|_| {}).await
+    }
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dmcl-java-jre-{tag}-{}", std::process::id()));
@@ -1143,11 +1164,27 @@ mod tests {
         let dir = temp_dir("install");
         let options = runtime_options();
         let request = manifest_install(&dir);
-        let ctx = TaskContext::detached("测试");
-
-        let java = install_jre_manifest(&options, &manifest, &request, &ctx)
+        let downloads = options.download_context(ProgressHandle::new());
+        let options = Arc::new(options);
+        let manifest = Arc::new(manifest);
+        let request = Arc::new(request);
+        let downloads = downloads.clone();
+        let (options_for_task, manifest_for_task, request_for_task) =
+            (options.clone(), manifest.clone(), request.clone());
+        let downloads_for_task = downloads.clone();
+        let java =
+            run_node(move |ctx| {
+                let options = options_for_task.clone();
+                let manifest = manifest_for_task.clone();
+                let request = request_for_task.clone();
+                let downloads = downloads_for_task.clone();
+                async move {
+                    install_jre_manifest(&options, &manifest, &request, &downloads, &ctx).await
+                }
+            })
             .await
             .unwrap();
+        let java = (*java).clone();
         assert_eq!(java, java_executable(&dir));
         assert_eq!(
             tokio::fs::read_to_string(&java).await.unwrap(),
@@ -1168,9 +1205,15 @@ mod tests {
 
         // 停掉服务器后重跑：最终文件已经完整，不应再访问网络。
         server.abort();
-        install_jre_manifest(&options, &manifest, &request, &ctx)
-            .await
-            .unwrap();
+        run_node(move |ctx| {
+            let options = options.clone();
+            let manifest = manifest.clone();
+            let request = request.clone();
+            let downloads = downloads.clone();
+            async move { install_jre_manifest(&options, &manifest, &request, &downloads, &ctx).await }
+        })
+        .await
+        .unwrap();
         assert_eq!(
             tokio::fs::read_to_string(&java).await.unwrap(),
             "hello java runtime\n"
@@ -1209,15 +1252,20 @@ mod tests {
 
         let options = runtime_options();
         let request = manifest_install(&dir);
-        let err = install_jre_manifest(
-            &options,
-            &manifest,
-            &request,
-            &TaskContext::detached("测试"),
-        )
-        .await
-        .unwrap_err();
-        assert!(format!("{err:#}").contains("下载失败"), "{err:#}");
+        let downloads = options.download_context(ProgressHandle::new());
+        let err =
+            run_node(move |ctx| {
+                let options = options.clone();
+                let manifest = manifest.clone();
+                let request = request.clone();
+                let downloads = downloads.clone();
+                async move {
+                    install_jre_manifest(&options, &manifest, &request, &downloads, &ctx).await
+                }
+            })
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("404"), "{err:#}");
         assert!(!dir.join("bin/java").exists(), "半成品入口应当被删掉");
 
         server.abort();

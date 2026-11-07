@@ -15,12 +15,14 @@ use relm4::prelude::*;
 
 use dmcl_task::TaskEvent;
 
-use super::task_view::{TaskState, TaskStatus};
+use super::step_row::StepRow;
+use super::task_view::{StepView, TaskState, TaskStatus};
 
 /// 任务卡片日志区的样式（全局 CSS）：边框 + 比正文更小的日志字体。
 pub(crate) const CSS: &str = "\
 .dmcl-task-log { border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 6px; }
-.dmcl-task-log-text { font-size: 0.8em; }";
+.dmcl-task-log-text { font-size: 0.8em; }
+.dmcl-step-title { font-size: 0.88em; }";
 
 /// 卡片发给任务对话框的消息。
 #[derive(Debug)]
@@ -46,6 +48,10 @@ pub(crate) struct TaskCard {
     scroll_to_end_pending: Cell<bool>,
     /// 不确定进度条的定时器。
     pulse: RefCell<Option<glib::SourceId>>,
+    /// Step 行列表（懒创建；容器在 `view!` 里）。
+    steps: RefCell<Option<FactoryVecDeque<StepRow>>>,
+    /// 上次同步到行控件的快照，避免进度事件也重画所有行。
+    step_snapshot: RefCell<Vec<StepView>>,
 }
 
 #[relm4::factory(pub(crate))]
@@ -102,42 +108,10 @@ impl FactoryComponent for TaskCard {
                         },
                     },
 
-                    // 「步骤 a/b」和步骤名放在同一行。
+                    #[name(steps_box)]
                     gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 6,
-
-                        gtk::Label {
-                            set_xalign: 0.0,
-                            #[watch]
-                            set_label: &self.overall_text(),
-                            #[watch]
-                            set_visible: self.overall_visible(),
-                            #[watch]
-                            set_css_classes: &self.overall_classes(),
-                        },
-
-                        gtk::Label {
-                            set_xalign: 0.0,
-                            set_hexpand: true,
-                            set_ellipsize: gtk::pango::EllipsizeMode::Middle,
-                            add_css_class: "caption",
-                            #[watch]
-                            set_label: &self.step_text(),
-                            #[watch]
-                            set_visible: self.step_visible(),
-                        },
-                    },
-
-                    // 进度条上方的说明：百分比 / 字节 / 文件数等。
-                    gtk::Label {
-                        set_xalign: 0.0,
-                        add_css_class: "caption",
-                        add_css_class: "dim-label",
-                        #[watch]
-                        set_label: &self.state.progress_text(),
-                        #[watch]
-                        set_visible: self.progress_info_visible(),
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 2,
                     },
 
                     gtk::Label {
@@ -146,26 +120,51 @@ impl FactoryComponent for TaskCard {
                         set_wrap_mode: gtk::pango::WrapMode::WordChar,
                         set_selectable: true,
                         add_css_class: "caption",
-                        add_css_class: "error",
                         #[watch]
-                        set_label: self.state.error.as_deref().unwrap_or("失败"),
+                        set_label: self.reason_text(),
                         #[watch]
-                        set_visible: self.state.status == TaskStatus::Failed,
+                        set_visible: self.reason_visible(),
+                        #[watch]
+                        set_css_classes: &self.reason_classes(),
+                    },
+
+                    gtk::Separator {
+                        set_margin_top: 4,
+                        set_margin_bottom: 4,
+                        #[watch]
+                        set_visible: self.progress_visible(),
                     },
 
                     #[name(progress)]
                     gtk::ProgressBar {
                         set_show_text: false,
+                        set_hexpand: true,
+                        set_margin_bottom: 4,
                         #[watch]
                         set_visible: self.progress_visible(),
-                        #[watch]
-                        set_fraction: self.fraction(),
                     },
 
                     gtk::Expander {
                         set_tooltip_text: Some("日志"),
                         connect_expanded_notify[sender] => move |expander| {
                             sender.input(CardMsg::LogsToggled(expander.is_expanded()));
+                        },
+
+                        #[wrap(Some)]
+                        set_label_widget = &gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_hexpand: true,
+
+                            gtk::Label {
+                                set_hexpand: true,
+                                set_xalign: 1.0,
+                                add_css_class: "caption",
+                                add_css_class: "dim-label",
+                                #[watch]
+                                set_label: &self.state.progress_text(),
+                                #[watch]
+                                set_visible: self.progress_info_visible(),
+                            },
                         },
 
                         #[name(log_scroll)]
@@ -220,6 +219,8 @@ impl FactoryComponent for TaskCard {
             logs_rendered: Cell::new(0),
             scroll_to_end_pending: Cell::new(false),
             pulse: RefCell::new(None),
+            steps: RefCell::new(None),
+            step_snapshot: RefCell::new(Vec::new()),
         }
     }
 
@@ -260,7 +261,39 @@ impl FactoryComponent for TaskCard {
             });
         }
 
-        // 只有「运行中 + 有步骤 + 没百分比」才需要 pulse 定时器。
+        // Step 行用嵌套 FactoryVecDeque 同步；只有计数真的变化时才改行，
+        // 纯进度事件不会重画整块列表。
+        if self.steps.borrow().is_none() {
+            let factory = FactoryVecDeque::builder()
+                .launch(widgets.steps_box.clone())
+                .detach();
+            *self.steps.borrow_mut() = Some(factory);
+        }
+        let views = self.state.step_views();
+        if *self.step_snapshot.borrow() != views {
+            if let Some(factory) = self.steps.borrow_mut().as_mut() {
+                let mut guard = factory.guard();
+                while guard.len() > views.len() {
+                    guard.pop_back();
+                }
+                for (index, view) in views.iter().cloned().enumerate() {
+                    if let Some(row) = guard.get_mut(index) {
+                        *row = StepRow::new(view);
+                    } else {
+                        guard.push_back(view);
+                    }
+                }
+            }
+            *self.step_snapshot.borrow_mut() = views;
+        }
+
+        // 确定进度才更新 fraction；不确定时不要每来一个事件就重设 fraction，
+        // 否则会把 GTK 的 pulse 动画不断打断。
+        if let Some(fraction) = self.state.global_fraction() {
+            widgets.progress.set_fraction(fraction);
+        }
+
+        // 只有「运行中 + 仍有任务 + 没有确定进度」才需要 pulse 定时器。
         let mut pulse = self.pulse.borrow_mut();
         if self.state.wants_pulse() {
             if pulse.is_none() {
@@ -308,47 +341,28 @@ impl TaskCard {
         self.state.status == TaskStatus::Done
     }
 
-    fn overall_text(&self) -> String {
-        let (_, total) = self.state.overall();
-        let current = self.state.current_step_number();
-        match self.state.status {
-            TaskStatus::Canceling => {
-                if total == 0 {
-                    "取消中…".to_string()
-                } else {
-                    format!("取消中…（步骤 {current}/{total}）")
-                }
-            }
-            TaskStatus::Done => "已完成".to_string(),
-            TaskStatus::Cancelled => "已取消".to_string(),
-            TaskStatus::Failed => String::new(),
-            TaskStatus::Running if total == 0 => "准备中…".to_string(),
-            TaskStatus::Running => format!("步骤 {current}/{total}"),
-        }
-    }
-
-    fn overall_visible(&self) -> bool {
-        self.state.status != TaskStatus::Failed
-    }
-
-    fn overall_classes(&self) -> Vec<&'static str> {
-        match self.state.status {
-            TaskStatus::Running => vec!["caption", "dim-label"],
-            TaskStatus::Canceling => vec!["caption", "warning"],
-            TaskStatus::Done => vec!["caption", "success"],
-            TaskStatus::Cancelled | TaskStatus::Failed => vec!["caption", "dim-label"],
-        }
-    }
-
-    fn step_text(&self) -> String {
-        self.state.current_step().unwrap_or_default().to_string()
-    }
-
-    fn step_visible(&self) -> bool {
+    fn reason_visible(&self) -> bool {
         matches!(
             self.state.status,
-            TaskStatus::Running | TaskStatus::Canceling
-        ) && self.state.current_step().is_some()
+            TaskStatus::Failed | TaskStatus::Cancelled
+        )
+    }
+
+    fn reason_text(&self) -> &str {
+        self.state
+            .error
+            .as_deref()
+            .unwrap_or(match self.state.status {
+                TaskStatus::Cancelled => "已取消",
+                _ => "失败",
+            })
+    }
+
+    fn reason_classes(&self) -> Vec<&'static str> {
+        match self.state.status {
+            TaskStatus::Cancelled => vec!["caption", "warning"],
+            _ => vec!["caption", "error"],
+        }
     }
 
     fn spinner_visible(&self) -> bool {
@@ -380,13 +394,6 @@ impl TaskCard {
 
     fn progress_info_visible(&self) -> bool {
         self.progress_visible() && !self.state.progress_text().is_empty()
-    }
-
-    fn fraction(&self) -> f64 {
-        self.state
-            .current_percent()
-            .map(|percent| (percent / 100.0).clamp(0.0, 1.0))
-            .unwrap_or(0.0)
     }
 
     fn close_tooltip(&self) -> &'static str {

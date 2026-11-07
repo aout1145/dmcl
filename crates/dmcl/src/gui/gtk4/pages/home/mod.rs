@@ -379,7 +379,7 @@ impl HomePage {
         &self,
         name: &str,
         launch: &LaunchConfig,
-    ) -> anyhow::Result<dmcl_task::TaskChain<(), GameMonitor>> {
+    ) -> anyhow::Result<dmcl_task::TaskGraph<GameMonitor>> {
         let version = dmcl_game::VersionRef::new(self.root_path.clone(), name);
         let java = Arc::new(java::GuiJavaResolver {
             choice: launch.java.clone(),
@@ -435,7 +435,7 @@ impl HomePage {
         );
         self.sync_sections();
 
-        let handle = self.shell.run(format!("启动 {name}"), chain, ());
+        let handle = self.shell.run(format!("启动 {name}"), chain);
         let sender = sender.clone();
         let task_name = name.clone();
         // 这个任务不挂在 HomePage 的 TaskGuard 上：关闭标签后启动链继续跑，结果仍会
@@ -443,12 +443,19 @@ impl HomePage {
         // 游戏进程继续独立运行。
         relm4::spawn(async move {
             match handle.finished().await {
-                Ok(monitor) => {
-                    let _ = sender.input_sender().send(HomeMsg::Launched {
-                        name: task_name,
-                        monitor,
-                    });
-                }
+                Ok(monitor) => match std::sync::Arc::try_unwrap(monitor) {
+                    Ok(monitor) => {
+                        let _ = sender.input_sender().send(HomeMsg::Launched {
+                            name: task_name,
+                            monitor,
+                        });
+                    }
+                    Err(_) => {
+                        let _ = sender
+                            .input_sender()
+                            .send(HomeMsg::LaunchFailed { name: task_name });
+                    }
+                },
                 Err(_) => {
                     let _ = sender
                         .input_sender()

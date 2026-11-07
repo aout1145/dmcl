@@ -24,25 +24,31 @@ app 层见 [app/README.md](../README.md)，整体架构见
 
 ## 任务卡片
 
-每个任务 = 一条 `TaskChain` 的一次运行。卡片是 **`FactoryComponent`**，视图用 `view!`
+每个任务 = 一张 `TaskGraph` 的一次运行。卡片是 **`FactoryComponent`**，视图用 `view!`
 声明；任务列表是 `FactoryVecDeque<TaskCard>`，模型一变就由工厂同步控件。
 
 卡片从上到下：
 
 1. 状态图标 + 任务名 + 右上角的叉；
-2. 同一行里的「步骤 a/b」和当前步骤名；
-3. 进度条上方的说明：百分比 / 已下载与总字节 / 任务自己的计数（下载是「35/120 个文件」）；
-4. 进度条（文字全部放在上方，条内不再显示百分比）；
-5. 可展开的日志。
+2. 每个 Step 一行：状态图标（`object-select` / `content-loading` / `radio` /
+   `dialog-error`）+「步骤 N 名称」+ 右侧计数（`12/12 完成` / `5/8 运行中` /
+   `等待中` / `未执行` / 失败数）；所有 Step 同时列出；
+3. 分隔线；
+4. 单独一行的全局进度条（占满整行）；
+5. 日志展开控件：左侧箭头 + 右侧「已下载 / 总字节」；
+6. 展开后的日志区。
+
+Step 行用嵌套的 `FactoryVecDeque<StepRow>`，只在计数变化时更新；纯进度事件不会重画
+整块列表。
 
 状态机：
 
-- **运行中**：左侧 `AdwSpinner`，显示总进度、当前步骤、进度说明与进度条；没有百分比时用
-  pulse 当不确定进度条。
-- **取消中**：点了叉、已发出取消但任务还没收尾。显示「取消中…（步骤 a/b）」，叉变灰不可再点。
+- **运行中**：左侧 `AdwSpinner`，显示 Step 计数、全局进度与进度条；`total` 未知或
+  `downloaded >= total` 且仍有任务时用 pulse 当不确定进度条。
+- **取消中**：点了叉、已发出取消但任务还没收尾。显示「取消中…（已完成 a/b 个 Step）」，叉变灰不可再点。
 - **已完成**：左侧对勾，只显示「已完成」。
-- **已取消**：左侧停止图标，显示「已取消」。
-- **失败**：左侧错误图标，直接显示任务链的错误文本（里面已经带了出错的步骤名）。
+- **已取消**：左侧停止图标，显示「已取消」以及任务图返回的取消原因。
+- **失败**：左侧错误图标，直接显示任务图的错误文本（里面已经带了出错的任务名）。
 
 右上角的叉：运行中 = 取消；取消中 = 禁用；已结束 = 清除这条记录（`CardOut::Close`，
 由任务对话框按状态分派）。取消请求由 `Shell` 识别任务返回的 `Cancelled` 错误，最后落到
@@ -50,19 +56,30 @@ app 层见 [app/README.md](../README.md)，整体架构见
 
 ## 进度还原
 
-总进度用**栈**还原层级，只统计**顶层**步骤完成（嵌套子链会把步骤事件原样转发到父链，不能
-直接数 `StepFinished`）：`StepStarted` push、`StepFinished` pop，栈由非空变空才 +1。
+`GraphStarted` 一次性带出全部静态 Step；之后 `TaskAdded / TaskStarted / TaskFinished /
+TaskFailed / TaskSkipped` 分别维护每个 Step 的等待 / 执行 / 完成 / 失败 / 未执行计数。
+失败仍计入「完成」并额外记录失败数；`TaskSkipped`（取消 / FailFast 时还没启动的任务）
+**不计入完成**，而是记为「未执行」。
 
-分项进度取栈顶步骤最近一条 `Progress`，`TaskState::progress_text` 把它拼成一行
-（百分比 / 字节 / `message`）；没有百分比时用 `pulse` 当不确定进度条。pulse 定时器由卡片的
-`post_view` 按需启停，状态变化后不会留下空转的定时器。
+Step 的状态与文案：
+
+- 全部完成：绿色 `N/N 完成`；
+- 还有任务在跑：`N/M 运行中` 或 `N/M 等待中`；
+- 有完成也有未执行：整行变灰，显示 `N/M 完成`；
+- 完全没有执行（或整个 Step 没有任务）：灰色 `未执行`；
+- 有失败：红色 `N/M 失败`（只显示失败计数，不再追加未执行数）。
+
+全局进度只有一条 `Progress { downloaded, total }`。`TaskState::progress_text` 只拼出
+「已下载 / 总字节」，不显示百分比；Step 计数由 `StepRow` 列表展示。没有确定进度时用
+`pulse` 当不确定进度条，并且**不会**在每个事件里重设 fraction，避免打断 GTK 的动画。
+pulse 定时器由卡片的 `post_view` 按需启停，状态变化后不会留下空转的定时器。
 
 **日志用 `GtkTextView` 增量追加**：下载这类会产生大量文件日志的任务，进度事件很频繁，
 如果每条日志都 `join` 全文并重设控件，会让进度条卡顿。日志到达时只把新增行 `insert`
 进 `TextBuffer`；展开时等布局完成后滚到最后一行。
 
-`task_view.rs` 是纯逻辑，单测覆盖：顶层步骤计数、当前步骤进度、日志累积、结束状态、
-取消中到已取消的转换，以及进度说明的拼法。
+`task_view.rs` 是纯逻辑，单测覆盖：真实任务图事件驱动的 Step 计数、取消后未执行任务的
+展示、全局进度、日志累积、结束状态与取消中到已取消的转换。
 
 ## 退出确认
 
@@ -86,6 +103,7 @@ app 层见 [app/README.md](../README.md)，整体架构见
 | --- | --- | --- |
 | `TaskMsg` | `message.rs` | `Open` / `Start` / `Event` / `Finished { id, ok, cancelled, error }` / `CloseCard` / `Closed` / `CloseMain` / `CancelAllAndQuit` |
 | `TaskCenterOut` | `mod.rs` | `RunningCount(n)`：当前未结束任务数，给标题栏角标；`Quit`：根组件可以销毁主窗口了 |
+| `StepRow` | `step_row.rs` | 单个 Step 行：状态图标、名称、计数 |
 | `CardMsg` | `task_card.rs` | 日志区展开状态变化 |
 | `CardOut` | `task_card.rs` | `Close(DynamicIndex)`：点卡片右上角的叉 |
 

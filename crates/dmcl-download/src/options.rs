@@ -8,21 +8,18 @@ pub const DEFAULT_USER_AGENT: &str = concat!("dmcl/", env!("CARGO_PKG_VERSION"))
 /// 全部由调用者提供 —— 这个 crate 不读任何配置文件。
 #[derive(Debug, Clone)]
 pub struct DownloadOptions {
-    /// 同时进行的连接数上限。
+    /// 同时进行的 HTTP 请求数上限，也是全局 in-flight chunk 上限。
     pub max_connections: usize,
+    /// 同时活跃的文件数上限。
+    pub max_active_files: usize,
+    /// CPU 密集型任务（预检 / 校验）的并发上限。
+    pub max_workers: usize,
     /// 超过这个字节数就分块下载。
     pub chunk_threshold: u64,
     /// 每块的大小。
     pub chunk_size: u64,
-    /// 单个文件最多并发几块（防止一个大文件把连接数吃光）。
-    pub max_chunks_per_file: usize,
     /// 单个文件失败后最多重试几次（不含第一次尝试）。
     pub max_retries: u32,
-    /// 单个文件失败后是否继续下载其余文件。
-    ///
-    /// `false`（默认）时，只要有一个文件失败，任务最后会返回错误；
-    /// 无论哪种取值，所有已排队的文件都会跑完，报告里能看到全部失败项。
-    pub ignore_failures: bool,
     pub user_agent: String,
 }
 
@@ -30,23 +27,31 @@ impl Default for DownloadOptions {
     fn default() -> Self {
         Self {
             max_connections: 64,
+            max_active_files: 64,
+            max_workers: std::thread::available_parallelism()
+                .map(|threads| threads.get())
+                .unwrap_or(1),
             chunk_threshold: 8 * 1024 * 1024,
             chunk_size: 4 * 1024 * 1024,
-            max_chunks_per_file: 8,
             max_retries: 3,
-            ignore_failures: false,
             user_agent: DEFAULT_USER_AGENT.to_string(),
         }
     }
 }
 
 impl DownloadOptions {
-    /// 只要并发数、其余取默认值。
+    /// 只设置连接数、其余取默认值。
     pub fn with_max_connections(max_connections: usize) -> Self {
         Self {
             max_connections: max_connections.max(1),
             ..Self::default()
         }
+    }
+
+    /// 链式设置连接数上限。
+    pub fn with_connection_limit(mut self, max_connections: usize) -> Self {
+        self.max_connections = max_connections;
+        self
     }
 
     /// 关掉分块（全部单连接下载）。
@@ -61,6 +66,16 @@ impl DownloadOptions {
         self
     }
 
+    pub fn with_max_active_files(mut self, max_active_files: usize) -> Self {
+        self.max_active_files = max_active_files;
+        self
+    }
+
+    pub fn with_max_workers(mut self, max_workers: usize) -> Self {
+        self.max_workers = max_workers;
+        self
+    }
+
     pub fn with_max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
         self
@@ -71,17 +86,13 @@ impl DownloadOptions {
         self
     }
 
-    pub fn with_ignore_failures(mut self, ignore_failures: bool) -> Self {
-        self.ignore_failures = ignore_failures;
-        self
-    }
-
     /// 修正非法取值，避免除零 / 死锁。
     pub(crate) fn normalized(&self) -> Self {
         let mut options = self.clone();
         options.max_connections = options.max_connections.max(1);
+        options.max_active_files = options.max_active_files.max(1);
+        options.max_workers = options.max_workers.max(1);
         options.chunk_size = options.chunk_size.max(1);
-        options.max_chunks_per_file = options.max_chunks_per_file.max(1);
         options
     }
 
@@ -101,5 +112,21 @@ mod tests {
         assert!(!options.should_chunk(1023));
         assert!(options.should_chunk(1024));
         assert!(!options.without_chunking().should_chunk(u64::MAX - 1));
+    }
+
+    #[test]
+    fn illegal_values_are_normalised() {
+        let options = DownloadOptions {
+            max_connections: 0,
+            max_active_files: 0,
+            max_workers: 0,
+            chunk_size: 0,
+            ..DownloadOptions::default()
+        }
+        .normalized();
+        assert_eq!(options.max_connections, 1);
+        assert_eq!(options.max_active_files, 1);
+        assert_eq!(options.max_workers, 1);
+        assert_eq!(options.chunk_size, 1);
     }
 }

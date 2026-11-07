@@ -1,7 +1,9 @@
 //! 确保一个版本需要的文件在本地就位（幂等，不删除额外文件）。
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
-use dmcl_download::DownloadReport;
+use dmcl_download::DownloadContext;
 use dmcl_mcmeta::vanilla::AssetIndexFile;
 use dmcl_task::TaskContext;
 
@@ -13,13 +15,14 @@ use crate::version::ResolvedVersion;
 pub async fn ensure_asset_index(
     version: &ResolvedVersion,
     options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<Option<AssetIndexFile>> {
     let Some(planned) = plan_assets_index(&version.reference, &version.json) else {
         return Ok(None);
     };
     let path = planned.save_to.clone();
-    download_planned(options, "资源索引", vec![planned], ctx).await?;
+    download_planned(options, downloads, "资源索引", vec![planned], ctx).await?;
 
     let text = tokio::fs::read_to_string(&path)
         .await
@@ -33,25 +36,26 @@ pub async fn ensure_asset_index(
 pub async fn ensure_client_jar(
     version: &ResolvedVersion,
     options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<()> {
     let mut planned = Vec::new();
     if let Some(client) = plan_client_jar(&version.reference, &version.json) {
         planned.push(client);
     }
-    download_planned(options, "客户端 jar", planned, ctx).await?;
-    Ok(())
+    download_planned(options, downloads, "客户端 jar", planned, ctx).await
 }
 
 /// 把缺的 / 坏的文件补齐；幂等，不删除额外文件。
 pub async fn ensure_files(
     version: &ResolvedVersion,
     options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
-) -> Result<DownloadReport> {
-    let index = ensure_asset_index(version, options, ctx).await?;
+) -> Result<()> {
+    let index = ensure_asset_index(version, options, downloads, ctx).await?;
     let planned = plan_files(version, index.as_ref(), options);
-    download_planned(options, "游戏文件", planned, ctx).await
+    download_planned(options, downloads, "游戏文件", planned, ctx).await
 }
 
 #[cfg(test)]
@@ -60,9 +64,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use dmcl_download::{hash_bytes, DownloadOptions, HashAlgorithm};
+    use dmcl_download::{hash_bytes, DownloadContext, DownloadOptions, HashAlgorithm};
     use dmcl_mcmeta::layout::version_json_path;
     use dmcl_mcmeta::source::{DownloadSource, Mirror};
+    use dmcl_task::{task_fn, ProgressHandle, TaskContext, TaskGraphBuilder};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -79,6 +84,21 @@ mod tests {
     fn options() -> GameFilesOptions {
         GameFilesOptions::new(DownloadSource::new(Mirror::Official))
             .with_download(DownloadOptions::default().with_max_retries(0))
+    }
+
+    fn downloads(options: &GameFilesOptions) -> Arc<DownloadContext> {
+        options.download_context(ProgressHandle::new())
+    }
+
+    async fn run_node<F, Fut>(f: F) -> anyhow::Result<()>
+    where
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let mut builder = TaskGraphBuilder::new("测试");
+        let step = builder.step("测试");
+        let sink = builder.add(step, "测试", (), task_fn(move |_: (), ctx| f(ctx)));
+        builder.build(sink).unwrap().run(|_| {}).await.map(|_| ())
     }
 
     async fn write_version(root: &Path, client_url: &str, content: &[u8]) {
@@ -143,12 +163,21 @@ mod tests {
 
         let root = work_dir("download");
         write_version(&root, &format!("http://{addr}/client.jar"), CONTENT).await;
-        let version = resolved(&root).await;
+        let version = Arc::new(resolved(&root).await);
         let options = options();
-        let ctx = TaskContext::detached("测试");
+        let downloads = downloads(&options);
 
-        let report = ensure_files(&version, &options, &ctx).await.unwrap();
-        assert_eq!(report.downloaded, 1);
+        let options_for_task = options.clone();
+        let downloads_for_task = downloads.clone();
+        let version_for_task = version.clone();
+        run_node(move |ctx| {
+            let options = options_for_task.clone();
+            let downloads = downloads_for_task.clone();
+            let version = version_for_task.clone();
+            async move { ensure_files(&version, &options, &downloads, &ctx).await }
+        })
+        .await
+        .unwrap();
         let jar = version.reference.jar_path();
         assert_eq!(tokio::fs::read(&jar).await.unwrap(), CONTENT);
 
@@ -156,9 +185,18 @@ mod tests {
         let extra = version.reference.dir().join("extra.txt");
         tokio::fs::write(&extra, b"keep").await.unwrap();
 
-        let report = ensure_files(&version, &options, &ctx).await.unwrap();
-        assert_eq!(report.downloaded, 0);
-        assert_eq!(report.skipped, 1);
+        let options_for_task = options.clone();
+        let downloads_for_task = downloads.clone();
+        let version_for_task = version.clone();
+        run_node(move |ctx| {
+            let options = options_for_task.clone();
+            let downloads = downloads_for_task.clone();
+            let version = version_for_task.clone();
+            async move { ensure_files(&version, &options, &downloads, &ctx).await }
+        })
+        .await
+        .unwrap();
+        assert!(jar.is_file());
         assert!(extra.is_file());
 
         server.abort();
@@ -174,11 +212,18 @@ mod tests {
         let root = work_dir("failure");
         write_version(&root, &format!("http://{addr}/missing.jar"), b"x").await;
         let version = resolved(&root).await;
+        let options = options();
+        let downloads = downloads(&options);
 
-        let err = ensure_files(&version, &options(), &TaskContext::detached("测试"))
-            .await
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("下载失败"), "{err:#}");
+        let err = run_node(move |ctx| {
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let version = version.clone();
+            async move { ensure_files(&version, &options, &downloads, &ctx).await }
+        })
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("下载"), "{err:#}");
 
         server.abort();
         let _ = tokio::fs::remove_dir_all(&root).await;
@@ -196,10 +241,18 @@ mod tests {
         let root = work_dir("client");
         write_version(&root, &format!("http://{addr}/client.jar"), CONTENT).await;
         let version = resolved(&root).await;
+        let options = options();
+        let downloads = downloads(&options);
+        let version_for_task = version.clone();
 
-        ensure_client_jar(&version, &options(), &TaskContext::detached("测试"))
-            .await
-            .unwrap();
+        run_node(move |ctx| {
+            let options = options.clone();
+            let downloads = downloads.clone();
+            let version = version_for_task.clone();
+            async move { ensure_client_jar(&version, &options, &downloads, &ctx).await }
+        })
+        .await
+        .unwrap();
         assert_eq!(
             tokio::fs::read(version.reference.jar_path()).await.unwrap(),
             CONTENT

@@ -297,15 +297,26 @@ pub struct FileCheck {
 /// 某个检查任务异常终止（panic）时返回错误，不会把该文件悄悄当成缺失。
 pub async fn files_ok(files: impl IntoIterator<Item = FileCheck>) -> Result<Vec<bool>> {
     let files: Vec<FileCheck> = files.into_iter().collect();
+    let concurrency = std::thread::available_parallelism()
+        .map(|threads| threads.get())
+        .unwrap_or(1)
+        .min(files.len().max(1));
+    files_ok_with(files, Arc::new(Semaphore::new(concurrency))).await
+}
+
+/// 同 [`files_ok`]，但使用调用方提供的并发预算。
+///
+/// 下载准备节点用它复用 `worker_semaphore`，这样预检与下载后的哈希校验共享同一份
+/// CPU 并发预算。
+pub async fn files_ok_with(
+    files: impl IntoIterator<Item = FileCheck>,
+    limit: Arc<Semaphore>,
+) -> Result<Vec<bool>> {
+    let files: Vec<FileCheck> = files.into_iter().collect();
     if files.is_empty() {
         return Ok(Vec::new());
     }
 
-    let concurrency = std::thread::available_parallelism()
-        .map(|threads| threads.get())
-        .unwrap_or(1)
-        .min(files.len());
-    let limit = Arc::new(Semaphore::new(concurrency));
     let mut results = vec![false; files.len()];
     let mut set = JoinSet::new();
 

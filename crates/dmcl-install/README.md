@@ -5,7 +5,8 @@
 完整性检查、补全与 natives 在 `dmcl-game`，Java 解析与 JRE 安装在 `dmcl-java`。
 
 在 workspace 内依赖 `dmcl-game`（文件物化）、`dmcl-java`（Java / JRE）、`dmcl-mcmeta`
-（元数据与下载源）、`dmcl-download`（并发下载）和 `dmcl-task`（任务链与进度）。配置
+（元数据与下载源）、`dmcl-download`（单文件下载与并发预算）和 `dmcl-task`（任务图与
+Step / 全局进度）。配置
 （根目录、下载策略、Java 解析器、JRE 安装位置）由调用者通过 `InstallOptions` 传入，
 **这个 crate 不读任何配置文件**。
 
@@ -14,7 +15,7 @@
 ```text
 vanilla.rs    原版元数据落盘、launcher_profiles.json
 loader/       fabric / forge / neoforge / optifine / common / xforge（共用工具）
-spec.rs       顶层任务链 install_task、InstallSpec / InstallOutcome / LoaderKind
+spec.rs       顶层任务图 install_task、InstallSpec / InstallOutcome / LoaderKind
 options.rs    InstallOptions
 archive.rs    读安装器 jar / zip 内的条目
 io.rs         安全写盘（先建父目录）
@@ -26,22 +27,22 @@ io.rs         安全写盘（先建父目录）
 
 `install_task` 的顺序是：占用 `versions/<version_name>` → 原版元数据 → 客户端 jar →
 各加载器 → 游戏文件。第一步目录已存在就直接报错（不会碰已有版本）；只有这一步成功后
-才走到 `on_rollback` 登记删除动作，之后任何一步失败或被取消，都会删掉本次新建的版本
-目录，不让半装版本出现在版本列表里。共享的 `libraries/` / `assets/` 是内容校验过的缓存，
-不跟着回滚（下次安装会跳过已有文件）。
+才在节点里用 `ctx.on_rollback` 登记删除动作，之后任何一步失败或被取消，都会删掉本次新建
+的版本目录，不让半装版本出现在版本列表里。共享的 `libraries/` / `assets/` 是内容校验过的
+缓存，不跟着回滚（下次安装会跳过已有文件）。
 
-安装链的每一步传递类型明确的中间值，而不是反复从磁盘猜状态：
+安装图的每个节点传递类型明确的中间值，而不是反复从磁盘猜状态：
 
 ```text
 创建版本目录          Task<(), VersionRef>
-获取并解析原版元数据   Task<VersionRef, ResolvedVersion>
-确保客户端 jar        Task<ResolvedVersion, ResolvedVersion>
-每个加载器            Task<ResolvedVersion, ResolvedVersion>
-补齐游戏文件          Task<ResolvedVersion, InstallOutcome>
+获取并解析原版元数据   Task<Arc<VersionRef>, ResolvedVersion>
+确保客户端 jar        Task<Arc<ResolvedVersion>, ResolvedVersion>
+每个加载器            Task<Arc<ResolvedVersion>, ResolvedVersion>
+补齐游戏文件          Task<Arc<ResolvedVersion>, InstallOutcome>
 ```
 
-`InstallOutcome` 带最终版本引用与下载报告。加载器步骤仍会运行自己的子链（读写磁盘上的
-版本 JSON），完成后重新 `resolve_version` 拿到更新后的描述。
+`InstallOutcome` 带最终版本引用。加载器节点读写磁盘上的版本 JSON，完成后重新
+`resolve_version` 拿到更新后的描述。
 
 客户端 jar 必须先于加载器就位，因为 Forge / NeoForge 的 processor 要读它来生成
 patched client（`{MINECRAFT_JAR}`）。
@@ -63,9 +64,10 @@ patched client（`{MINECRAFT_JAR}`）。
 - **NeoForge** —— 只有现代式（spec 1）；**别给它加 Forge 的经典式**（`install` /
   `versionInfo`）分支。
 
-Forge / NeoForge 的「执行安装器」步骤会在运行时检查安装器内容，按需构建
-`选择 Java → 运行安装器` 子链：需要 processor 时才出现这两步；经典式 Forge 安装器没有
-processor，就不构建子链。JRE 下载进度因此只在实际需要 Java 时进入子链的「选择 Java」步骤。
+Forge / NeoForge 的「执行安装器」步骤会在运行时检查安装器内容，按需用
+`ctx.add_task` 动态创建「选择 Java」「运行安装器」两个节点：需要 processor 时才出现这两步；
+经典式 Forge 安装器没有 processor，就不创建。JRE 下载进度因此只在实际需要 Java 时进入
+「选择 Java」节点。
 
 `read_installer_version_json` 的查找顺序：`json` 指向的条目 →（仅 Forge）内联
 `versionInfo` →（兜底）`install.filePath` 指向的内嵌 jar。
@@ -96,7 +98,7 @@ OptiFine），GUI 用冲突组限制选择。参数追加到 `arguments.game`；
 `InstallOptions` 包含根目录、`GameFilesOptions`、`Arc<dyn JavaResolver>` 和恒有的
 `JreAutoInstall`。安装器 processor 需要 Java 时调用
 `InstallOptions::java_for_or_install`：先让解析器找现有 Java，找不到再按版本要求下载
-JRE，下载进度进入正在跑的安装任务。
+JRE；下载复用安装图共享的 `DownloadContext` 与全局进度。
 
 JRE 的组件选择、下载与展开在 `dmcl-java`；`dmcl-install` 只知道「装到哪个 runtime 根目录」。
 

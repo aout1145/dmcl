@@ -1,15 +1,21 @@
-//! 任务运行上下文：进度上报 + 取消。
+//! 任务运行上下文：日志、取消、动态节点与回滚登记。
 
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
-use crate::event::TaskEvent;
-use crate::progress::Progress;
+use crate::bus::EventBus;
+use crate::deps::{Deps, DynamicHandle, NodeSlot};
+use crate::event::{TaskEvent, TaskRef};
+use crate::graph::StepId;
+use crate::progress::ProgressHandle;
+use crate::runtime::Runtime;
+use crate::task::Task;
 use crate::warning::{WarningDecision, WarningGate};
 
 /// 任务被取消时返回的错误，调用者可以用 `downcast_ref` 识别它。
@@ -81,7 +87,6 @@ impl CancelHandle {
             return;
         }
         let mut rx = self.state.tx.subscribe();
-        // `subscribe` 之后再检查一次，避免"检查与订阅之间"丢失通知。
         if self.is_cancelled() {
             return;
         }
@@ -89,80 +94,78 @@ impl CancelHandle {
     }
 }
 
+/// 向动态节点追加失败时返回的错误。
+#[derive(Debug)]
+pub enum AddTaskError {
+    /// 图已经结束 / 取消，或创建者已经结束，不能再追加动态节点。
+    GraphClosed,
+    /// 动态句柄不能作为依赖传给别的节点。
+    DynamicDependencyNotAllowed { task: TaskRef },
+    /// 动态节点的依赖会与创建者形成环。
+    Cycle { task: TaskRef },
+}
+
+impl fmt::Display for AddTaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AddTaskError::GraphClosed => f.write_str("任务图已经结束，不能再追加动态任务"),
+            AddTaskError::DynamicDependencyNotAllowed { task } => {
+                write!(f, "动态任务「{}」不能作为其他节点的依赖", task.name())
+            }
+            AddTaskError::Cycle { task } => {
+                write!(f, "动态任务「{}」的依赖会与创建者形成环", task.name())
+            }
+        }
+    }
+}
+
+impl Error for AddTaskError {}
+
+/// 节点失败 / 取消时要执行的回滚动作。
+#[async_trait::async_trait]
+pub(crate) trait Cleanup: Send + Sync {
+    async fn run(&self, ctx: TaskContext);
+}
+
+pub(crate) struct FnCleanup<F>(pub(crate) F);
+
+#[async_trait::async_trait]
+impl<F, Fut> Cleanup for FnCleanup<F>
+where
+    F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    async fn run(&self, ctx: TaskContext) {
+        (self.0)(ctx).await;
+    }
+}
+
 /// 交给每个任务的运行上下文。
-///
-/// 任务通过它上报进度、检查取消状态；它**不持有**任何全局状态，
-/// 因此多个任务链可以并发运行而互不干扰。
 #[derive(Clone)]
 pub struct TaskContext {
-    events: broadcast::Sender<TaskEvent>,
+    runtime: Arc<Runtime>,
+    node: usize,
+    slot: Arc<NodeSlot>,
+    bus: Arc<EventBus>,
     cancel: CancelHandle,
-    step: usize,
-    steps: usize,
+    progress: ProgressHandle,
     name: Arc<str>,
 }
 
 impl TaskContext {
-    /// 事件通道的默认容量。
-    pub const DEFAULT_CAPACITY: usize = 256;
-
-    pub(crate) fn new(
-        events: broadcast::Sender<TaskEvent>,
-        cancel: CancelHandle,
-        step: usize,
-        steps: usize,
-        name: impl Into<Arc<str>>,
-    ) -> Self {
+    pub(crate) fn graph(runtime: Arc<Runtime>, node: usize, slot: Arc<NodeSlot>) -> Self {
         Self {
-            events,
-            cancel,
-            step,
-            steps,
-            name: name.into(),
+            runtime: runtime.clone(),
+            node,
+            slot: slot.clone(),
+            bus: runtime.bus.clone(),
+            cancel: runtime.cancel.clone(),
+            progress: runtime.progress.clone(),
+            name: slot.name.clone(),
         }
     }
 
-    /// 建立一个**独立**的上下文：它自带事件通道，不属于任何任务链。
-    ///
-    /// 用途是"我只想把任务跑一遍，不要进度界面"：
-    ///
-    /// ```no_run
-    /// # use dmcl_task::TaskContext;
-    /// # async fn run(task: &dyn dmcl_task::Task<(), ()>) -> anyhow::Result<()> {
-    /// task.run((), TaskContext::detached("安装")).await
-    /// # }
-    /// ```
-    ///
-    /// 需要进度的话，用 [`TaskContext::subscribe`] 订阅它。
-    pub fn detached(name: impl Into<Arc<str>>) -> Self {
-        let (events, _) = broadcast::channel(Self::DEFAULT_CAPACITY);
-        Self {
-            events,
-            cancel: CancelHandle::default(),
-            step: 0,
-            steps: 1,
-            name: name.into(),
-        }
-    }
-
-    /// 订阅该上下文的事件流（主要对 [`TaskContext::detached`] 建立的上下文有意义）。
-    pub fn subscribe(&self) -> broadcast::Receiver<TaskEvent> {
-        self.events.subscribe()
-    }
-
-    /// 由当前上下文派生一个子上下文：事件流向同一个订阅者，但带上子任务的名字
-    /// 与父步骤的下标。任务内部再运行别的任务时用它，进度就不会串台。
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
-        Self {
-            events: self.events.clone(),
-            cancel: self.cancel.clone(),
-            step: self.step,
-            steps: self.steps,
-            name: name.into(),
-        }
-    }
-
-    /// 当前上下文的名字（步骤名或子任务名）。
+    /// 当前任务节点的显示名。
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -177,84 +180,94 @@ impl TaskContext {
 
     /// 已被取消则返回 [`Cancelled`] 错误，否则 `Ok(())`。
     pub fn check_cancelled(&self) -> Result<()> {
-        if self.is_cancelled() {
-            Err(anyhow::Error::new(Cancelled))
-        } else {
-            Ok(())
-        }
+        self.cancel.check_cancelled()
     }
 
-    /// 上报一条进度。
-    pub fn report(&self, progress: Progress) {
-        let _ = self.events.send(TaskEvent::Progress {
-            step: self.step,
-            steps: self.steps,
-            name: self.name.to_string(),
-            progress,
-        });
+    /// 整个任务图共享的下载进度。
+    pub fn progress_handle(&self) -> ProgressHandle {
+        self.progress.clone()
     }
 
-    /// 上报一条**日志**：一次性文字，前端把它当成一行输出逐条打印、不做覆盖。
+    /// 当前节点所属的显示步骤。
+    pub fn step(&self) -> StepId {
+        self.slot.step
+    }
+
+    /// 上报一条**日志**：一次性文字。
     pub fn log(&self, message: impl Into<String>) {
-        let _ = self.events.send(TaskEvent::Log {
-            step: self.step,
-            steps: self.steps,
-            name: self.name.to_string(),
+        let _ = self.bus.publish(TaskEvent::Log {
+            task: Some(self.task()),
             message: message.into(),
         });
     }
 
-    /// 上报一条带工作量的**进度**（同一个位置可反复更新、由前端原地刷新）。
+    /// 上报一条需要前端决策的**警告**，并阻塞等待答复。
     ///
-    /// `percent` 是显示用的百分比（0.0~100.0），**自己算好**传进来（有些任务的百分比
-    /// 不是 `current / total`）；`None` 表示这次进度没有有意义的百分比。
-    pub fn progress(
-        &self,
-        current: u64,
-        total: Option<u64>,
-        message: impl Into<String>,
-        percent: Option<f64>,
-    ) {
-        self.report(Progress::new(current, total, message, percent));
-    }
-
-    /// 上报一条需要前端决策的**警告**，并**阻塞等待**答复：
-    ///
-    /// * 没有订阅者时直接继续（不阻塞，脚本 / 库场景安全）；
-    /// * 前端 [`WarningDecision::abort`] → 触发取消，返回 [`Cancelled`]；
+    /// * 没有订阅者时直接继续；
+    /// * 前端 [`WarningDecision::abort`] → 全局取消，返回 [`Cancelled`]；
     /// * 前端 [`WarningDecision::accept`] → 继续。
     ///
-    /// `message` 只写**陈述事实**（如"使用的 java 版本不匹配（需要 17，实际用 27）"）：
-    /// 「要不要继续」由前端负责提问，不要写进消息里，否则会和前端的提问重复。
+    /// 等待期间只阻塞当前节点，其他节点继续调度。
     pub async fn confirm(&self, message: impl Into<String>) -> Result<()> {
         let gate = WarningGate::new();
-        let sent = self
-            .events
-            .send(TaskEvent::Warning {
-                step: self.step,
-                steps: self.steps,
-                name: self.name.to_string(),
-                message: message.into(),
-                decision: WarningDecision(gate.clone()),
-            })
-            .is_ok();
-        if sent && !gate.wait().await {
-            self.cancel.cancel();
+        let delivered = self.bus.publish(TaskEvent::Warning {
+            task: Some(self.task()),
+            message: message.into(),
+            decision: WarningDecision(gate.clone()),
+        });
+        if delivered {
+            tokio::select! {
+                accepted = gate.wait() => {
+                    if !accepted {
+                        self.cancel.cancel();
+                    }
+                }
+                _ = self.cancel.cancelled() => return self.check_cancelled(),
+            }
         }
         self.check_cancelled()
     }
 
-    /// 把一条子链的**步骤级**事件原样转发给本上下文的订阅者（供链转发嵌套链的事件）。
+    /// 在**当前节点**登记一个回滚动作。
     ///
-    /// 链级事件（`Started` / `Finished`）描述的是子链自身、已由父链自己的结构事件代表，
-    /// 因此直接丢弃 —— 否则前端会把子链的「开始 / 结束」误当成新的一层。
-    pub(crate) fn forward(&self, event: TaskEvent) {
-        match event {
-            TaskEvent::Started { .. } | TaskEvent::Finished { .. } => {}
-            event => {
-                let _ = self.events.send(event);
-            }
+    /// 节点成功完成时这些动作不会被删除，而是交给整张图；图最终失败 / 取消时按节点
+    /// 完成顺序的逆序执行。节点自身失败 / 取消时立即按注册逆序执行。
+    ///
+    /// 只允许在节点运行期间注册；节点结束后再注册会被忽略并记一条日志。
+    pub fn on_rollback<F, Fut>(&self, cleanup: F)
+    where
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if !self
+            .runtime
+            .register_cleanup(self.node, Arc::new(FnCleanup(cleanup)))
+        {
+            self.log("任务已结束，回滚动作注册被忽略");
         }
+    }
+
+    /// 在执行期追加一个动态节点。
+    ///
+    /// 动态节点自动成为创建者的依赖：创建者要等它（及其全部动态子节点）结束才会
+    /// 结束。需要返回值时才保留返回的 [`DynamicHandle`] 并调用 `wait()`。
+    pub fn add_task<D, T, O>(
+        &self,
+        step: StepId,
+        name: impl Into<String>,
+        deps: D,
+        task: T,
+    ) -> Result<DynamicHandle<O>, AddTaskError>
+    where
+        D: Deps,
+        T: Task<D::Output, O> + 'static,
+        O: Send + Sync + 'static,
+    {
+        self.runtime.add_task(self.node, step, name, deps, task)
+    }
+
+    fn task(&self) -> TaskRef {
+        self.slot.task_ref()
     }
 }
 
@@ -291,66 +304,5 @@ mod tests {
             .await
             .expect("should wake up")
             .unwrap();
-    }
-
-    /// `log` 与 `progress` 是两种不同的事件：日志是纯文字，进度带工作量。
-    #[tokio::test]
-    async fn log_and_progress_are_distinct_events() {
-        let ctx = TaskContext::detached("t");
-        let mut rx = ctx.subscribe();
-
-        ctx.log("hello");
-        ctx.progress(1, Some(2), "half", Some(50.0));
-
-        match rx.recv().await.unwrap() {
-            TaskEvent::Log { message, .. } => assert_eq!(message, "hello"),
-            other => panic!("应当是 Log，实际是 {other:?}"),
-        }
-        match rx.recv().await.unwrap() {
-            TaskEvent::Progress { progress, .. } => assert_eq!(progress.current, 1),
-            other => panic!("应当是 Progress，实际是 {other:?}"),
-        }
-    }
-
-    /// 前端 accept → confirm 继续。
-    #[tokio::test]
-    async fn confirm_continues_when_the_frontend_accepts() {
-        let ctx = TaskContext::detached("t");
-        let mut rx = ctx.subscribe();
-        let waiting = tokio::spawn({
-            let ctx = ctx.clone();
-            async move { ctx.confirm("继续吗？").await }
-        });
-
-        match rx.recv().await.unwrap() {
-            TaskEvent::Warning { decision, .. } => decision.accept(),
-            other => panic!("应当是 Warning，实际是 {other:?}"),
-        }
-        waiting.await.unwrap().unwrap();
-    }
-
-    /// 前端 abort → confirm 触发取消并返回 Cancelled。
-    #[tokio::test]
-    async fn confirm_cancels_when_the_frontend_aborts() {
-        let ctx = TaskContext::detached("t");
-        let mut rx = ctx.subscribe();
-        let waiting = tokio::spawn({
-            let ctx = ctx.clone();
-            async move { ctx.confirm("继续吗？").await }
-        });
-
-        match rx.recv().await.unwrap() {
-            TaskEvent::Warning { decision, .. } => decision.abort(),
-            other => panic!("应当是 Warning，实际是 {other:?}"),
-        }
-        let err = waiting.await.unwrap().unwrap_err();
-        assert!(err.downcast_ref::<Cancelled>().is_some());
-    }
-
-    /// 没有前端订阅时，confirm 不阻塞、直接继续。
-    #[tokio::test]
-    async fn confirm_continues_without_a_frontend() {
-        let ctx = TaskContext::detached("t");
-        ctx.confirm("继续吗？").await.unwrap();
     }
 }

@@ -7,7 +7,6 @@ use dmcl_launch::{
     AccountSource, MicrosoftAccountSource, OfflineAccountSource, RefreshTokenStore,
     StoredCredential,
 };
-use dmcl_task::BoxFuture;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,42 +66,39 @@ impl KeyringTokenStore {
     }
 }
 
+#[async_trait::async_trait]
 impl RefreshTokenStore for KeyringTokenStore {
-    fn load<'a>(&'a self) -> BoxFuture<'a, Result<Option<StoredCredential>>> {
+    async fn load(&self) -> Result<Option<StoredCredential>> {
         let name = self.name.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                let entry = keyring_entry(&name)?;
-                match entry.get_password() {
-                    Ok(stored) => {
-                        let credential = serde_json::from_str(&stored)
-                            .map_err(|_| anyhow!("系统钥匙串里的登录凭据无效"))?;
-                        Ok(Some(credential))
-                    }
-                    Err(keyring::Error::NoEntry) => Ok(None),
-                    Err(err) => Err(anyhow!("无法读取系统钥匙串中的登录凭据：{err}")),
+        tokio::task::spawn_blocking(move || {
+            let entry = keyring_entry(&name)?;
+            match entry.get_password() {
+                Ok(stored) => {
+                    let credential = serde_json::from_str(&stored)
+                        .map_err(|_| anyhow!("系统钥匙串里的登录凭据无效"))?;
+                    Ok(Some(credential))
                 }
-            })
-            .await
-            .map_err(|err| anyhow!("钥匙串操作异常终止：{err}"))?
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(err) => Err(anyhow!("无法读取系统钥匙串中的登录凭据：{err}")),
+            }
         })
+        .await
+        .map_err(|err| anyhow!("钥匙串操作异常终止：{err}"))?
     }
 
-    fn save<'a>(&'a self, credential: &'a StoredCredential) -> BoxFuture<'a, Result<()>> {
+    async fn save(&self, credential: &StoredCredential) -> Result<()> {
         let name = self.name.clone();
         let credential = credential.clone();
-        Box::pin(async move {
-            let stored = serde_json::to_string(&credential)
-                .map_err(|err| anyhow!("无法序列化登录凭据：{err}"))?;
-            tokio::task::spawn_blocking(move || {
-                let entry = keyring_entry(&name)?;
-                entry
-                    .set_password(&stored)
-                    .map_err(|err| anyhow!("无法写入系统钥匙串：{err}"))
-            })
-            .await
-            .map_err(|err| anyhow!("钥匙串操作异常终止：{err}"))?
+        let stored = serde_json::to_string(&credential)
+            .map_err(|err| anyhow!("无法序列化登录凭据：{err}"))?;
+        tokio::task::spawn_blocking(move || {
+            let entry = keyring_entry(&name)?;
+            entry
+                .set_password(&stored)
+                .map_err(|err| anyhow!("无法写入系统钥匙串：{err}"))
         })
+        .await
+        .map_err(|err| anyhow!("钥匙串操作异常终止：{err}"))?
     }
 }
 

@@ -1,6 +1,9 @@
 //! natives 的下载与解压。
 
+use std::sync::Arc;
+
 use anyhow::Result;
+use dmcl_download::DownloadContext;
 use dmcl_mcmeta::layout::natives_dir;
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_task::TaskContext;
@@ -19,10 +22,11 @@ pub async fn ensure_natives(
     os: Os,
     arch: Arch,
     options: &GameFilesOptions,
+    downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<()> {
     let planned = plan_native_jars(&version.reference, &version.json, os, arch);
-    download_planned(options, "natives", planned, ctx).await?;
+    download_planned(options, downloads, "natives", planned, ctx).await?;
 
     let target = natives_dir(version.reference.name.as_str(), os, arch);
     for (jar, name) in plan_natives(&version.reference, &version.json, os, arch) {
@@ -43,9 +47,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use dmcl_download::{hash_bytes, DownloadOptions, HashAlgorithm};
+    use dmcl_download::{hash_bytes, DownloadContext, DownloadOptions, HashAlgorithm};
     use dmcl_mcmeta::layout::version_json_path;
     use dmcl_mcmeta::source::{DownloadSource, Mirror};
+    use dmcl_task::{task_fn, ProgressHandle, TaskContext, TaskGraphBuilder};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -62,6 +67,21 @@ mod tests {
     fn options() -> GameFilesOptions {
         GameFilesOptions::new(DownloadSource::new(Mirror::Official))
             .with_download(DownloadOptions::default().with_max_retries(0))
+    }
+
+    fn downloads(options: &GameFilesOptions) -> Arc<DownloadContext> {
+        options.download_context(ProgressHandle::new())
+    }
+
+    async fn run_node<F, Fut>(f: F) -> anyhow::Result<()>
+    where
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let mut builder = TaskGraphBuilder::new("测试");
+        let step = builder.step("测试");
+        let sink = builder.add(step, "测试", (), task_fn(move |_: (), ctx| f(ctx)));
+        builder.build(sink).unwrap().run(|_| {}).await.map(|_| ())
     }
 
     async fn write_version(root: &Path, name: &str, json: serde_json::Value) {
@@ -146,16 +166,19 @@ mod tests {
         )
         .await;
 
-        let version = resolve_version(&VersionRef::new(&root, &name))
-            .await
-            .unwrap();
-        ensure_natives(
-            &version,
-            os,
-            arch,
-            &options(),
-            &TaskContext::detached("测试"),
-        )
+        let version = Arc::new(
+            resolve_version(&VersionRef::new(&root, &name))
+                .await
+                .unwrap(),
+        );
+        let options = options();
+        let downloads = downloads(&options);
+        run_node(move |ctx| {
+            let version = version.clone();
+            let options = options.clone();
+            let downloads = downloads.clone();
+            async move { ensure_natives(&version, os, arch, &options, &downloads, &ctx).await }
+        })
         .await
         .unwrap();
 
@@ -191,16 +214,21 @@ mod tests {
         )
         .await;
 
-        let version = resolve_version(&VersionRef::new(&root, &name))
-            .await
-            .unwrap();
-        ensure_natives(
-            &version,
-            os,
-            Arch::X86_64,
-            &options(),
-            &TaskContext::detached("测试"),
-        )
+        let version = Arc::new(
+            resolve_version(&VersionRef::new(&root, &name))
+                .await
+                .unwrap(),
+        );
+        let options = options();
+        let downloads = downloads(&options);
+        run_node(move |ctx| {
+            let version = version.clone();
+            let options = options.clone();
+            let downloads = downloads.clone();
+            async move {
+                ensure_natives(&version, os, Arch::X86_64, &options, &downloads, &ctx).await
+            }
+        })
         .await
         .unwrap();
 

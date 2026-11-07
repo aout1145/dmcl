@@ -116,7 +116,7 @@ CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/m
 ### GUI
 
 GTK4 + libadwaita 前端在 `src/gui/gtk4`，用 relm4，由 cargo feature `gtk4` 门控（默认关）。
-与 CLI 共用业务 crate：把 `Config` 翻译成 `*Options`、用 `Shell` 跑 `TaskChain`、把
+与 CLI 共用业务 crate：把 `Config` 翻译成 `*Options`、用 `Shell` 跑 `TaskGraph`、把
 `TaskEvent` 渲染成页面与任务窗口；业务 crate 不读配置。
 
 - GUI 里每个根目录的主页在启动时全部创建并常驻；标签只是主页的显示入口，关闭标签不会
