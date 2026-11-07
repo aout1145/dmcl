@@ -54,26 +54,21 @@ pub(crate) enum StepDisplayStatus {
     Waiting,
     Running,
     Done,
-    /// 有任务没执行（取消 / 失败后仍停在等待），或者整个 Step 没有任何任务。
+    /// 图结束后仍有任务没执行（取消 / 失败时停在等待），或者整个 Step 没有任何任务。
     Incomplete,
     Failed,
 }
 
 impl StepView {
     fn new(number: usize, name: String, counts: StepCounts, finished: bool) -> Self {
+        // 取消 / 失败会让调度器立刻把未开始的节点标成 Skipped，但正在跑的节点还要收尾；
+        // 图真正结束前先按「等待中」显示，避免一点取消就把这些 Step 标成「未完成」。
+        let incomplete = counts.waiting > 0 || counts.skipped > 0 || counts.total() == 0;
         let status = if counts.running > 0 {
             StepDisplayStatus::Running
         } else if counts.failed > 0 {
             StepDisplayStatus::Failed
-        } else if counts.waiting > 0 {
-            if finished {
-                StepDisplayStatus::Incomplete
-            } else {
-                StepDisplayStatus::Waiting
-            }
-        } else if counts.skipped > 0 {
-            StepDisplayStatus::Incomplete
-        } else if counts.total() == 0 {
+        } else if incomplete {
             if finished {
                 StepDisplayStatus::Incomplete
             } else {
@@ -283,8 +278,14 @@ impl TaskState {
     }
 
     /// 确定进度值；不确定时返回 `None`（界面用 pulse）。
+    ///
+    /// 取消中始终返回 `None`：收尾阶段不再关心百分比，进度条保持不确定动画。
     pub fn global_fraction(&self) -> Option<f64> {
-        if !self.tasks_remaining() || self.total == 0 || self.downloaded >= self.total {
+        if self.status == TaskStatus::Canceling
+            || !self.tasks_remaining()
+            || self.total == 0
+            || self.downloaded >= self.total
+        {
             return None;
         }
         Some((self.downloaded as f64 / self.total as f64).clamp(0.0, 1.0))
@@ -292,9 +293,12 @@ impl TaskState {
 
     /// 是否该用 pulse 当「不确定进度条」。
     pub fn wants_pulse(&self) -> bool {
-        self.status == TaskStatus::Running
-            && self.tasks_remaining()
-            && self.global_fraction().is_none()
+        match self.status {
+            // 取消中不管之前的进度是多少，都保持不确定动画，直到图真正结束。
+            TaskStatus::Canceling => true,
+            TaskStatus::Running => self.tasks_remaining() && self.global_fraction().is_none(),
+            TaskStatus::Done | TaskStatus::Cancelled | TaskStatus::Failed => false,
+        }
     }
 
     /// 每个 Step 的界面快照（按声明顺序）。
@@ -369,6 +373,23 @@ mod tests {
         });
         assert_eq!(state.progress_text(), "2 B / 4 B");
         assert_eq!(state.global_fraction(), None);
+    }
+
+    #[test]
+    fn canceling_always_keeps_the_progress_bar_indeterminate() {
+        let mut state = TaskState::new("t");
+        state.counts = vec![StepCounts {
+            running: 1,
+            ..Default::default()
+        }];
+        state.total = 100;
+        state.downloaded = 50;
+        assert_eq!(state.global_fraction(), Some(0.5));
+        assert!(!state.wants_pulse());
+
+        state.request_cancel();
+        assert_eq!(state.global_fraction(), None);
+        assert!(state.wants_pulse());
     }
 
     #[test]
@@ -449,6 +470,37 @@ mod tests {
         );
         assert_eq!(failed.status, StepDisplayStatus::Failed);
         assert_eq!(failed.counts_text(), "4/5 失败");
+    }
+
+    #[test]
+    fn skipped_tasks_become_incomplete_only_after_the_graph_finishes() {
+        // 点取消后正在跑的任务还要收尾；这期间未开始的 Step 仍按等待中显示。
+        let untouched = StepCounts {
+            skipped: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            StepView::new(1, "安装".into(), untouched, false).status,
+            StepDisplayStatus::Waiting
+        );
+        assert_eq!(
+            StepView::new(1, "安装".into(), untouched, true).status,
+            StepDisplayStatus::Incomplete
+        );
+
+        let partial = StepCounts {
+            completed: 3,
+            skipped: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            StepView::new(1, "下载".into(), partial, false).status,
+            StepDisplayStatus::Waiting
+        );
+        assert_eq!(
+            StepView::new(1, "下载".into(), partial, true).status,
+            StepDisplayStatus::Incomplete
+        );
     }
 
     #[tokio::test]
