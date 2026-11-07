@@ -50,7 +50,7 @@ impl ProgressHandle {
 }
 
 fn add_saturating(value: &AtomicI64, delta: i64) {
-    let _ = value.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+    let _ = value.try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
         Some(current.saturating_add(delta))
     });
 }
