@@ -31,8 +31,8 @@ NeoForge / OptiFine 五个 `VersionSelect`。
 
 ## InstanceSummary
 
-`common/instance_summary.rs` —— 图标 + 名称 + 分类 + 安装按钮。`Init = Vec<String>`（已有
-分类建议的拷贝），由页面通过输入消息推状态。
+`common/instance_summary.rs` —— 图标 + 名称 + 分类 + 安装按钮。`Init = SummaryInit { categories,
+root_path }`（已有分类建议 + 安装根目录），由页面通过输入消息推状态。
 
 - 名称与图标都有**当前值 + 用户是否改过**两个状态：外部推自动值
   （`SetAutoName` / `SetAutoIcon`）只在用户没改过时生效；用户一改过就**永不**覆盖。
@@ -40,12 +40,15 @@ NeoForge / OptiFine 五个 `VersionSelect`。
   恢复跟随自动值。
 - 自动命名规则（`dmcl_install::default_version_name`）由页面计算后推送，组件自身不知道版本与
   加载器怎么命名。
+- 名称的格式校验（`dmcl_install::validate_version_name`）、`versions/<名称>` 冲突检查
+  （`version_dir(root, name).exists()`）和安装按钮可用性都在组件内完成。名称不合法时提示
+  「实例名称不合法」；目录已存在时提示「实例已经存在」。两者都在安装按钮左侧用 `.error`
+  标红，输入框不变色。页面只通过 `SetReady` 告知「名称之外的条件是否满足」（是否已选 MC
+  版本）。
 - 分类是 `AdwExpanderRow`：收起时副标题显示当前分类；展开后先列已有分类，当前项带
   对勾，最下面是「自定义分类」`AdwEntryRow`（可以输入任意新名字，留空表示未分类）。
   选中已有项后自动收起；分类非空时行尾出现 ×，点击回到「未分类」。
-- 安装按钮可用性由页面通过 `SetInstallEnabled` 推。页面检查到 `versions/<名称>` 已存在时发
-  `SetNameError(Some("实例已经存在"))`：输入框不变色，提示文案用 `.error` 标红，和安装按钮
-  排在同一行（提示在按钮左侧）。
+- 安装按钮可用性由组件根据 `SetReady`、名称是否非空 / 合法 / 已被占用统一计算。
 - **名称输入框不能写成 `#[watch] set_text` + `connect_changed` 回写模型**：视图每次刷新都会
   重设文本，GTK 可能先发一条中间态 `changed("")`（先清空再写入），被当成用户清空后自动命名
   又写回，形成无限来回（表现为选中版本后整个窗口 100% CPU、无响应）。现在由组件持有
@@ -145,7 +148,7 @@ pub(crate) type FetchVersions = Arc<dyn VersionFetcher>;
 
 | 类型 | 说明 |
 | --- | --- |
-| `SummaryIn` / `SummaryOut` | 概要：`SetAutoName` / `SetAutoIcon` / `SetInstallEnabled` / `SetNameError(Option<String>)` / 图标菜单 / 名称与分类编辑；输出 `Install { name, category }` / `NameChanged` |
+| `SummaryIn` / `SummaryOut` | 概要：`SetAutoName` / `SetAutoIcon` / `SetReady` / 图标菜单 / 名称与分类编辑；输出 `Install { name, category }` / `NameChanged` |
 | `SelectIn` / `SelectOut` | 版本下拉：`SetContext` / `SetConflict` / `Reload` / `Deselect` / `SearchChanged` / `ToggleChip` / `RowClicked` / `Loaded`；输出 `Changed(Option<VersionItem>)` |
 
 ## CSS

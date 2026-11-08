@@ -53,6 +53,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 lzma-rs = "0.3"
 path-clean = "1"
 walkdir = "2"
+sanitize-filename = "0.6"
 uuid = "1"
 dirs = "7"
 anyhow = "1"

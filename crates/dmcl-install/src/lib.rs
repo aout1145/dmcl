@@ -106,6 +106,7 @@ pub use io::{write_json_safe, write_safe};
 pub use loader::{fabric, forge, neoforge, optifine};
 pub use options::InstallOptions;
 pub use spec::{
-    default_version_name, install_task, InstallOutcome, InstallSpec, LoaderKind, LoaderRequest,
+    default_version_name, install_task, validate_version_name, InstallOutcome, InstallSpec,
+    LoaderKind, LoaderRequest,
 };
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};

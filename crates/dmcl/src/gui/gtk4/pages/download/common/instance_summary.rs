@@ -6,8 +6,9 @@
 //! 自动命名可以重新接管。
 //!
 //! 自动命名规则（`dmcl_install::default_version_name`）由页面计算后推送，
-//! 组件自身不知道版本与加载器怎么命名。名称冲突提示由页面检查后通过
-//! [`SummaryIn::SetNameError`] 推进来；有冲突时在安装按钮左侧显示红色提示，输入框不变色。
+//! 组件自身不知道版本与加载器怎么命名。名称的格式校验、`versions/<名称>` 冲突检查
+//! 和安装按钮可用性都在组件内完成；页面只通过 [`SummaryIn::SetReady`] 告知
+//! 「除名称外的安装条件是否满足」（例如是否已选 Minecraft 版本）。
 
 use std::path::PathBuf;
 
@@ -18,7 +19,8 @@ use relm4::gtk::gdk;
 use relm4::gtk::gio;
 use relm4::prelude::*;
 
-use dmcl_install::LoaderKind;
+use dmcl_install::{validate_version_name, LoaderKind};
+use dmcl_mcmeta::layout::version_dir;
 
 /// 实例图标的来源。
 ///
@@ -38,10 +40,8 @@ pub(crate) enum SummaryIn {
     SetAutoName(String),
     /// 外部自动图标（用户没改过图标时生效）。
     SetAutoIcon(IconSource),
-    /// 安装按钮可用性。
-    SetInstallEnabled(bool),
-    /// 名称冲突提示（如名称已存在）；`Some` 时在安装按钮左侧显示该文案。
-    SetNameError(Option<String>),
+    /// 除名称外的安装条件是否满足（如是否已选 Minecraft 版本）。
+    SetReady(bool),
     /// 用户在图标菜单里选了某项。
     PickIcon(IconSource),
     /// 用户在图标菜单里选了「自动」。
@@ -69,6 +69,14 @@ pub(crate) enum SummaryOut {
     NameChanged(String),
 }
 
+/// 组件初始化参数。
+pub(crate) struct SummaryInit {
+    /// 已有分类建议。
+    pub categories: Vec<String>,
+    /// 安装根目录：用来检查 `versions/<名称>` 是否已存在。
+    pub root_path: PathBuf,
+}
+
 pub(crate) struct InstanceSummary {
     /// 名称输入框。程序改文本时要直接写它，不能在 `view!` 里 `#[watch] set_text`：
     /// 那会在每次视图刷新时重设文本，GTK 还可能额外发一条中间态 `changed`（先清空后写入），
@@ -78,8 +86,12 @@ pub(crate) struct InstanceSummary {
     name: String,
     /// 用户改过名称后，自动命名永不再应用；清空名称会重置为 `false`。
     name_user_modified: bool,
-    /// 名称错误提示（由页面检查）。
+    /// 名称错误提示（格式不合法或目录已存在）。
     name_error: Option<String>,
+    /// 安装根目录，用来检查 `versions/<名称>`。
+    root_path: PathBuf,
+    /// 名称之外的安装条件是否满足（由页面推）。
+    ready: bool,
     /// 分类选择器：收起时显示当前分类，展开后是已有分类 + 自定义输入。
     category_expander: adw::ExpanderRow,
     /// 展开区最下面的自定义分类输入框。
@@ -172,6 +184,22 @@ impl InstanceSummary {
         self.icon = icon;
     }
 
+    /// 重新校验名称格式与目录冲突，更新提示和安装按钮可用性。
+    fn refresh_name_state(&mut self) {
+        let empty = self.name.trim().is_empty();
+        let invalid = !empty && validate_version_name(&self.name).is_err();
+        // 名称不合法时不去探测磁盘，避免 `../` 之类拼出 versions/ 之外的路径。
+        let exists = !empty && !invalid && version_dir(&self.root_path, &self.name).exists();
+        self.name_error = if invalid {
+            Some("实例名称不合法".to_string())
+        } else if exists {
+            Some("实例已经存在".to_string())
+        } else {
+            None
+        };
+        self.install_enabled = self.ready && !empty && !invalid && !exists;
+    }
+
     /// 头像文字（`File` 已装载图像时头像不显示文字，这个值无所谓）。
     fn avatar_text(&self) -> String {
         let first = |text: &str| {
@@ -224,7 +252,7 @@ impl InstanceSummary {
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for InstanceSummary {
-    type Init = Vec<String>;
+    type Init = SummaryInit;
     type Input = SummaryIn;
     type Output = SummaryOut;
 
@@ -353,10 +381,14 @@ impl SimpleComponent for InstanceSummary {
     }
 
     fn init(
-        categories: Self::Init,
+        init: Self::Init,
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let SummaryInit {
+            categories,
+            root_path,
+        } = init;
         let name_row = adw::EntryRow::builder().title("实例名称").build();
         {
             let sender = sender.clone();
@@ -407,6 +439,8 @@ impl SimpleComponent for InstanceSummary {
             name: String::new(),
             name_user_modified: false,
             name_error: None,
+            root_path,
+            ready: false,
             category_expander,
             category_entry,
             category_clear,
@@ -433,6 +467,7 @@ impl SimpleComponent for InstanceSummary {
                     if self.name_row.text() != auto {
                         self.name_row.set_text(&auto);
                     }
+                    self.refresh_name_state();
                     let _ = sender.output(SummaryOut::NameChanged(self.name.clone()));
                 }
             }
@@ -442,8 +477,10 @@ impl SimpleComponent for InstanceSummary {
                     self.apply_icon(self.auto_icon.clone());
                 }
             }
-            SummaryIn::SetInstallEnabled(enabled) => self.install_enabled = enabled,
-            SummaryIn::SetNameError(error) => self.name_error = error,
+            SummaryIn::SetReady(enabled) => {
+                self.ready = enabled;
+                self.refresh_name_state();
+            }
             SummaryIn::PickIcon(icon) => {
                 self.icon_user_modified = true;
                 self.apply_icon(icon);
@@ -468,6 +505,7 @@ impl SimpleComponent for InstanceSummary {
                 } else {
                     String::new()
                 };
+                self.refresh_name_state();
                 let _ = sender.output(SummaryOut::NameChanged(self.name.clone()));
             }
             SummaryIn::CategoryEdited(text) => {

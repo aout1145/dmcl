@@ -44,7 +44,7 @@ Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下�
 
 创建实例时可选择 Minecraft 版本，以及可选的 Forge、Fabric、NeoForge 或 OptiFine。Forge
 与 OptiFine 可以组合，Fabric、NeoForge 与二者互斥。实例名称和图标会根据选择自动生成，
-也可以手动指定；分类可沿用已有分类或新建。DMCL 会检查实例名是否已被占用。安装以任务形式
+也可以手动指定；分类可沿用已有分类或新建。DMCL 会检查实例名是否合法、是否已被占用。安装以任务形式
 进行，失败或取消不会留下不完整的实例。
 
 ### 任务

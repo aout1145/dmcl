@@ -28,12 +28,11 @@ use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
 use dmcl_install::{default_version_name, InstallSpec, LoaderKind};
-use dmcl_mcmeta::layout::version_dir;
 
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
 use crate::gui::gtk4::pages::download::common::instance_summary::{
-    IconSource, InstanceSummary, SummaryIn, SummaryOut,
+    IconSource, InstanceSummary, SummaryIn, SummaryInit, SummaryOut,
 };
 use crate::gui::gtk4::pages::download::common::version_select::{
     KindChip, SelectIn, SelectOut, VersionItem, VersionSelect, VersionSelectInit,
@@ -70,14 +69,6 @@ fn install_tab_title(name: &str) -> String {
 }
 
 impl CustomPage {
-    /// `versions/<name>` 是否已经存在。空名称不算冲突（安装前另有非空校验）。
-    ///
-    /// 路径用原始名称（和安装器一致），只把全空白当作空；不要 `trim` 后再查，
-    /// 否则 `"26.3 "` 会被误判成已有的 `26.3`。
-    fn version_exists(&self, name: &str) -> bool {
-        !name.trim().is_empty() && version_dir(&self.root_path, name).exists()
-    }
-
     /// 按冲突组刷新加载器冲突：共享任意一个组的已选行会让本行禁用并显示「与 xx 冲突」。
     fn refresh_loader_conflicts(&self) {
         for (index, slot) in self.loaders.iter().enumerate() {
@@ -96,18 +87,6 @@ impl CustomPage {
                 });
             let _ = slot.select.sender().send(SelectIn::SetConflict(conflict));
         }
-    }
-
-    /// 按当前状态同步名称冲突提示 / 安装按钮可用性。
-    fn refresh_name_state(&self) {
-        let exists = self.version_exists(&self.name);
-        let error = exists.then(|| "实例已经存在".to_string());
-        let _ = self.summary.sender().send(SummaryIn::SetNameError(error));
-        let enabled = self.mc_version.is_some() && !self.name.trim().is_empty() && !exists;
-        let _ = self
-            .summary
-            .sender()
-            .send(SummaryIn::SetInstallEnabled(enabled));
     }
 
     /// 重算自动命名 / 自动图标 / 安装按钮可用性并推给概要组件。
@@ -150,7 +129,10 @@ impl CustomPage {
                     .send(SummaryIn::SetAutoIcon(IconSource::Initials));
             }
         }
-        self.refresh_name_state();
+        let _ = self
+            .summary
+            .sender()
+            .send(SummaryIn::SetReady(self.mc_version.is_some()));
     }
 
     /// 安装当前装配：把任务交给任务对话框，然后打开任务列表并立即关页。
@@ -160,10 +142,6 @@ impl CustomPage {
                 .page_toast(&self.page_toast, "请先选择 Minecraft 版本");
             return;
         };
-        if name.trim().is_empty() {
-            self.shell.page_toast(&self.page_toast, "实例名称不能为空");
-            return;
-        }
         let mut spec = InstallSpec::new(mc.id, name.clone());
         for slot in &self.loaders {
             if let Some(item) = &slot.selection {
@@ -249,13 +227,15 @@ impl SimpleComponent for CustomPage {
         let config = config_store::store().config();
         let source = config.read().download_source();
 
-        let summary =
-            InstanceSummary::builder()
-                .launch(categories)
-                .forward(sender.input_sender(), |out| match out {
-                    SummaryOut::Install { name, category } => CustomMsg::Install { name, category },
-                    SummaryOut::NameChanged(name) => CustomMsg::NameChanged(name),
-                });
+        let summary = InstanceSummary::builder()
+            .launch(SummaryInit {
+                categories,
+                root_path: root_path.clone(),
+            })
+            .forward(sender.input_sender(), |out| match out {
+                SummaryOut::Install { name, category } => CustomMsg::Install { name, category },
+                SummaryOut::NameChanged(name) => CustomMsg::NameChanged(name),
+            });
 
         let mc = VersionSelect::builder()
             .launch(VersionSelectInit {
@@ -316,7 +296,6 @@ impl SimpleComponent for CustomPage {
             name: String::new(),
         };
         model.tab.set_title(&install_tab_title(""));
-        model.refresh_name_state();
 
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -350,7 +329,6 @@ impl SimpleComponent for CustomPage {
             CustomMsg::NameChanged(name) => {
                 self.name = name;
                 self.tab.set_title(&install_tab_title(&self.name));
-                self.refresh_name_state();
                 // 名称被清空 = 放弃手动命名：重新计算并推自动名，让概要组件重新接管。
                 if self.name.trim().is_empty() {
                     self.refresh_auto();

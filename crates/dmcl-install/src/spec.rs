@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use dmcl_download::DownloadContext;
 use dmcl_game::{
     ensure_assets, ensure_client_jar, ensure_libraries, resolve_version, ResolvedVersion,
@@ -11,6 +11,7 @@ use dmcl_game::{
 };
 use dmcl_mcmeta::layout::version_dir;
 use dmcl_task::{task_fn, Task, TaskContext, TaskGraph, TaskGraphBuilder};
+use sanitize_filename::{is_sanitized_with_options, OptionsForCheck};
 
 use crate::fabric::install_fabric;
 use crate::forge::add_forge_install;
@@ -127,6 +128,26 @@ pub fn default_version_name(mc_version: &str, loaders: &[(LoaderKind, Option<&st
     name
 }
 
+/// 校验本地版本目录名（`versions/<version_name>`）。
+///
+/// 统一按 Windows 规则检查：除了非法字符与控制字符，还拒绝 Windows 保留设备名和
+/// 结尾的点 / 空格，避免同名实例在不同平台上落到不同目录或无法创建。
+pub fn validate_version_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("实例名称不能为空");
+    }
+    if !is_sanitized_with_options(
+        name,
+        OptionsForCheck {
+            windows: true,
+            truncate: true,
+        },
+    ) {
+        anyhow::bail!("实例名称不合法");
+    }
+    Ok(())
+}
+
 /// 一次安装的产出。
 #[derive(Debug, Clone)]
 pub struct InstallOutcome {
@@ -145,6 +166,7 @@ fn create_version_dir(
         let root_path = root_path.clone();
         let version_name = version_name.clone();
         async move {
+            validate_version_name(&version_name)?;
             let dir = version_dir(&root_path, &version_name);
             if let Some(parent) = dir.parent() {
                 tokio::fs::create_dir_all(parent)
@@ -428,6 +450,54 @@ mod tests {
             java,
             jre,
         ))
+    }
+
+    #[test]
+    fn version_name_rejects_unsafe_names() {
+        for valid in [
+            "1.20.1",
+            "1.20.1-forge-47.2.0",
+            "我的世界",
+            ".hidden",
+            "a b",
+        ] {
+            assert!(validate_version_name(valid).is_ok(), "「{valid}」应合法");
+        }
+        for invalid in [
+            "", "  ", ".", "..", "a/b", "a\\b", "a:b", "a*b", "a\u{0}b", "CON", "con.txt", "foo.",
+            "foo ",
+        ] {
+            assert!(
+                validate_version_name(invalid).is_err(),
+                "「{invalid}」应被拒绝"
+            );
+        }
+        assert!(validate_version_name(&"a".repeat(256)).is_err());
+    }
+
+    #[tokio::test]
+    async fn create_version_dir_rejects_an_invalid_name_before_touching_disk() {
+        let root =
+            std::env::temp_dir().join(format!("dmcl-install-bad-name-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+
+        let mut builder = TaskGraphBuilder::new("安装 ../逃逸");
+        let step = builder.step("准备");
+        let created = builder.add(
+            step,
+            "创建版本目录",
+            (),
+            create_version_dir(root.clone(), "../逃逸".into()),
+        );
+        let err = builder
+            .build(created)
+            .unwrap()
+            .run(|_| {})
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("实例名称不合法"), "{err:#}");
+        assert!(!root.exists(), "非法名称不应创建任何目录");
     }
 
     #[test]

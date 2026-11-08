@@ -17,7 +17,8 @@
 时从主页拷来的已有分类，用作输入建议。页面由
 `InstanceSummary` 与五个 `VersionSelect` 组成：
 
-- `InstanceSummary` 推名称 / 分类 / 图标 / 安装按钮状态；分类建议是主页已有分类的拷贝；
+- `InstanceSummary` 负责名称 / 分类 / 图标 / 安装按钮：格式校验、`versions/<名称>` 冲突检查
+  与按钮可用性都在组件内完成；分类建议是主页已有分类的拷贝，组件 Init 还收到安装根目录；
 - MC 一行 + Forge / Fabric / NeoForge / OptiFine 四个加载器行；
 - 打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单取数跑起来（MC 取数器忽略上下文）；
 - 主页右下角「新建实例」→「自定义」把 `Rc<Shell>`、该主页的根目录路径和已有分类拷贝传进来；
@@ -42,15 +43,17 @@ MC 或任一加载器选择变化后，页面用
 - MC 上下文**真正变化**时才清空加载器选择并重发 `SetContext`；重复选同一个 MC 版本保留
   加载器选择。
 
-## 名称冲突检查
+## 名称校验与冲突检查
 
-页面用 `dmcl_mcmeta::layout::version_dir(root, name).exists()` 判断 `versions/<名称>` 是否
-已被占用；名称变化（自动命名或用户编辑）时重查。
+名称的格式校验、`versions/<名称>` 冲突检查和安装按钮可用性都在 `InstanceSummary` 内完成：
 
-- 同名时提示「实例已经存在」并禁用安装；
-- 未选 MC 时安装按钮不可用，但不显示名称提示（输入框也不标红）；
-- 空名称不算冲突，但安装按钮也不可用；
-- 最终的同名冲突由 `install_task` 把关（它创建版本目录时会失败）。
+- 名称变化（自动命名或用户编辑）时先调 `dmcl_install::validate_version_name`，非法时提示
+  「实例名称不合法」并禁用安装；名称不合法时不会去探测磁盘；
+- 合法后再用 `dmcl_mcmeta::layout::version_dir(root, name).exists()` 判断是否已被占用，
+  同名时提示「实例已经存在」并禁用安装；
+- 空名称不算错误（不显示提示、输入框不标红），但安装按钮不可用；
+- 页面通过 `SetReady` 告诉组件「名称之外的条件是否满足」（即是否已选 MC 版本）；
+- 最终的同名 / 非法名称仍由 `install_task` 把关（创建版本目录时失败）。
 
 ## 加载器互斥
 
@@ -82,10 +85,9 @@ MC 或任一加载器选择变化后，页面用
 
 ## 安装
 
-`SummaryOut::Install { name, category }` → 校验 MC 已选、名称非空 → 按装配态组
-`InstallSpec`（加载器按 `LOADER_DEFS` 顺序，Forge 在 OptiFine 之前）→
-`Shell::run(dmcl_install::install_task(...))` → `Shell::open_tasks()` 主动弹出任务列表 →
-下一轮 idle 里 `tab.close()` 立即关页。
+`SummaryOut::Install { name, category }` → 按装配态组 `InstallSpec`（加载器按
+`LOADER_DEFS` 顺序，Forge 在 OptiFine 之前）→ `Shell::run(dmcl_install::install_task(...))`
+→ `Shell::open_tasks()` 主动弹出任务列表 → 下一轮 idle 里 `tab.close()` 立即关页。
 
 任务本身由 `Shell` / 任务对话框独立跑，结果（完成 / 失败 / 取消）都在任务对话框里看，页面
 不再等结果。
