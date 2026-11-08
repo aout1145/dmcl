@@ -311,9 +311,9 @@ async fn merge_installer_version_json(
     ctx: &TaskContext,
 ) -> Result<ResolvedVersion> {
     let mut json = previous.json.clone();
-    json.merge(&plan.installer_json)?;
+    json.merge(&plan.installer_json);
     json.extra.remove("_comment_");
-    finish_version_json(&mut json, version_name, true);
+    finish_version_json(&mut json, version_name);
     write_json_safe(
         &version_json_path(&previous.reference.root, version_name),
         &json,

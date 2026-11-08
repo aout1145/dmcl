@@ -410,6 +410,11 @@ pub struct VersionJson {
     /// 1.7+ 的 log4j 配置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logging: Option<Logging>,
+    /// 这个版本已经应用过的 patch。
+    ///
+    /// `patches[0]` 是未修改的原版 JSON，其后按应用顺序存放 `VersionJsonPatch` 的 JSON。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<Value>,
     /// 所有未建模的字段，原样保留。
     ///
     /// 真实文档里通常只剩 Forge 写在 `version.json` 顶部的 `_comment_` / `_comment`
@@ -436,15 +441,18 @@ impl UrlFields for VersionJson {
         for library in &mut self.libraries {
             library.for_each_url_mut(f);
         }
+        for patch in &mut self.patches {
+            if let Ok(mut entry) = serde_json::from_value::<VersionJson>(patch.clone()) {
+                entry.for_each_url_mut(f);
+                if let Ok(value) = serde_json::to_value(entry) {
+                    *patch = value;
+                }
+            }
+        }
     }
 }
 
 impl VersionJson {
-    /// 把 `child` 递归合并进 `self`（对象逐键合并、数组拼接、标量由子覆盖）。
-    pub fn merge(&mut self, child: &VersionJson) -> anyhow::Result<()> {
-        crate::merge::merge_typed(self, child)
-    }
-
     /// 把所有 url 归一成模板，返回改写的字段个数。
     pub fn templatize_urls(&mut self) -> usize {
         templatize_urls(self)
@@ -496,58 +504,6 @@ impl VersionJson {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn version_merge_follows_merge_json() {
-        let mut merged: VersionJson = serde_json::from_str(
-            r#"{
-                "id": "base",
-                "mainClass": "a.Main",
-                "libraries": [{"name": "a:a:1"}],
-                "arguments": {"game": ["--one"], "jvm": ["-Xa"]},
-                "downloads": {"client": {"url": "u", "sha1": "s"}},
-                "unknownKept": {"deep": {"a": 1, "b": 2}}
-            }"#,
-        )
-        .unwrap();
-        let child: VersionJson = serde_json::from_str(
-            r#"{
-                "id": "child",
-                "libraries": [{"name": "b:b:2"}],
-                "arguments": {"game": ["--two"]},
-                "unknownKept": {"deep": {"b": 3, "c": 4}}
-            }"#,
-        )
-        .unwrap();
-
-        merged.merge(&child).unwrap();
-
-        // 标量：子文档获胜
-        assert_eq!(merged.id.as_deref(), Some("child"));
-        // 子文档没提到的键保留
-        assert_eq!(merged.main_class.as_deref(), Some("a.Main"));
-        assert!(merged.downloads.is_some());
-        // 数组拼接，父在前
-        assert_eq!(merged.libraries.len(), 2);
-        assert_eq!(merged.libraries[0].name, "a:a:1");
-        assert_eq!(merged.libraries[1].name, "b:b:2");
-        assert_eq!(
-            merged
-                .arguments
-                .as_ref()
-                .unwrap()
-                .game
-                .as_ref()
-                .unwrap()
-                .len(),
-            2
-        );
-        // 未建模的键递归合并
-        let kept = &merged.extra["unknownKept"]["deep"];
-        assert_eq!(kept["a"], 1);
-        assert_eq!(kept["b"], 3);
-        assert_eq!(kept["c"], 4);
-    }
 
     #[test]
     fn unknown_version_fields_round_trip() {

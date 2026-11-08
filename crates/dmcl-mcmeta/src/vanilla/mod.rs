@@ -3,6 +3,8 @@
 pub mod asset;
 pub mod jre;
 pub mod manifest;
+mod merge;
+pub mod patch;
 pub mod rules;
 pub mod urls;
 pub mod version;
@@ -14,6 +16,7 @@ pub use jre::{
     JreRuntimeVersion, JRE_MANIFEST_URL,
 };
 pub use manifest::{LatestVersions, VersionManifest, VersionManifestEntry};
+pub use patch::VersionJsonPatch;
 pub use rules::{check_rules, rules_allow, OsRule, Rule, RuleAction, RuleContext, VersionRange};
 pub use urls::{asset_object_url, maven_library_url};
 pub use version::{

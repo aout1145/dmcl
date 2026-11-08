@@ -9,10 +9,12 @@
 //!    文档里所有 url 都以 `${MC_MAVEN}` 这样的**模板**形式存在，由 [`source::Root`] +
 //!    [`source::Mirror`] 决定最终解析成官方地址还是镜像地址。
 //! 3. **本地目录布局** —— `versions/<name>/<name>.json` 之类的路径约定（[`layout`]），以及
-//!    读取版本 JSON（含 `inheritsFrom` 合并）。
+//!    读取版本 JSON（含递归 `inheritsFrom` 合并）。
 //!
 //! 模块按"域"划分：[`vanilla`]（原版）、[`fabric`]、[`forge`]、[`neoforge`]、[`optifine`]；
-//! [`source`] / [`os`] / [`maven`] / [`merge`] / [`layout`] / [`json`] 是各域共用的底座。
+//! [`source`] / [`os`] / [`maven`] / [`layout`] / [`json`] 是各域共用的底座。
+//! 版本合并与 patch 应用在 [`vanilla::version::VersionJson`] 上，分别由
+//! `vanilla::merge` 与 `vanilla::patch` 实现。
 //!
 //! 这个 crate **不读配置文件**：`root_path`、镜像、并发度等一律由调用者通过参数传入。
 
@@ -21,7 +23,6 @@ pub(crate) mod macros;
 pub mod json;
 pub mod layout;
 pub mod maven;
-pub mod merge;
 pub mod os;
 pub mod source;
 

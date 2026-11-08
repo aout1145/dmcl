@@ -23,8 +23,8 @@ pub async fn install_fabric(
         .await?;
 
     let mut json = previous.json.clone();
-    json.merge(&fabric_json)?;
-    finish_version_json(&mut json, version_name, false);
+    json.merge(&fabric_json);
+    finish_version_json(&mut json, version_name);
     write_json_safe(
         &version_json_path(&previous.reference.root, version_name),
         &json,

@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use dmcl_mcmeta::layout::{read_version_json, version_dir, version_jar_path, version_json_path};
+use dmcl_mcmeta::layout::{
+    read_resolved_version_json, version_dir, version_jar_path, version_json_path,
+};
 use dmcl_mcmeta::vanilla::VersionJson;
 
 /// `.minecraft` 根目录 + 版本名。
@@ -29,10 +31,19 @@ impl VersionRef {
     pub fn json_path(&self) -> PathBuf {
         version_json_path(&self.root, self.name.as_str())
     }
+}
 
-    pub fn jar_path(&self) -> PathBuf {
-        version_jar_path(&self.root, self.name.as_str())
-    }
+/// 客户端主 jar 的位置。
+///
+/// `VersionJson.jar` 表示由哪个版本提供客户端类；没有值（或空串）时用当前版本名。
+/// 不读取 `inherits_from`。
+pub fn main_jar_path(reference: &VersionRef, json: &VersionJson) -> PathBuf {
+    let name = json
+        .jar
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(reference.name.as_str());
+    version_jar_path(&reference.root, name)
 }
 
 /// 从磁盘读出来、已处理 `inheritsFrom` 的版本。
@@ -45,19 +56,11 @@ pub struct ResolvedVersion {
     pub json: VersionJson,
 }
 
-/// 读取版本 JSON、解析 `inheritsFrom`、归一化 URL。
+/// 读取版本 JSON、递归解析整条 `inheritsFrom` 链、归一化 URL。
 ///
 /// 只读版本 JSON，不读资源索引，也不下载任何东西。
 pub async fn resolve_version(reference: &VersionRef) -> Result<ResolvedVersion> {
-    let mut json = read_version_json(&reference.json_path()).await?;
-
-    // 保持现有行为：只解析一层 `inheritsFrom`。
-    if let Some(orig) = json.inherits_from.clone() {
-        let mut base = read_version_json(&version_json_path(&reference.root, &orig)).await?;
-        base.merge(&json)?;
-        json = base;
-    }
-
+    let json = read_resolved_version_json(&reference.root, &reference.name).await?;
     Ok(ResolvedVersion {
         reference: reference.clone(),
         json,
@@ -96,10 +99,6 @@ mod tests {
         assert_eq!(
             version.json_path(),
             PathBuf::from("/mc/versions/1.20.1/1.20.1.json")
-        );
-        assert_eq!(
-            version.jar_path(),
-            PathBuf::from("/mc/versions/1.20.1/1.20.1.jar")
         );
     }
 
@@ -147,6 +146,75 @@ mod tests {
         assert_eq!(resolved.json.id.as_deref(), Some("child"));
         assert_eq!(resolved.json.main_class.as_deref(), Some("b.Main"));
         assert_eq!(resolved.json.libraries.len(), 1);
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[test]
+    fn the_main_jar_prefers_json_jar_with_a_version_name_fallback() {
+        let reference = VersionRef::new("/mc", "1.0");
+        let mut json = VersionJson::default();
+
+        assert_eq!(
+            main_jar_path(&reference, &json),
+            PathBuf::from("/mc/versions/1.0/1.0.jar")
+        );
+
+        json.jar = Some("base".to_string());
+        assert_eq!(
+            main_jar_path(&reference, &json),
+            PathBuf::from("/mc/versions/base/base.jar")
+        );
+
+        json.jar = Some(String::new());
+        assert_eq!(
+            main_jar_path(&reference, &json),
+            PathBuf::from("/mc/versions/1.0/1.0.jar")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_resolved_main_jar_follows_the_root_ancestor() {
+        let root = work_dir("root-jar");
+        write_json(
+            &root,
+            "vanilla",
+            serde_json::json!({
+                "id": "vanilla",
+                "libraries": [{"name": "v:lib:1"}]
+            }),
+        )
+        .await;
+        write_json(
+            &root,
+            "forge",
+            serde_json::json!({
+                "id": "forge",
+                "inheritsFrom": "vanilla",
+                "libraries": [{"name": "f:lib:1"}]
+            }),
+        )
+        .await;
+        write_json(
+            &root,
+            "optifine",
+            serde_json::json!({
+                "id": "optifine",
+                "inheritsFrom": "forge",
+                "libraries": [{"name": "o:lib:1"}]
+            }),
+        )
+        .await;
+
+        let resolved = resolve_version(&VersionRef::new(&root, "optifine"))
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.json.jar.as_deref(), Some("vanilla"));
+        assert_eq!(
+            main_jar_path(&resolved.reference, &resolved.json),
+            root.join("versions").join("vanilla").join("vanilla.jar")
+        );
 
         let _ = tokio::fs::remove_dir_all(&root).await;
     }

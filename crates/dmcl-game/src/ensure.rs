@@ -99,7 +99,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::version::{resolve_version, VersionRef};
+    use crate::version::{main_jar_path, resolve_version, VersionRef};
 
     fn work_dir(tag: &str) -> PathBuf {
         let dir =
@@ -205,7 +205,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let jar = version.reference.jar_path();
+        let jar = main_jar_path(&version.reference, &version.json);
         assert_eq!(tokio::fs::read(&jar).await.unwrap(), CONTENT);
 
         // 额外文件不属于版本规划，补全时不能被删掉。
@@ -281,7 +281,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            tokio::fs::read(version.reference.jar_path()).await.unwrap(),
+            tokio::fs::read(main_jar_path(&version.reference, &version.json))
+                .await
+                .unwrap(),
             CONTENT
         );
 

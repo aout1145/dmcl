@@ -1,5 +1,6 @@
 //! 本地 `.minecraft` 目录布局，以及读取版本 JSON。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -140,6 +141,57 @@ pub async fn read_version_json(path: &Path) -> Result<VersionJson> {
     Ok(json)
 }
 
+/// 读取版本 JSON，并沿 `inheritsFrom` 递归解析整条继承链。
+///
+/// 最终 JSON 从根祖先开始，依次 merge 到叶子版本。完全解析后清空 `inheritsFrom`；
+/// 如果合并结果没有 `jar`，把它设成根祖先（叶子没有父版本时保持 `None`）。
+pub async fn read_resolved_version_json(
+    root_path: &Path,
+    version_name: &str,
+) -> Result<VersionJson> {
+    // 叶子 -> ... -> 根祖先
+    let mut chain: Vec<(String, VersionJson)> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut current = version_name.to_string();
+
+    loop {
+        if !visited.insert(current.clone()) {
+            let mut names: Vec<&str> = chain.iter().map(|(name, _)| name.as_str()).collect();
+            names.push(&current);
+            anyhow::bail!("版本继承出现循环：{}", names.join(" -> "));
+        }
+
+        let json = read_version_json(&version_json_path(root_path, &current)).await?;
+        let parent = json.inherits_from.clone();
+        chain.push((current.clone(), json));
+
+        match parent {
+            Some(parent) if !parent.is_empty() => current = parent,
+            _ => break,
+        }
+    }
+
+    // chain 是叶子 -> 根祖先；pop 出来正好从根祖先开始。
+    let (root_name, root_json) = chain
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("版本继承链为空"))?;
+    let mut resolved = root_json;
+    while let Some((_, child)) = chain.pop() {
+        resolved.merge(&child);
+    }
+
+    // 完全解析后不再需要继承字段；主 jar 由 `jar` 表示。
+    if resolved.jar.as_deref().is_some_and(str::is_empty) {
+        resolved.jar = None;
+    }
+    if resolved.jar.is_none() && root_name != version_name {
+        resolved.jar = Some(root_name);
+    }
+    resolved.inherits_from = None;
+
+    Ok(resolved)
+}
+
 fn fnv1a64(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in text.as_bytes() {
@@ -237,6 +289,292 @@ mod tests {
         // 目录不存在 ⇒ 空列表，而不是报错
         let empty = installed_versions(&root.join("nope")).await.unwrap();
         assert!(empty.is_empty());
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    fn work_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("dmcl-mcmeta-resolve-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    async fn write_version(root: &Path, name: &str, value: serde_json::Value) {
+        let path = version_json_path(root, name);
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, serde_json::to_string(&value).unwrap())
+            .await
+            .unwrap();
+    }
+
+    fn plain_arguments(arguments: Option<&Vec<crate::vanilla::Argument>>) -> Vec<String> {
+        arguments
+            .unwrap()
+            .iter()
+            .filter_map(|argument| match argument {
+                crate::vanilla::Argument::Plain(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn resolves_the_whole_inheritance_chain_from_the_root_ancestor() {
+        let root = work_dir("chain");
+        write_version(
+            &root,
+            "vanilla",
+            serde_json::json!({
+                "id": "vanilla",
+                "mainClass": "v.Main",
+                "libraries": [{"name": "v:lib:1"}],
+                "arguments": {"game": ["--vanilla"]},
+                "downloads": {"client": {"url": "https://piston-data.mojang.com/x"}},
+                "assetIndex": {"id": "5"},
+                "assets": "5",
+                "javaVersion": {"majorVersion": 21}
+            }),
+        )
+        .await;
+        write_version(
+            &root,
+            "forge",
+            serde_json::json!({
+                "id": "forge",
+                "inheritsFrom": "vanilla",
+                "libraries": [{"name": "f:lib:1"}],
+                "arguments": {"game": ["--forge"]},
+                "mainClass": "f.Main"
+            }),
+        )
+        .await;
+        write_version(
+            &root,
+            "optifine",
+            serde_json::json!({
+                "id": "optifine",
+                "inheritsFrom": "forge",
+                "libraries": [{"name": "o:lib:1"}],
+                "arguments": {"game": ["--optifine"]}
+            }),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "optifine").await.unwrap();
+
+        assert_eq!(resolved.main_class.as_deref(), Some("f.Main"));
+        let names: Vec<&str> = resolved
+            .libraries
+            .iter()
+            .map(|library| library.name.as_str())
+            .collect();
+        assert_eq!(names, ["o:lib:1", "f:lib:1", "v:lib:1"]);
+        assert_eq!(
+            plain_arguments(resolved.arguments.as_ref().unwrap().game.as_ref()),
+            ["--vanilla", "--forge", "--optifine"]
+        );
+        assert_eq!(resolved.jar.as_deref(), Some("vanilla"));
+        assert!(resolved.inherits_from.is_none());
+        // 叶子和中间版本没有的字段从根祖先保留
+        assert!(resolved.downloads.is_some());
+        assert_eq!(resolved.asset_index_id(), "5");
+        assert_eq!(resolved.assets.as_deref(), Some("5"));
+        assert_eq!(resolved.required_java_major(), 21);
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_leaf_can_override_ancestor_fields() {
+        let root = work_dir("override");
+        write_version(
+            &root,
+            "base",
+            serde_json::json!({
+                "id": "base",
+                "mainClass": "a.Main",
+                "minecraftArguments": "--old"
+            }),
+        )
+        .await;
+        write_version(
+            &root,
+            "leaf",
+            serde_json::json!({
+                "id": "leaf",
+                "inheritsFrom": "base",
+                "mainClass": "b.Main",
+                "minecraftArguments": "--new"
+            }),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "leaf").await.unwrap();
+
+        assert_eq!(resolved.main_class.as_deref(), Some("b.Main"));
+        assert_eq!(resolved.minecraft_arguments.as_deref(), Some("--new"));
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_same_library_key_merges_level_by_level() {
+        let root = work_dir("levels");
+        write_version(
+            &root,
+            "vanilla",
+            serde_json::json!({"libraries": [{"name": "x:lib:1"}]}),
+        )
+        .await;
+        write_version(
+            &root,
+            "forge",
+            serde_json::json!({
+                "inheritsFrom": "vanilla",
+                "libraries": [{"name": "x:lib:2"}]
+            }),
+        )
+        .await;
+        write_version(
+            &root,
+            "optifine",
+            serde_json::json!({
+                "inheritsFrom": "forge",
+                "libraries": [{"name": "x:lib:1"}]
+            }),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "optifine").await.unwrap();
+
+        let names: Vec<&str> = resolved
+            .libraries
+            .iter()
+            .map(|library| library.name.as_str())
+            .collect();
+        assert_eq!(names, ["x:lib:2"]);
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_explicit_intermediate_jar_is_kept() {
+        let root = work_dir("jar");
+        write_version(&root, "vanilla", serde_json::json!({"id": "vanilla"})).await;
+        write_version(
+            &root,
+            "forge",
+            serde_json::json!({"inheritsFrom": "vanilla", "jar": "forge-jar"}),
+        )
+        .await;
+        write_version(
+            &root,
+            "optifine",
+            serde_json::json!({"inheritsFrom": "forge"}),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "optifine").await.unwrap();
+
+        assert_eq!(resolved.jar.as_deref(), Some("forge-jar"));
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_single_parent_is_merged_and_becomes_the_jar() {
+        let root = work_dir("single");
+        write_version(
+            &root,
+            "parent",
+            serde_json::json!({
+                "id": "parent",
+                "mainClass": "a.Main",
+                "libraries": [{"name": "a:a:1"}]
+            }),
+        )
+        .await;
+        write_version(
+            &root,
+            "child",
+            serde_json::json!({"id": "child", "inheritsFrom": "parent"}),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "child").await.unwrap();
+
+        assert_eq!(resolved.main_class.as_deref(), Some("a.Main"));
+        assert_eq!(resolved.libraries.len(), 1);
+        assert_eq!(resolved.jar.as_deref(), Some("parent"));
+        assert!(resolved.inherits_from.is_none());
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_empty_inherits_from_means_no_parent() {
+        let root = work_dir("empty-parent");
+        write_version(
+            &root,
+            "solo",
+            serde_json::json!({"id": "solo", "inheritsFrom": "", "mainClass": "m.Main"}),
+        )
+        .await;
+
+        let resolved = read_resolved_version_json(&root, "solo").await.unwrap();
+
+        assert_eq!(resolved.main_class.as_deref(), Some("m.Main"));
+        assert!(resolved.inherits_from.is_none());
+        assert!(resolved.jar.is_none());
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_missing_parent_reports_its_path() {
+        let root = work_dir("missing");
+        write_version(
+            &root,
+            "child",
+            serde_json::json!({"id": "child", "inheritsFrom": "missing"}),
+        )
+        .await;
+
+        let err = read_resolved_version_json(&root, "child")
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(&version_json_path(&root, "missing").display().to_string()),
+            "{message}"
+        );
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cyclic_inheritance_reports_the_whole_chain() {
+        let root = work_dir("cycle");
+        write_version(
+            &root,
+            "a",
+            serde_json::json!({"id": "a", "inheritsFrom": "b"}),
+        )
+        .await;
+        write_version(
+            &root,
+            "b",
+            serde_json::json!({"id": "b", "inheritsFrom": "a"}),
+        )
+        .await;
+
+        let err = read_resolved_version_json(&root, "a").await.unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("循环"), "{message}");
+        assert!(message.contains("a -> b -> a"), "{message}");
 
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }

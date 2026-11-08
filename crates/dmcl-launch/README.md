@@ -72,6 +72,9 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 
 安装文件、库和资源的路径不受影响，仍然来自根目录与版本目录。
 
+classpath 只拼接 `dmcl_game::main_jar_path` 给出的主 jar（`VersionJson.jar`，为空时回退
+当前版本名），不再按 `inheritsFrom` 猜父 jar。
+
 ### 启动与文件物化解耦
 
 `GameLauncher` 只负责拼命令行，起进程由 `LaunchTask` 完成；文件完整性由
@@ -105,7 +108,7 @@ monitor.wait().await?;
 `launch_chain(option, game, jre)` 显示为三个 Step，组成 `TaskGraph<GameMonitor>`：
 
 1. **检查游戏完整性**
-   - **读取版本** —— `resolve_version` 解析版本 JSON（含一层 `inheritsFrom`）；
+   - **读取版本** —— `resolve_version` 解析版本 JSON（递归解析整条 `inheritsFrom` 链）；
    - **检查并补全文件** —— `dmcl_game::check_integrity`；缺件时 `ensure_files`，产出
      `ResolvedVersion`；
    - **选择 Java** —— 读取版本要求的 Java 大版本，通过 `JavaResolver` 选好 Java；允许自动

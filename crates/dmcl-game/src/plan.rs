@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use dmcl_download::{Checksum, DownloadItem};
 use dmcl_mcmeta::layout::{
-    assets_index_path, assets_objects_dir, assets_virtual_dir, libraries_dir, version_jar_path,
+    assets_index_path, assets_objects_dir, assets_virtual_dir, libraries_dir,
 };
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::os::{Arch, Os};
@@ -20,7 +20,7 @@ use dmcl_mcmeta::vanilla::{
 };
 
 use crate::options::GameFilesOptions;
-use crate::version::{ResolvedVersion, VersionRef};
+use crate::version::{main_jar_path, ResolvedVersion, VersionRef};
 
 /// 一个计划中的下载项。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,12 +58,14 @@ pub fn base_name(path: impl AsRef<Path>) -> String {
 pub fn plan_client_jar(reference: &VersionRef, json: &VersionJson) -> Option<PlannedFile> {
     let client = json.downloads.as_ref()?.client.as_ref()?;
     let url = client.url.clone()?;
+    let save_to = main_jar_path(reference, json);
+    let name = base_name(&save_to);
     Some(PlannedFile {
         url,
-        save_to: version_jar_path(&reference.root, reference.name.as_str()),
+        save_to,
         checksum: client.sha1.clone().map(Checksum::sha1),
         size: client.size,
-        name: format!("{}.jar", reference.name),
+        name,
     })
 }
 
@@ -352,6 +354,22 @@ mod tests {
             index.into_item(&options).urls,
             vec!["https://bmclapi2.bangbang93.com/v1/packages/beef/5.json".to_string()]
         );
+    }
+
+    #[test]
+    fn client_jar_is_saved_to_the_main_jar_path() {
+        let reference = reference();
+        let json = version(
+            r#"{
+                "jar": "base",
+                "downloads": {"client": {"url": "https://piston-data.mojang.com/v1/objects/x/client.jar",
+                                          "sha1": "cafe", "size": 100}}
+            }"#,
+        );
+
+        let client = plan_client_jar(&reference, &json).unwrap();
+        assert_eq!(client.save_to, PathBuf::from("/mc/versions/base/base.jar"));
+        assert_eq!(client.name, "base.jar");
     }
 
     #[test]

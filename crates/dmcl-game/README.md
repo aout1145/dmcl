@@ -28,13 +28,18 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 `plan_files` 显式接收 `Option<&AssetIndexFile>`。这样只看 `javaVersion` 的调用方不必为一个
 可能几 MB 的索引付 I/O 成本。
 
-`resolve_version` 只解析一层 `inheritsFrom`，与现有行为一致。
+`resolve_version` 递归解析整条 `inheritsFrom` 链，调用 `dmcl-mcmeta` 的
+`read_resolved_version_json`。
 
 ### 规划与下载分离
 
 「这个版本由哪些文件组成」是**纯函数**（`plan`）：输入 `VersionRef` / `VersionJson`
 （以及可选的资源索引），输出 `Vec<PlannedFile>`。`PlannedFile` 里的 url 仍是模板，
 直到 `into_item` 才按 `DownloadSource` 的镜像策略展开成候选地址。
+
+主 jar 由 `VersionJson.jar` 决定：`main_jar_path` 在 `jar` 为空或无值时回退当前版本名，
+`plan_client_jar` 把客户端 jar 保存到该路径。安装器写回的版本会显式把 `jar` 设成自己的
+版本名。
 
 ### 完整性检查
 

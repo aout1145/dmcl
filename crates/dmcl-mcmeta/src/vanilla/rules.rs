@@ -22,7 +22,7 @@ string_enum! {
 ///
 /// `min` 是**闭**区间（`>= min`），`max` 是**开**区间（`< max`）。26.3 的
 /// `default-user-jvm` 正是用 `min`/`max` 把 Windows 的 ZGC 与 G1GC 两套参数切成互补区间。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VersionRange {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<String>,
@@ -52,7 +52,7 @@ impl VersionRange {
 }
 
 /// 规则里的 `os` 子对象。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OsRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -72,7 +72,7 @@ pub struct OsRule {
 }
 
 /// `rules` 数组的一个元素。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     /// 键不存在时为 `None`；不认识的取值保留为 [`RuleAction::Other`]。
     #[serde(default, skip_serializing_if = "Option::is_none")]

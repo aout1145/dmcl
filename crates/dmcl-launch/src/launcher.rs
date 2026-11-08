@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
-use dmcl_game::{resolve_version, VersionRef};
+use dmcl_game::{main_jar_path, resolve_version};
 use dmcl_java::JavaOption;
 use dmcl_mcmeta::layout::natives_dir;
 use dmcl_mcmeta::maven::{lib_name_get_name, lib_name_get_version, lib_name_to_path};
@@ -128,17 +128,9 @@ impl GameLauncher {
             result.push_str(&path.to_string_lossy());
             result.push_str("${classpath_separator}");
         }
-        if let Some(oriver) = self.json.inherits_from.as_deref() {
-            // 若基于另一个版本，把父版本的 jar 也加进 classpath
-            let parent_jar = VersionRef::new(self.option.version.root.clone(), oriver)
-                .dir()
-                .join(format!("{oriver}.jar"));
-            result.push_str(&parent_jar.to_string_lossy());
-            result.push_str("${classpath_separator}");
-        }
-        let self_jar = self.option.version.jar_path();
-        if tokio::fs::metadata(&self_jar).await.is_ok() {
-            result.push_str(&self_jar.to_string_lossy());
+        let main_jar = main_jar_path(&self.option.version, &self.json);
+        if tokio::fs::metadata(&main_jar).await.is_ok() {
+            result.push_str(&main_jar.to_string_lossy());
             result.push_str("${classpath_separator}");
         }
 
@@ -413,6 +405,7 @@ pub(crate) fn spawn_game(game_path: &std::path::Path, args: &[String]) -> Result
 mod tests {
     use super::*;
     use crate::account::{AccountSource, OfflineAccountSource};
+    use dmcl_game::VersionRef;
     use dmcl_mcmeta::os::Arch;
     use dmcl_task::{task_fn, TaskContext, TaskGraphBuilder};
     use std::sync::Arc;
@@ -525,6 +518,62 @@ mod tests {
             "{classpath}"
         );
         assert!(classpath.ends_with(".jar"), "{classpath}");
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_classpath_only_contains_the_main_jar() {
+        let root = std::env::temp_dir().join(format!("dmcl-launch-mainjar-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        let versions = root.join("versions");
+        for name in ["base", "1.0"] {
+            let dir = versions.join(name);
+            tokio::fs::create_dir_all(&dir).await.unwrap();
+            tokio::fs::write(dir.join(format!("{name}.jar")), b"jar")
+                .await
+                .unwrap();
+        }
+        let base_jar = versions
+            .join("base")
+            .join("base.jar")
+            .to_string_lossy()
+            .into_owned();
+        let self_jar = versions
+            .join("1.0")
+            .join("1.0.jar")
+            .to_string_lossy()
+            .into_owned();
+
+        let json: VersionJson =
+            serde_json::from_str(r#"{"id": "1.0", "inheritsFrom": "base"}"#).unwrap();
+        let launcher = Arc::new(launcher_with(json, root.clone()).await);
+        let launcher_for_task = launcher.clone();
+        let classpath = run_node(move |ctx| {
+            let launcher = launcher_for_task.clone();
+            async move { launcher.get_libraries(&ctx).await }
+        })
+        .await
+        .unwrap();
+        let classpath = (*classpath).clone();
+
+        // `inherits_from` 不再被当成父 jar 路径，只加当前版本自己的主 jar
+        assert!(!classpath.contains(&base_jar), "{classpath}");
+        assert!(classpath.contains(&self_jar), "{classpath}");
+
+        let json: VersionJson = serde_json::from_str(r#"{"id": "1.0", "jar": "base"}"#).unwrap();
+        let launcher = Arc::new(launcher_with(json, root.clone()).await);
+        let launcher_for_task = launcher.clone();
+        let classpath = run_node(move |ctx| {
+            let launcher = launcher_for_task.clone();
+            async move { launcher.get_libraries(&ctx).await }
+        })
+        .await
+        .unwrap();
+        let classpath = (*classpath).clone();
+
+        assert!(classpath.contains(&base_jar), "{classpath}");
+        assert!(!classpath.contains(&self_jar), "{classpath}");
 
         tokio::fs::remove_dir_all(&root).await.unwrap();
     }

@@ -9,7 +9,7 @@
 ## 模块布局
 
 ```text
-vanilla/     version.rs  manifest.rs  asset.rs  rules.rs  urls.rs  jre.rs
+vanilla/     version.rs  merge.rs  patch.rs  manifest.rs  asset.rs  rules.rs  urls.rs  jre.rs
 fabric/      类型 + 地址 + fetch
 forge/       mod.rs + install_profile.rs
 neoforge/    mod.rs + install_profile.rs
@@ -17,9 +17,8 @@ optifine/    版本列表、稳定 / 预览排序、bmclapi 下载地址
 source.rs    镜像、URL 模板、DownloadSource
 os.rs        Os / Arch 与平台约定
 maven.rs     maven 坐标 → 仓库相对路径
-merge.rs     递归合并两份 JSON
-layout.rs    .minecraft 目录布局、读取版本 JSON（含 inheritsFrom）
-json.rs      JsonMap 别名
+layout.rs    .minecraft 目录布局、读取版本 JSON（含递归 inheritsFrom 合并）
+json.rs      JsonMap 别名与 extra 字段的递归合并
 macros.rs    string_enum! 内部宏
 ```
 
@@ -34,6 +33,42 @@ macros.rs    string_enum! 内部宏
 - 「已知取值 + 兜底」的字符串枚举用 `string_enum!` 宏，且**必须保留 `Other(String)`**
   —— 否则回写时会丢掉不认识的取值；
 - 可选字段用 `#[serde(default, skip_serializing_if = "Option::is_none")]`，别写出 `null`。
+
+### 版本合并与 patch
+
+`VersionJson::merge` 把子版本合并进父版本：
+
+- `minecraftArguments`、`mainClass` 等可选字段由子版本的 `Some` 覆盖，`None` 保留父版本；
+- `arguments` 按 `jvm` / `game` / `default-user-jvm` 分别**父在前、子在后**追加；
+- `libraries` 子版本在前、父版本追加在后；同库键 + 同 `rules` 时版本号高者胜出，
+  版本号相同或无法比较时保留子版本；
+- `rules` 是库身份的一部分，不拼接数组：同键但 `rules` 不同时两个平台变体都保留；
+- 未建模的顶层字段（`extra`）继续按对象递归、数组拼接、标量覆盖的通用规则合并；
+- `patches` 不参与合并，结果直接采用子版本的值。
+
+库键是 `groupId:artifactId[:classifier]`，忽略版本和 `@ext`；`None` 与 `Some([])` 视为
+同一种 `rules`。
+
+#### patch
+
+`VersionJsonPatch` 描述要改什么：`libraries`、`tweakers`、可选的 `mainClass`。对当前版本
+依次应用 patch：
+
+- 库的合并顺序与普通合并相同；和原版库同键 + 同 `rules` 时仍按版本号比较，
+  和之前应用过的 patch 同键 + 同 `rules` 时由后应用的 patch **无条件覆盖**；
+- `mainClass` 有值就替换；
+- 每个 tweaker 写成 `--tweakClass <tweaker>`：先移除已有的同名参数对，再追加到游戏参数末尾
+  （有 `arguments` 时写 `arguments.game`，否则写 `minecraftArguments`）；
+- 第一次应用 patch 时把未修改的 JSON 放进 `patches[0]`，之后每个 patch 依次追加。
+
+`patches[0]` 是原版快照，`patches[1..]` 是应用过的 patch，可用于显示或回退。
+
+#### 多级 `inheritsFrom`
+
+`read_resolved_version_json` 沿 `inheritsFrom` 解析整条链，顺序是**从根祖先开始，依次
+merge 到叶子**，因此 `optifine -> forge -> vanilla` 会保留每一层的库、参数和下载信息。
+解析是迭代的，出现循环会报错。完成后清空 `inheritsFrom`；合并结果没有显式 `jar` 时，
+把它设成根祖先（没有父版本时保持为空）。
 
 ### URL 模板与下载源
 
@@ -112,7 +147,7 @@ OptiFine 下载地址是 `/optifine/<mcversion>/<type>/<patch>`，同样固定�
 
 `layout.rs` 约定 `versions/<name>/<name>.json`、`libraries/`、`assets/` 等路径，以及
 natives 解压目录（`<临时目录>/dmcl-natives-<os>-<arch>-<版本名哈希>`），并提供读取版本
-JSON（含 `inheritsFrom` 合并）的入口。这里只算路径、读文档，不写盘；真正的落盘在
+JSON（含递归 `inheritsFrom` 合并）的入口。这里只算路径、读文档，不写盘；真正的落盘在
 `dmcl-install`。
 
 ## 相关文档

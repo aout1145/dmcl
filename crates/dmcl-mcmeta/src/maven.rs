@@ -56,6 +56,12 @@ pub fn lib_name_get_name(libname: &str) -> String {
     name
 }
 
+/// 库合并键：`groupId:artifactId[:classifier]`，忽略版本和 `@ext`。
+pub(crate) fn library_key(name: &str) -> String {
+    let coord = name.split('@').next().unwrap_or(name);
+    lib_name_get_name(coord)
+}
+
 /// maven 坐标里的版本部分。
 pub fn lib_name_get_version(libname: &str) -> String {
     libname

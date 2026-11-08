@@ -194,7 +194,7 @@ pub async fn install_optifine(
         files.launchwrapper.as_deref(),
         has_forge,
     );
-    finish_version_json(&mut json, version_name, true);
+    finish_version_json(&mut json, version_name);
     write_json_safe(
         &version_json_path(&previous.reference.root, version_name),
         &json,
