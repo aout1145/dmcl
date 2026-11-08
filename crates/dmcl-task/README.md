@@ -45,7 +45,9 @@ pub trait Task<I, O>: Send + Sync {
 
 - 没有依赖：`I = ()`；
 - 一个依赖：`I = Arc<T>`；
-- 多个依赖：`I = (Arc<A>, Arc<B>, …)`；
+- 数量不定的同类型依赖：`Vec<Handle<T>>`，`I = Vec<Arc<T>>`；
+- 多个依赖：`I = (…, …)`，tuple 的每个元素本身都是 `Deps`，因此可以混用
+  `Handle<T>` 和 `Vec<Handle<T>>`（例如「固定依赖 + 一组动态数量的依赖」）；
 - `task_fn(|input, ctx| async move { … })` 统一接收输入与上下文；
 - 依赖值不需要时写 `_` 或解构时忽略。
 

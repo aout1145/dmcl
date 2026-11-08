@@ -38,9 +38,12 @@ impl VersionRef {
 /// `VersionJson.jar` 表示由哪个版本提供客户端类；没有值（或空串）时用当前版本名。
 /// 不读取 `inherits_from`。
 pub fn main_jar_path(reference: &VersionRef, json: &VersionJson) -> PathBuf {
-    let name = json
-        .jar
-        .as_deref()
+    main_jar_path_for(reference, json.jar.as_deref())
+}
+
+/// 只要知道 `jar` 字段时的主 jar 路径；库规划等不需要整份版本 JSON 的场景用它。
+pub fn main_jar_path_for(reference: &VersionRef, jar: Option<&str>) -> PathBuf {
+    let name = jar
         .filter(|name| !name.is_empty())
         .unwrap_or(reference.name.as_str());
     version_jar_path(&reference.root, name)

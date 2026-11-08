@@ -25,11 +25,11 @@ pub async fn ensure_natives(
     downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<()> {
-    let planned = plan_native_jars(&version.reference, &version.json, os, arch);
+    let planned = plan_native_jars(&version.reference, &version.json.libraries, os, arch);
     download_planned(options, downloads, "natives", planned, ctx).await?;
 
     let target = natives_dir(version.reference.name.as_str(), os, arch);
-    for (jar, name) in plan_natives(&version.reference, &version.json, os, arch) {
+    for (jar, name) in plan_natives(&version.reference, &version.json.libraries, os, arch) {
         if !jar.is_file() {
             ctx.log(format!("跳过缺失的 natives: {name}"));
             continue;

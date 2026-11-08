@@ -1,7 +1,7 @@
 //! Forge 与 NeoForge 安装共用的内部工具。
 //!
-//! 这两种加载器都是「下载安装器 jar → 跑 processor」，这里放它们共同用到的东西；
-//! 三种加载器都用的收尾（版本 JSON 落盘）在 [`crate::loader::common`]。
+//! 这两种加载器都是「下载安装器 jar → 跑 processor → 生成 patch」，这里放它们共同
+//! 用到的东西。patch 的最终应用与版本 JSON 落盘在安装流程最后的「完成」步骤统一处理。
 //!
 //! 两种加载器的 `InstallProfile` 是**各自独立的类型**，所以这里不直接收 profile，
 //! 而是接收已经拆出来的通用参数（库列表、client data、processor 视图）。
@@ -14,10 +14,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use dmcl_download::{file_ok, Checksum, DownloadContext};
 use dmcl_game::{base_name, download_planned, plan_libraries, PlannedFile, ResolvedVersion};
+use dmcl_mcmeta::json::JsonMap;
 use dmcl_mcmeta::layout::{libraries_dir, version_jar_path};
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::os::classpath_separator;
-use dmcl_mcmeta::vanilla::{Library, VersionJson};
+use dmcl_mcmeta::vanilla::{Library, VersionJson, VersionJsonPatch};
 use dmcl_task::{task_fn, CommandTask, StepId, Task, TaskContext};
 
 use crate::archive::{main_class_of, open_archive};
@@ -39,8 +40,8 @@ pub(crate) struct Installer {
 #[derive(Clone)]
 pub(crate) struct InstallerPlan {
     pub(crate) installer: Installer,
-    /// 安装器自带的版本 JSON（地址已模板化）。
-    pub(crate) installer_json: VersionJson,
+    /// 由安装器版本 JSON 生成的 patch。
+    pub(crate) patch: VersionJsonPatch,
     /// 安装器档案声明的库。
     pub(crate) libraries: Vec<Library>,
     /// 已解析成 client 值的 `{占位符}` 数据。
@@ -92,7 +93,7 @@ pub(crate) async fn download_installer(
         downloads,
         "安装器",
         vec![PlannedFile {
-            url: installer.url.clone(),
+            url: Some(installer.url.clone()),
             save_to: installer.path.clone(),
             checksum: None,
             size: None,
@@ -181,23 +182,42 @@ fn resolve_arg(
     arg
 }
 
-/// 下载安装器声明的库、版本自己的库与可顶替的 `DOWNLOAD_MOJMAPS`，必要时选好 Java。
+/// 下载加载器版本 JSON 里的库（Forge / NeoForge 运行时库）。
 ///
-/// 命中的 mojmaps 会并进同一个下载任务，后面跑 processor 时直接跳过。
-/// Java 选择作为「下载游戏文件」Step 下的动态任务创建，JRE 下载也因此归在同一个 Step。
+/// 和安装器依赖、原版库分开规划；同一个目标路径由下载层串行化，后到者会自动跳过。
+pub(crate) async fn download_loader_libraries(
+    options: &InstallOptions,
+    downloads: &Arc<DownloadContext>,
+    previous: &ResolvedVersion,
+    plan: &InstallerPlan,
+    label: &str,
+    ctx: &TaskContext,
+) -> Result<()> {
+    let planned = plan_libraries(&previous.reference, &plan.patch.libraries);
+    download_planned(&options.game, downloads, label, planned, ctx).await
+}
+
+/// 下载安装器档案声明的库与可顶替的 `DOWNLOAD_MOJMAPS`，必要时选好 Java。
+///
+/// 和原版库、加载器库分开规划，同一个目标路径由下载层串行化；命中的 mojmaps 会并进
+/// 同一个下载任务，后面跑 processor 时直接跳过。Java 选择作为当前加载器 Step 下的动态
+/// 任务创建，JRE 下载也归在这个 Step。
 #[expect(clippy::too_many_arguments)]
 pub(crate) async fn download_installer_dependencies(
     options: &InstallOptions,
     downloads: &Arc<DownloadContext>,
     version_name: &str,
     loader_label: &str,
-    download_step: StepId,
+    step: StepId,
     previous: &ResolvedVersion,
     plan: &InstallerPlan,
     ctx: &TaskContext,
 ) -> Result<InstallerDeps> {
-    // 老式安装器没有 processor：库与 mojmaps 都留给「下载游戏文件」Step 统一处理。
+    let mut planned: Vec<PlannedFile> = plan_libraries(&previous.reference, &plan.libraries);
+
+    // 老式安装器没有 processor：只需要把安装器档案库下好。
     if plan.processors.is_empty() {
+        download_planned(&options.game, downloads, "安装器依赖库", planned, ctx).await?;
         return Ok(InstallerDeps {
             java: None,
             mojmaps: Vec::new(),
@@ -218,25 +238,6 @@ pub(crate) async fn download_installer_dependencies(
         })
         .collect();
 
-    let libraries = libraries_dir(&options.root_path);
-    let mut planned: Vec<PlannedFile> = Vec::new();
-    for lib in &plan.libraries {
-        let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) else {
-            continue;
-        };
-        let (Some(url), Some(path)) = (artifact.url.clone(), artifact.path.clone()) else {
-            continue;
-        };
-        planned.push(PlannedFile {
-            url,
-            save_to: libraries.join(&path),
-            checksum: artifact.sha1.clone().map(Checksum::sha1),
-            size: artifact.size,
-            name: base_name(&path),
-        });
-    }
-    planned.extend(plan_libraries(&previous.reference, &previous.json));
-
     let mut mojmaps: Vec<bool> = vec![false; plan.processors.len()];
     for (index, resolved) in args.iter().enumerate() {
         if let Some(file) = mojmaps_download(&previous.json, resolved) {
@@ -251,7 +252,7 @@ pub(crate) async fn download_installer_dependencies(
         let java_downloads = downloads.clone();
         let json = previous.json.clone();
         let handle = ctx.add_task(
-            download_step,
+            step,
             "选择 Java",
             (),
             task_fn(move |_: (), ctx| {
@@ -389,7 +390,7 @@ pub(crate) fn mojmaps_download(json: &VersionJson, args: &[String]) -> Option<Pl
     };
     let url = artifact.url.clone()?;
     Some(PlannedFile {
-        url,
+        url: Some(url),
         save_to: PathBuf::from(output),
         checksum: artifact.sha1.clone().map(Checksum::sha1),
         size: artifact.size,
@@ -403,9 +404,127 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(index + 1).map(String::as_str)
 }
 
+/// 把安装器自带的版本 JSON 转成 patch。
+///
+/// 只提取最终版本需要的内容：库、主类、启动参数、显示用的 `type` / `releaseTime`。
+/// 1.12.2 及更早的 Forge 用 `minecraftArguments` 表达启动方式，这里不直接沿用整串
+/// 参数，而是把其中的 `--tweakClass` 解析到 [`VersionJsonPatch::tweakers`]。
+pub(crate) fn installer_patch(
+    name: impl Into<String>,
+    version: impl Into<String>,
+    json: &VersionJson,
+) -> VersionJsonPatch {
+    let (tweakers, arguments) = if json.arguments.is_some() {
+        (Vec::new(), json.arguments.clone())
+    } else {
+        (
+            tweakers_from_minecraft_arguments(json.minecraft_arguments.as_deref().unwrap_or("")),
+            None,
+        )
+    };
+
+    VersionJsonPatch {
+        name: name.into(),
+        version: version.into(),
+        libraries: json.libraries.clone(),
+        tweakers,
+        main_class: json.main_class.clone(),
+        kind: json.kind.clone(),
+        release_time: json.release_time.clone(),
+        arguments,
+        extra: JsonMap::new(),
+    }
+}
+
+/// 从 `minecraftArguments` 字符串里取出所有 `--tweakClass <class>` 的类名。
+fn tweakers_from_minecraft_arguments(arguments: &str) -> Vec<String> {
+    let tokens: Vec<&str> = arguments.split_whitespace().collect();
+    let mut tweakers = Vec::new();
+    let mut index = 0;
+    while index + 1 < tokens.len() {
+        if tokens[index] == "--tweakClass" {
+            tweakers.push(tokens[index + 1].to_string());
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    tweakers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modern_installer_json_becomes_a_patch_with_arguments() {
+        let json: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "forge",
+                "type": "release",
+                "releaseTime": "2023-06-12T13:00:00+00:00",
+                "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+                "arguments": {
+                    "game": ["--launchTarget", "forgeclient"],
+                    "jvm": ["-DignoreList=a"]
+                },
+                "libraries": [{"name": "net.minecraftforge:forge:1.20.1-47.2.0"}]
+            }"#,
+        )
+        .unwrap();
+
+        let patch = installer_patch("forge", "1.20.1-47.2.0", &json);
+
+        assert_eq!(patch.name, "forge");
+        assert_eq!(patch.version, "1.20.1-47.2.0");
+        assert_eq!(patch.kind.as_deref(), Some("release"));
+        assert_eq!(
+            patch.release_time.as_deref(),
+            Some("2023-06-12T13:00:00+00:00")
+        );
+        assert_eq!(
+            patch.main_class.as_deref(),
+            Some("cpw.mods.bootstraplauncher.BootstrapLauncher")
+        );
+        assert_eq!(
+            patch
+                .arguments
+                .as_ref()
+                .unwrap()
+                .game
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(patch.libraries.len(), 1);
+        assert!(patch.tweakers.is_empty());
+    }
+
+    #[test]
+    fn classic_forge_arguments_become_tweakers_instead_of_raw_arguments() {
+        let json: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "1.11.2-forge",
+                "mainClass": "net.minecraft.launchwrapper.Launch",
+                "minecraftArguments": "--username ${auth_player_name} --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker",
+                "libraries": [{"name": "net.minecraftforge:forge:1.11.2-13.20.1.2429"}]
+            }"#,
+        )
+        .unwrap();
+
+        let patch = installer_patch("forge", "1.11.2-13.20.1.2429", &json);
+
+        assert_eq!(
+            patch.tweakers,
+            ["net.minecraftforge.fml.common.launcher.FMLTweaker"]
+        );
+        assert!(patch.arguments.is_none());
+        assert_eq!(
+            patch.main_class.as_deref(),
+            Some("net.minecraft.launchwrapper.Launch")
+        );
+    }
 
     fn version_with_mappings() -> VersionJson {
         serde_json::from_str(
@@ -441,14 +560,20 @@ mod tests {
         let json = version_with_mappings();
         let planned =
             mojmaps_download(&json, &args("DOWNLOAD_MOJMAPS", "client")).expect("应当识别");
-        assert_eq!(planned.url, "https://piston-data.mojang.com/x/client.txt");
+        assert_eq!(
+            planned.url.as_deref(),
+            Some("https://piston-data.mojang.com/x/client.txt")
+        );
         assert_eq!(planned.save_to, PathBuf::from("/out/mappings.txt"));
         assert_eq!(planned.size, Some(123));
         assert_eq!(planned.checksum.as_ref().map(Checksum::hex), Some("abc"));
 
         // server 侧取 server_mappings
         let server = mojmaps_download(&json, &args("DOWNLOAD_MOJMAPS", "server")).unwrap();
-        assert_eq!(server.url, "https://piston-data.mojang.com/x/server.txt");
+        assert_eq!(
+            server.url.as_deref(),
+            Some("https://piston-data.mojang.com/x/server.txt")
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ Step / 全局进度）。配置
 
 ```text
 vanilla.rs    原版元数据落盘、launcher_profiles.json
-loader/       fabric / forge / neoforge / optifine / common / xforge（共用工具）
+loader/       fabric / forge / neoforge / optifine / xforge（Forge 与 NeoForge 共用工具）
 spec.rs       顶层任务图 install_task、InstallSpec / InstallOutcome / LoaderKind
 options.rs    InstallOptions
 archive.rs    读安装器 jar / zip 内的条目
@@ -32,12 +32,13 @@ io.rs         安全写盘（先建父目录）
 之后任何一步失败或被取消，都会删掉本次新建的版本目录，不让半装版本出现在版本列表里。
 共享的 `libraries/` / `assets/` 是内容校验过的缓存，不跟着回滚（下次安装会跳过已有文件）。
 
-显示步骤按「用户的直觉」分三段，加载器各自再占一个 `安装 X`：
+显示步骤按「用户的直觉」分三段，加载器各自再占一个 `安装 X`，最后统一收尾：
 
 ```text
 获取版本元数据   创建版本目录、获取版本 json
-下载游戏文件     下载版本 jar、下载资源、下载依赖库（等加载器合并完版本 JSON）
-安装 X           下载安装器、解析安装器、解出安装器库、下载安装器依赖、运行安装器、合并版本 JSON
+下载游戏文件     下载版本 jar、下载资源、下载原版依赖库
+安装 X           下载安装器、解析安装器、解出安装器库、下载加载器库 / 安装器依赖、运行安装器、生成 patch
+完成            应用所有 patch、写入版本 JSON
 ```
 
 安装图的节点传递类型明确的中间值，而不是反复从磁盘猜状态：
@@ -45,20 +46,25 @@ io.rs         安全写盘（先建父目录）
 ```text
 创建版本目录          Task<(), VersionRef>
 获取并解析原版元数据   Task<Arc<VersionRef>, ResolvedVersion>
-下载版本 jar / 资源   Task<Arc<ResolvedVersion>, ()>
+下载版本 jar / 资源 / 原版库  Task<Arc<ResolvedVersion>, ()>
 下载 OptiFine         Task<(), OptifineFiles>
-每个加载器            Task<Arc<ResolvedVersion>, ResolvedVersion>
-下载依赖库            Task<Arc<ResolvedVersion>, ResolvedVersion>
-游戏文件就绪          Task<(Arc<()>, Arc<ResolvedVersion>, Arc<()>), InstallOutcome>
+每个加载器            Task<…, VersionJsonPatch>
+完成                  Task<(Arc<ResolvedVersion>, Vec<Arc<VersionJsonPatch>>, …), InstallOutcome>
 ```
 
-版本 jar 与资源只依赖原版元数据，所以能最早开始；OptiFine 的 jar 同样只依赖版本列表，
-单独成一个节点先下；依赖库要等所有加载器把版本 JSON 合并完，才能把 Forge / NeoForge
-新增的库一起规划进去。加载器之间直接传递内存里的 `ResolvedVersion`，合并节点写盘后把
-同一份结果交给下一步，避免从磁盘重读到写了一半的 JSON。
+版本 jar、资源与原版依赖库都只依赖原版版本 JSON，所以能在「下载游戏文件」里并行开始；
+OptiFine 的 jar 同样只依赖版本列表，单独成一个节点先下。加载器步骤下载自己的依赖库，
+并把改动描述成 `VersionJsonPatch`，**不读写版本 JSON**；所有 patch 由最后的 `完成`
+节点按调用方给定的顺序统一应用并写盘。
+
+加载器的 patch 数量由调用方决定，`完成` 节点用 `dmcl-task` 的 `Vec<Handle<_>>` 依赖
+收集这一组 patch，不需要为了拼固定长度的 tuple 再加中间步骤。
 
 客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来生成
 patched client（`{MINECRAFT_JAR}`）；因此 processor 节点会额外依赖「下载版本 jar」。
+加载器库和原版库同时下载；不同步骤规划到同一个目标路径时，由下载层串行化并让后到者
+跳过。Forge / NeoForge 的 processor 还要用原版库，所以「运行安装器」额外依赖
+「下载依赖库」。
 
 ### 规划、完整性与 natives 在 dmcl-game
 
@@ -70,24 +76,35 @@ patched client（`{MINECRAFT_JAR}`）；因此 processor 节点会额外依赖�
 三种加载器各有自己的安装步骤（`loader/`），Forge 与 NeoForge 的 `InstallProfile` 也各有
 一份（`dmcl-mcmeta/{forge,neoforge}/install_profile.rs`），便于以后各自演化：
 
-- **Fabric** —— 取 loader profile，合并进原版版本 JSON；
+所有加载器都只**返回 patch**，不读写版本 JSON：
+
+- **Fabric** —— 拆成「获取 Fabric 元数据 → 下载 Fabric 依赖库 → 生成 patch」三步；
+  patch 带主类 / 启动参数；
 - **Forge** —— 安装器分现代式（spec 0/1，包内有 `version.json`，`json` 字段指出位置）
   与经典式（≤1.11.2，profile 内联在 `versionInfo` 里、库在 `install.filePath` 指向的内嵌
   jar 中）两种；跑 processor 生成客户端 jar；
 - **NeoForge** —— 只有现代式（spec 1）；**别给它加 Forge 的经典式**（`install` /
   `versionInfo`）分支。
 
-Forge / NeoForge 的安装拆成「下载安装器 → 解析安装器 → 解出安装器库 / 下载安装器依赖 →
-运行安装器 → 合并版本 JSON」几个节点：
+Forge / NeoForge 的安装拆成「下载安装器 → 解析安装器 → 解出安装器库 / 下载加载器依赖 /
+下载安装器依赖 → 运行安装器 → 生成 patch」几个节点：
 
 - 「下载安装器」只依赖版本目录，可以和元数据 / 资源下载并行；
-- processor 需要的库、版本库与可被下载顶替的 `DOWNLOAD_MOJMAPS` 在「下载安装器依赖」里
-  统一提前下好，「运行安装器」只跑 Java，不再自己下载；
-- 经典式 Forge 安装器没有 processor，后几步会跳过下载与执行，直接合并版本 JSON；
-- 确实需要跑 processor 时，「下载安装器依赖」在 `下载游戏文件` Step 下动态创建
+- 「下载加载器依赖」下载安装器版本 JSON 里的库（Forge / NeoForge 运行时库）；
+- 「下载安装器依赖」下载安装器档案声明的库与可被下载顶替的 `DOWNLOAD_MOJMAPS`；
+- 两组依赖分开下载，并都可以和原版库同时下载；同一个目标路径由下载层串行化，不会并发
+  写同一个 `.part`；
+- 「运行安装器」只等原版库、安装器依赖与客户端 jar；加载器运行时库只要在「生成 patch」
+  之前下好，不影响 processor；
+- 经典式 Forge 安装器没有 processor，仍会下载两组库，只是跳过跑 Java；
+- 确实需要跑 processor 时，「下载安装器依赖」在当前 `安装 X` Step 下动态创建
   `选择 Java` 节点，JRE 下载也归在这个 Step；
 - 其中 `DOWNLOAD_MOJMAPS` 只是把官方映射文件下载到指定位置，可以直接用自己的下载器
   完成并跳过这个 processor；其余 processor 仍交给 Java 执行。
+
+经典式 Forge 的 `minecraftArguments` **不会**原样沿用：只解析其中的
+`--tweakClass <class>` 放进 patch 的 `tweakers`，其余启动参数仍来自原版版本 JSON。
+现代式的 `arguments` 会作为 patch 的一部分追加到最终版本参数末尾。
 
 `read_installer_version_json` 的查找顺序：`json` 指向的条目 →（仅 Forge）内联
 `versionInfo` →（兜底）`install.filePath` 指向的内嵌 jar。
@@ -105,16 +122,16 @@ OptiFine 不是独立加载器，而是叠加在原版或 Forge 上的 tweaker�
 2. 把 jar 放到 `libraries/optifine/OptiFine/<mc>_<type>_<patch>/`；
 3. **没有 Forge** 时，从 jar 的 `launchwrapper-of.txt`（或 `launchwrapper-of-*.jar` 条目名）
    读出版本，把内嵌的 launchwrapper 解到 `libraries/net/minecraft/launchwrapper/of-<version>/`；
-4. 「安装 OptiFine」等前面的加载器（尤其是 Forge）合并完版本 JSON 后，加
-   `optifine:OptiFine:…`（以及没有 Forge 时的 `net.minecraft:launchwrapper:of-…`）；
-5. **没有 Forge** 时把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch` 并追加
-   `--tweakClass optifine.OptiFineTweaker`；**有 Forge** 时保持 Forge 的 `mainClass` 与
-   launchwrapper 不动，只追加 `--tweakClass optifine.OptiFineForgeTweaker`。
+4. 「安装 OptiFine」生成 patch：加 `optifine:OptiFine:…`（以及没有 Forge 时的
+   `net.minecraft:launchwrapper:of-…`）；
+5. **没有 Forge** 时 patch 把 `mainClass` 改成 `net.minecraft.launchwrapper.Launch` 并
+   追加 `--tweakClass optifine.OptiFineTweaker`；**有 Forge** 时 patch 不设 `mainClass`，
+   只追加 `--tweakClass optifine.OptiFineForgeTweaker`。
 
-是否兼容由调用方决定，`dmcl-install` 不检查组合；它只按 `LoaderRequest` 的顺序安装，
-不调整顺序。CLI 与其它加载器一样不做校验（加载器顺序固定为 Forge → NeoForge → Fabric →
-OptiFine），GUI 用冲突组限制选择。参数追加到 `arguments.game`；老版本没有 `arguments`
-时追加到 `minecraftArguments` 字符串末尾。
+是否兼容由调用方决定，`dmcl-install` 不检查组合；它只按 `LoaderRequest` 的顺序生成并
+应用 patch，不调整顺序。CLI 与其它加载器一样不做校验（加载器顺序固定为 Forge →
+NeoForge → Fabric → OptiFine），GUI 用冲突组限制选择。tweaker 追加到最终版本的
+`arguments.game`；老版本没有 `arguments` 时追加到 `minecraftArguments` 字符串末尾。
 
 ### 安装参数
 

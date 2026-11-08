@@ -7,20 +7,26 @@ use std::sync::Arc;
 use anyhow::Result;
 use dmcl_download::DownloadContext;
 use dmcl_game::{ResolvedVersion, VersionRef};
-use dmcl_mcmeta::layout::{libraries_dir, version_json_path};
+use dmcl_mcmeta::layout::libraries_dir;
 use dmcl_mcmeta::neoforge::{neoforge_installer_url, InstallProfile};
-use dmcl_mcmeta::vanilla::VersionJson;
+use dmcl_mcmeta::vanilla::{VersionJson, VersionJsonPatch};
 use dmcl_task::{task_fn, Handle, StepId, TaskContext, TaskGraphBuilder};
 
 use crate::archive::{has_entry, open_archive, read_entry};
-use crate::io::write_json_safe;
-use crate::loader::common::finish_version_json;
 use crate::loader::xforge::{
-    download_installer, download_installer_dependencies, extract_maven_entries,
-    installer_temp_path, run_installer_processors, Installer, InstallerDeps, InstallerPlan,
-    ProcessorPlan,
+    download_installer, download_installer_dependencies, download_loader_libraries,
+    extract_maven_entries, installer_patch, installer_temp_path, run_installer_processors,
+    Installer, InstallerDeps, InstallerPlan, ProcessorPlan,
 };
 use crate::options::InstallOptions;
+
+type ProcessorInput = (
+    Arc<InstallerPlan>,
+    Arc<InstallerDeps>,
+    Arc<()>,
+    Arc<()>,
+    Arc<()>,
+);
 
 /// 把 NeoForge 安装拆成「下载安装器 → 解析 → 解出库 / 下载依赖 → 跑 processor → 合并 JSON」。
 ///
@@ -29,15 +35,15 @@ use crate::options::InstallOptions;
 pub(crate) fn add_neoforge_install(
     builder: &mut TaskGraphBuilder,
     step: StepId,
-    download_step: StepId,
     options: Arc<InstallOptions>,
     downloads: Arc<DownloadContext>,
     created: Handle<VersionRef>,
+    base_libraries: Handle<()>,
     client_jar: Handle<()>,
     previous: Handle<ResolvedVersion>,
     version_name: String,
     neoforge_version: String,
-) -> Handle<ResolvedVersion> {
+) -> Handle<VersionJsonPatch> {
     let installer = neoforge_installer(&neoforge_version);
 
     let downloaded = builder.add(
@@ -88,16 +94,51 @@ pub(crate) fn add_neoforge_install(
         }),
     );
 
+    let loader_deps = builder.add(
+        step,
+        "下载 NeoForge 依赖库",
+        (plan.clone(), previous.clone(), extracted.clone()),
+        task_fn({
+            let options = options.clone();
+            let downloads = downloads.clone();
+            move |(plan, previous, _extracted): (
+                Arc<InstallerPlan>,
+                Arc<ResolvedVersion>,
+                Arc<()>,
+            ),
+                  ctx: TaskContext| {
+                let options = options.clone();
+                let downloads = downloads.clone();
+                async move {
+                    download_loader_libraries(
+                        &options,
+                        &downloads,
+                        &previous,
+                        &plan,
+                        "NeoForge 依赖库",
+                        &ctx,
+                    )
+                    .await
+                }
+            }
+        }),
+    );
+
     let deps = builder.add(
         step,
         "下载安装器依赖",
-        (plan.clone(), previous.clone()),
+        (plan.clone(), previous.clone(), extracted.clone()),
         task_fn({
             let options = options.clone();
             let downloads = downloads.clone();
             let version_name = version_name.clone();
             let neoforge_version = neoforge_version.clone();
-            move |(plan, previous): (Arc<InstallerPlan>, Arc<ResolvedVersion>), ctx: TaskContext| {
+            move |(plan, previous, _extracted): (
+                Arc<InstallerPlan>,
+                Arc<ResolvedVersion>,
+                Arc<()>,
+            ),
+                  ctx: TaskContext| {
                 let options = options.clone();
                 let downloads = downloads.clone();
                 let version_name = version_name.clone();
@@ -108,7 +149,7 @@ pub(crate) fn add_neoforge_install(
                         &downloads,
                         &version_name,
                         &neoforge_version,
-                        download_step,
+                        step,
                         &previous,
                         &plan,
                         &ctx,
@@ -122,17 +163,12 @@ pub(crate) fn add_neoforge_install(
     let processed = builder.add(
         step,
         "运行安装器",
-        (plan.clone(), deps, extracted, client_jar),
+        (plan.clone(), deps, extracted, client_jar, base_libraries),
         task_fn({
             let options = options.clone();
             let version_name = version_name.clone();
             let neoforge_version = neoforge_version.clone();
-            move |(plan, deps, _extracted, _client_jar): (
-                Arc<InstallerPlan>,
-                Arc<InstallerDeps>,
-                Arc<()>,
-                Arc<()>,
-            ),
+            move |(plan, deps, _extracted, _client_jar, _base_libraries): ProcessorInput,
                   ctx: TaskContext| {
                 let options = options.clone();
                 let version_name = version_name.clone();
@@ -154,22 +190,15 @@ pub(crate) fn add_neoforge_install(
 
     builder.add(
         step,
-        "合并版本 JSON",
-        (previous, plan, processed),
-        task_fn({
-            let version_name = version_name.clone();
-            move |(previous, plan, _): (
-                Arc<ResolvedVersion>,
-                Arc<InstallerPlan>,
-                Arc<()>,
-            ),
-                  ctx: TaskContext| {
-                let version_name = version_name.clone();
-                async move {
-                    merge_installer_version_json(&previous, &plan, &version_name, &ctx).await
-                }
-            }
-        }),
+        "生成 patch",
+        (loader_deps, plan, processed),
+        task_fn(
+            |(_loader_deps, plan, _): (Arc<()>, Arc<InstallerPlan>, Arc<()>),
+             ctx: TaskContext| async move {
+                ctx.log(format!("已生成 NeoForge {} patch", plan.patch.version));
+                Ok(plan.patch.clone())
+            },
+        ),
     )
 }
 
@@ -214,6 +243,7 @@ async fn parse_installer(
         None
     };
     let installer_json = read_installer_version_json(&mut zip)?;
+    let patch = installer_patch("neoforge", neoforge_version, &installer_json);
     ctx.log(format!(
         "NeoForge {neoforge_version}：{} 个 processor",
         profile.processors.len()
@@ -221,7 +251,7 @@ async fn parse_installer(
 
     Ok(InstallerPlan {
         installer: installer.clone(),
-        installer_json,
+        patch,
         libraries: profile.libraries,
         data,
         processors,
@@ -263,32 +293,6 @@ fn read_installer_version_json(zip: &mut zip::ZipArchive<Cursor<Vec<u8>>>) -> Re
     // 安装包里的地址是具体 url，归一到模板后写盘时才能再解析成官方地址
     json.templatize_urls();
     Ok(json)
-}
-
-/// 把安装器自带的版本 JSON 合并进上一步的版本描述并写盘。
-///
-/// 合并用的是内存里的 `previous`，不再从磁盘重读，避免与并发写盘互相干扰。
-async fn merge_installer_version_json(
-    previous: &ResolvedVersion,
-    plan: &InstallerPlan,
-    version_name: &str,
-    ctx: &TaskContext,
-) -> Result<ResolvedVersion> {
-    let mut json = previous.json.clone();
-    json.merge(&plan.installer_json);
-    json.extra.remove("_comment_");
-    finish_version_json(&mut json, version_name);
-    write_json_safe(
-        &version_json_path(&previous.reference.root, version_name),
-        &json,
-    )
-    .await?;
-    ctx.log(format!("已写入 {version_name}.json"));
-
-    Ok(ResolvedVersion {
-        reference: previous.reference.clone(),
-        json,
-    })
 }
 
 #[cfg(test)]

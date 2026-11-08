@@ -182,7 +182,7 @@ impl DownloadSource {
         Ok(list)
     }
 
-    /// 取 Fabric 的版本 JSON（需要合并进原版版本 JSON）。
+    /// 取 Fabric 的版本 JSON（安装器据此生成 patch）。
     pub async fn fetch_fabric_profile(
         &self,
         mc_version: &str,

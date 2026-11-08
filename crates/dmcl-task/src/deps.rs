@@ -209,7 +209,11 @@ impl<O: Send + Sync + 'static> WaitableTaskHandle<O> for DynamicHandleImpl<O> {
 ///
 /// * 没有依赖：`()`，`Output = ()`；
 /// * 一个依赖：`Handle<T>`，`Output = Arc<T>`；
-/// * 多个依赖：`(Handle<A>, Handle<B>, …)`，`Output = (Arc<A>, Arc<B>, …)`。
+/// * 数量不定的同类型依赖：`Vec<Handle<T>>`，`Output = Vec<Arc<T>>`；
+/// * 多个依赖：`(D1, D2, …)`，每个元素本身都是 `Deps`，`Output = (D1::Output, D2::Output, …)`。
+///
+/// tuple 里的元素可以是 [`Handle`]，也可以是 [`Vec<Handle<T>>`]，因此「若干固定依赖 +
+/// 一组动态数量的依赖」可以直接写在同一个 tuple 里。
 ///
 /// 动态句柄 [`DynamicHandle`] 不实现本 trait，因此不能写进 deps。
 pub trait Deps: Send + Sync + 'static {
@@ -244,17 +248,31 @@ impl<O: Send + Sync + 'static> Deps for Handle<O> {
     }
 }
 
+impl<O: Send + Sync + 'static> Deps for Vec<Handle<O>> {
+    type Output = Vec<Arc<O>>;
+
+    fn dependencies(&self) -> Vec<Dependency> {
+        self.iter().flat_map(Deps::dependencies).collect()
+    }
+
+    fn resolve(&self) -> Self::Output {
+        self.iter().map(Deps::resolve).collect()
+    }
+}
+
 macro_rules! impl_deps_tuple {
     ($(($index:tt, $type:ident)),+) => {
-        impl<$($type: Send + Sync + 'static),+> Deps for ($(Handle<$type>,)+) {
-            type Output = ($(Arc<$type>,)+);
+        impl<$($type: Deps),+> Deps for ($($type,)+) {
+            type Output = ($($type::Output,)+);
 
             fn dependencies(&self) -> Vec<Dependency> {
-                vec![$(sealed::SealedHandle::dependency(self.$index.as_ref())),+]
+                let mut dependencies = Vec::new();
+                $(dependencies.extend(self.$index.dependencies());)+
+                dependencies
             }
 
             fn resolve(&self) -> Self::Output {
-                ($(sealed::SealedHandle::resolved(self.$index.as_ref()),)+)
+                ($(self.$index.resolve(),)+)
             }
         }
     };

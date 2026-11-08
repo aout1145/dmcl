@@ -351,6 +351,30 @@ async fn a_file_downloads_and_retries_with_the_next_candidate() {
 }
 
 #[tokio::test]
+async fn duplicate_targets_share_one_download() {
+    let dir = work_dir("duplicate-target");
+    let body = b"only downloaded once".to_vec();
+    let server = TestServer::start(
+        HashMap::from([("/same".to_string(), body.clone())]),
+        Duration::ZERO,
+    )
+    .await;
+
+    let item = DownloadItem::new([server.url("/same")], dir.join("same.bin"))
+        .with_size(Some(body.len() as u64))
+        .with_sha1(Some(hash_bytes(HashAlgorithm::Sha1, &body)));
+    let options = DownloadOptions::default().without_chunking();
+
+    let (progress, result, _) = run_items(options, vec![item.clone(), item]).await;
+    result.unwrap();
+
+    assert_eq!(std::fs::read(dir.join("same.bin")).unwrap(), body);
+    assert_eq!(server.requests(), 1, "同一个目标路径只应请求一次");
+    assert_eq!(progress.snapshot().total, body.len() as u64);
+    assert_eq!(progress.snapshot().downloaded, body.len() as u64);
+}
+
+#[tokio::test]
 async fn a_429_response_honours_retry_after() {
     let dir = work_dir("retry-after");
     let body = b"after the limit".to_vec();

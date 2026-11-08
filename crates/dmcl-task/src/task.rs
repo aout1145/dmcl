@@ -10,7 +10,8 @@ use crate::context::TaskContext;
 /// 一个可等待的异步动作：接收输入 `I`，产出输出 `O`。
 ///
 /// 输入通过依赖注入传入（见 [`crate::Deps`]）；没有依赖时 `I = ()`，
-/// 有一个依赖时 `I = Arc<T>`，多个依赖时 `I = (Arc<A>, Arc<B>, …)`。
+/// 有一个依赖时 `I = Arc<T>`，数量不定的同类型依赖时 `I = Vec<Arc<T>>`，
+/// 多个依赖时 `I = (D1::Output, D2::Output, …)`。
 ///
 /// ```no_run
 /// use dmcl_task::{Task, TaskContext};
@@ -78,8 +79,8 @@ where
 
 /// 用闭包构造任务：闭包统一接收依赖注入的输入与 [`TaskContext`]。
 ///
-/// 没有依赖时输入是 `()`；有一个依赖时是 `Arc<T>`；多个依赖时是
-/// `(Arc<A>, Arc<B>, …)`。
+/// 没有依赖时输入是 `()`；有一个依赖时是 `Arc<T>`；数量不定的同类型依赖时是
+/// `Vec<Arc<T>>`；多个依赖时是 `(D1::Output, D2::Output, …)`。
 pub fn task_fn<I, O, F, Fut>(run: F) -> FnTask<I, O, F>
 where
     I: Send + 'static,

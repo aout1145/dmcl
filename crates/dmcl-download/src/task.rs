@@ -3,9 +3,10 @@
 //! 每个文件是一个独立的 DAG 节点；并发由 [`DownloadContext`] 里的三层信号量控制：
 //! 活跃文件数、全局连接数（同时约束分块）、CPU 密集任务（校验 / 预检）。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -16,7 +17,7 @@ use tokio::task::JoinSet;
 
 use dmcl_task::{human_bytes, Cancelled, DynamicHandle, ProgressHandle, StepId, Task, TaskContext};
 
-use crate::hash::{files_ok_with, hash_file, FileCheck};
+use crate::hash::{file_ok, files_ok_with, hash_file, FileCheck};
 use crate::item::DownloadItem;
 use crate::options::DownloadOptions;
 
@@ -33,6 +34,8 @@ pub struct DownloadContext {
     file_semaphore: Arc<Semaphore>,
     connection_semaphore: Arc<Semaphore>,
     worker_semaphore: Arc<Semaphore>,
+    /// 同一个目标路径的下载串行化；后到的任务拿到锁后会重新检查文件。
+    path_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     progress: ProgressHandle,
 }
 
@@ -48,6 +51,7 @@ impl DownloadContext {
             file_semaphore: Arc::new(Semaphore::new(options.max_active_files)),
             connection_semaphore: Arc::new(Semaphore::new(options.max_connections)),
             worker_semaphore: Arc::new(Semaphore::new(options.max_workers)),
+            path_locks: Mutex::new(HashMap::new()),
             progress,
             options,
         })
@@ -55,6 +59,18 @@ impl DownloadContext {
 
     pub fn options(&self) -> &DownloadOptions {
         &self.options
+    }
+
+    /// 取某个目标路径的串行锁。
+    fn path_lock(&self, path: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self
+            .path_locks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        locks
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     /// 单文件下载任务（下载 → 校验 → rename）。失败直接返回错误，由 DAG FailFast 处理。
@@ -76,11 +92,6 @@ impl DownloadContext {
         step: StepId,
         items: Vec<DownloadItem>,
     ) -> Result<Vec<DynamicHandle<()>>> {
-        for item in &items {
-            if item.urls.is_empty() {
-                anyhow::bail!("下载项没有候选地址：{}", item.save_to.display());
-            }
-        }
         if items.is_empty() {
             return Ok(Vec::new());
         }
@@ -103,6 +114,9 @@ impl DownloadContext {
             if ok {
                 skipped += 1;
                 continue;
+            }
+            if item.urls.is_empty() {
+                anyhow::bail!("无法获取下载地址：{}", item.save_to.display());
             }
             if let Some(size) = item.size {
                 total = total.saturating_add(to_i64(size));
@@ -339,6 +353,19 @@ struct FileDownloadTask {
 #[async_trait::async_trait]
 impl Task<(), ()> for FileDownloadTask {
     async fn run(&self, _input: (), ctx: TaskContext) -> Result<()> {
+        // 不同步骤可能规划到同一个目标文件；串行化后重新检查，后来者直接跳过。
+        let save_to = absolute(&self.item.save_to);
+        let lock = self.context.path_lock(&save_to);
+        let _guard = lock.lock().await;
+
+        if file_ok(&save_to, self.item.checksum.as_ref(), self.item.size).await {
+            if let Some(size) = self.item.size {
+                self.context.progress.add_total(-to_i64(size));
+            }
+            ctx.log(format!("{} 跳过", self.item.name));
+            return Ok(());
+        }
+
         let bytes = self.context.download_file(&self.item, &ctx).await?;
         ctx.log(format!("{} 完成（{}）", self.item.name, human_bytes(bytes)));
         Ok(())
@@ -736,7 +763,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_item_without_candidates_fails_before_creating_tasks() {
+    async fn a_missing_item_without_candidates_reports_no_download_url() {
+        let path = std::env::temp_dir()
+            .join(format!("dmcl-no-candidate-{}", std::process::id()))
+            .join("missing.jar");
+        let _ = tokio::fs::remove_file(&path).await;
+
         let mut builder = dmcl_task::TaskGraphBuilder::new("测试");
         let step = builder.step("下载");
         let downloads = DownloadContext::new(
@@ -750,15 +782,13 @@ mod tests {
             (),
             dmcl_task::task_fn(move |_: (), ctx| {
                 let downloads = downloads.clone();
+                let path = path.clone();
                 async move {
                     downloads
                         .prepare(
                             &ctx,
                             step,
-                            vec![DownloadItem::new(
-                                Vec::<String>::new(),
-                                std::env::temp_dir().join("dmcl-no-candidate"),
-                            )],
+                            vec![DownloadItem::new(Vec::<String>::new(), path)],
                         )
                         .await
                         .map(|_| ())
@@ -766,6 +796,9 @@ mod tests {
             }),
         );
         let error = builder.build(sink).unwrap().run(|_| {}).await.unwrap_err();
-        assert!(format!("{error:#}").contains("没有候选地址"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("无法获取下载地址"),
+            "{error:#}"
+        );
     }
 }

@@ -10,13 +10,15 @@ use dmcl_game::{
     VersionRef,
 };
 use dmcl_mcmeta::layout::version_dir;
+use dmcl_mcmeta::vanilla::{VersionJson, VersionJsonPatch};
 use dmcl_task::{task_fn, Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use sanitize_filename::{is_sanitized_with_options, OptionsForCheck};
 
-use crate::fabric::install_fabric;
-use crate::forge::add_forge_install;
-use crate::neoforge::add_neoforge_install;
-use crate::optifine::add_optifine_install;
+use crate::io::write_json_safe;
+use crate::loader::fabric::add_fabric_install;
+use crate::loader::forge::add_forge_install;
+use crate::loader::neoforge::add_neoforge_install;
+use crate::loader::optifine::add_optifine_install;
 use crate::options::InstallOptions;
 use crate::vanilla::download_vanilla;
 
@@ -244,17 +246,17 @@ fn download_client_jar_step(
     })
 }
 
-/// 下载依赖库（用合并后的版本 JSON 决定最终的库列表）。
+/// 下载原版依赖库（加载器自己的库由各自的「安装 X」步骤负责）。
 fn download_libraries_step(
     options: Arc<InstallOptions>,
     downloads: Arc<DownloadContext>,
-) -> impl Task<Arc<ResolvedVersion>, ResolvedVersion> + 'static {
+) -> impl Task<Arc<ResolvedVersion>, ()> + 'static {
     task_fn(move |version: Arc<ResolvedVersion>, ctx: TaskContext| {
         let options = options.clone();
         let downloads = downloads.clone();
         async move {
             ensure_libraries(&version, &options.game, &downloads, &ctx).await?;
-            Ok((*version).clone())
+            Ok(())
         }
     })
 }
@@ -274,25 +276,53 @@ fn download_assets_step(
     })
 }
 
-/// 等所有文件就绪，产出安装结果。
-fn finish_step() -> impl Task<(Arc<()>, Arc<ResolvedVersion>, Arc<()>), InstallOutcome> + 'static {
+/// `完成` 节点的输入：原版版本、按安装顺序排列的 patch，以及三个文件下载屏障。
+type FinishInput = (
+    Arc<ResolvedVersion>,
+    Vec<Arc<VersionJsonPatch>>,
+    Arc<()>,
+    Arc<()>,
+    Arc<()>,
+);
+
+/// 收尾：把所有加载器 patch 应用到原版版本 JSON，再写盘。
+///
+/// 这是安装流程里唯一修改版本 JSON 的步骤；加载器只负责下载自己的库并返回 patch。
+fn finish_step(version_name: String) -> impl Task<FinishInput, InstallOutcome> + 'static {
     task_fn(
-        |(_client_jar, version, _assets): (Arc<()>, Arc<ResolvedVersion>, Arc<()>),
-         _ctx: TaskContext| async move {
-            Ok(InstallOutcome {
-                version: version.reference.clone(),
-            })
+        move |(version, patches, _client_jar, _assets, _libraries): FinishInput,
+              ctx: TaskContext| {
+            let version_name = version_name.clone();
+            async move {
+                let patches: Vec<VersionJsonPatch> =
+                    patches.iter().map(|patch| (**patch).clone()).collect();
+                let mut json = version.json.clone();
+                json.apply_patches(&patches)?;
+                finish_version_json(&mut json, &version_name);
+                write_json_safe(&version.reference.json_path(), &json).await?;
+                ctx.log(format!("已写入 {version_name}.json"));
+
+                Ok(InstallOutcome {
+                    version: version.reference.clone(),
+                })
+            }
         },
     )
 }
 
-/// 完整的安装任务图：获取版本元数据 → 下载游戏文件 / 安装加载器。
+/// 写盘前把 URL 模板解析回官方地址，并让主 jar 指向自己的版本目录。
+fn finish_version_json(json: &mut VersionJson, version_name: &str) {
+    json.resolve_official_urls();
+    json.inherits_from = None;
+    json.id = Some(version_name.to_string());
+    json.jar = Some(version_name.to_string());
+}
+
+/// 完整的安装任务图：获取版本元数据 → 下载游戏文件 / 安装加载器 → 完成。
 ///
-/// 显示上分为三步：`获取版本元数据`、`下载游戏文件`、每个加载器一个 `安装 X`。
-/// 版本 jar 与资源只依赖原版元数据，可以尽早开始；依赖库等加载器把版本 JSON 合并完
-/// 之后再下，保证 Forge / NeoForge 新增的库也在计划里。OptiFine 的 jar 也只需要版本
-/// 列表，因此单独成一个「下载 OptiFine」节点；真正写版本 JSON 时才等前面的加载器，
-/// 这样 Forge 的 `mainClass` / launchwrapper 已经就位。
+/// 显示上分为 `获取版本元数据`、`下载游戏文件`、每个加载器一个 `安装 X`，最后是
+/// `完成`。原版依赖库只依赖原版版本 JSON，和版本 jar、资源一起下载；加载器步骤各自
+/// 下载自己的库并返回 patch，不修改版本 JSON。所有 patch 在最后一步统一应用并写盘。
 ///
 /// 客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来
 /// 生成 patched client（`{MINECRAFT_JAR}`）。
@@ -320,7 +350,6 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
         created.clone(),
         vanilla_metadata_step(options.clone(), spec.version_id.clone()),
     );
-
     let client_jar = builder.add(
         download_step,
         "下载版本 jar",
@@ -333,55 +362,40 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
         resolved.clone(),
         download_assets_step(options.clone(), downloads.clone()),
     );
+    let libraries = builder.add(
+        download_step,
+        "下载原版依赖库",
+        resolved.clone(),
+        download_libraries_step(options.clone(), downloads.clone()),
+    );
 
     let has_forge = spec
         .loaders
         .iter()
         .any(|request| request.kind == LoaderKind::Forge);
-    let mut previous = resolved;
+    let mut patches = Vec::new();
     for request in &spec.loaders {
         let step = builder.step(format!("安装 {}", request.kind.display_name()));
         let kind = request.kind;
         let loader_version = request.version.clone();
-        let label = format!("安装 {}", kind.display_name());
         let version_name = spec.version_name.clone();
         let mc_version = spec.version_id.clone();
 
-        previous = match kind {
-            LoaderKind::Fabric => {
-                let task_options = options.clone();
-                let task_version_name = version_name.clone();
-                let task_mc_version = mc_version.clone();
-                let task_loader_version = loader_version.clone();
-                builder.add(
-                    step,
-                    label,
-                    previous.clone(),
-                    task_fn(move |version: Arc<ResolvedVersion>, _ctx: TaskContext| {
-                        let options = task_options.clone();
-                        let version_name = task_version_name.clone();
-                        let mc_version = task_mc_version.clone();
-                        let loader_version = task_loader_version.clone();
-                        async move {
-                            install_fabric(
-                                &version,
-                                &options,
-                                &version_name,
-                                &mc_version,
-                                &loader_version,
-                            )
-                            .await
-                        }
-                    }),
-                )
-            }
+        let patch = match kind {
+            LoaderKind::Fabric => add_fabric_install(
+                &mut builder,
+                step,
+                options.clone(),
+                downloads.clone(),
+                resolved.clone(),
+                mc_version,
+                loader_version,
+            ),
             LoaderKind::OptiFine => add_optifine_install(
                 &mut builder,
                 step,
                 options.clone(),
                 downloads.clone(),
-                previous.clone(),
-                version_name,
                 mc_version,
                 loader_version,
                 has_forge,
@@ -389,41 +403,37 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
             LoaderKind::Forge => add_forge_install(
                 &mut builder,
                 step,
-                download_step,
                 options.clone(),
                 downloads.clone(),
                 created.clone(),
+                libraries.clone(),
                 client_jar.clone(),
-                previous.clone(),
+                resolved.clone(),
                 version_name,
                 loader_version,
             ),
             LoaderKind::NeoForge => add_neoforge_install(
                 &mut builder,
                 step,
-                download_step,
                 options.clone(),
                 downloads.clone(),
                 created.clone(),
+                libraries.clone(),
                 client_jar.clone(),
-                previous.clone(),
+                resolved.clone(),
                 version_name,
                 loader_version,
             ),
         };
+        patches.push(patch);
     }
 
-    let libraries = builder.add(
-        download_step,
-        "下载依赖库",
-        previous,
-        download_libraries_step(options, downloads),
-    );
+    let finish = builder.step("完成");
     let sink = builder.add(
-        download_step,
-        "游戏文件就绪",
-        (client_jar, libraries, assets),
-        finish_step(),
+        finish,
+        "写入版本 JSON",
+        (resolved, patches, client_jar, assets, libraries),
+        finish_step(spec.version_name.clone()),
     );
     builder.build(sink).expect("安装图的最终节点由构造保证")
 }
@@ -638,5 +648,7 @@ mod tests {
             positions.windows(2).all(|pair| pair[0] < pair[1]),
             "{names:?}"
         );
+        assert_eq!(names.last().map(String::as_str), Some("完成"));
+        assert!(!names.iter().any(|name| name == "准备 patch 列表"));
     }
 }

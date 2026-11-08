@@ -31,4 +31,4 @@ pub use plan::{
     base_name, native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_files,
     plan_libraries, plan_native_jars, plan_natives, PlannedFile,
 };
-pub use version::{main_jar_path, resolve_version, ResolvedVersion, VersionRef};
+pub use version::{main_jar_path, main_jar_path_for, resolve_version, ResolvedVersion, VersionRef};

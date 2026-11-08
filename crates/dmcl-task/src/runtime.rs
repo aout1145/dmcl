@@ -714,6 +714,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_vec_dependency_collects_a_variable_number_of_values() {
+        let mut builder = TaskGraphBuilder::new("动态数量依赖");
+        let step = builder.step("步骤");
+
+        let scalar = builder.add(
+            step,
+            "固定依赖",
+            (),
+            task_fn(|_: (), _ctx| async move { Ok(10u32) }),
+        );
+        let values: Vec<Handle<u32>> = (0..3)
+            .map(|value| {
+                builder.add(
+                    step,
+                    format!("值 {value}"),
+                    (),
+                    task_fn(move |_: (), _ctx| async move { Ok(value) }),
+                )
+            })
+            .collect();
+        let sink = builder.add(
+            step,
+            "汇总",
+            (scalar, values),
+            task_fn(
+                |(scalar, values): (Arc<u32>, Vec<Arc<u32>>), _ctx| async move {
+                    Ok(*scalar + values.iter().map(|value| **value).sum::<u32>())
+                },
+            ),
+        );
+
+        let graph = builder.build(sink).unwrap();
+        let (result, _) = collect(graph).await;
+        assert_eq!(*result.unwrap(), 13);
+    }
+
+    #[tokio::test]
     async fn an_unused_dependency_can_be_ignored() {
         let mut builder = TaskGraphBuilder::new("忽略依赖");
         let step = builder.step("步骤");

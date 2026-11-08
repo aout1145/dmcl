@@ -5,25 +5,23 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use dmcl_download::DownloadContext;
-use dmcl_game::{base_name, download_planned, PlannedFile, ResolvedVersion};
-use dmcl_mcmeta::layout::{libraries_dir, version_json_path};
+use dmcl_game::{base_name, download_planned, PlannedFile};
+use dmcl_mcmeta::json::JsonMap;
+use dmcl_mcmeta::layout::libraries_dir;
 use dmcl_mcmeta::maven::lib_name_to_path;
-use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
+use dmcl_mcmeta::vanilla::{Library, VersionJsonPatch};
 use dmcl_task::{task_fn, Handle, StepId, TaskContext, TaskGraphBuilder};
 
 use crate::archive::{has_entry, open_archive, read_entry};
-use crate::io::{write_json_safe, write_safe};
-use crate::loader::common::finish_version_json;
+use crate::io::write_safe;
 use crate::options::InstallOptions;
 
 /// OptiFine 的库坐标前缀。
 const OPTIFINE_LIBRARY: &str = "optifine:OptiFine";
 /// launchwrapper 的库坐标前缀。
 const LAUNCHWRAPPER_LIBRARY: &str = "net.minecraft:launchwrapper";
-/// 游戏参数里的 tweakClass 开关。
-const TWEAK_CLASS: &str = "--tweakClass";
 
-/// 下载 OptiFine 得到的产物：写版本 JSON 只需要这里的版本号。
+/// 下载 OptiFine 得到的产物：生成 patch 只需要这里的版本号。
 #[derive(Debug, Clone)]
 pub struct OptifineFiles {
     /// `optifine:OptiFine:<version>` 里的版本部分。
@@ -32,23 +30,19 @@ pub struct OptifineFiles {
     pub launchwrapper: Option<String>,
 }
 
-/// 往安装图里追加 OptiFine：先并行下载 jar，再等前面的加载器合并完版本 JSON。
+/// 往安装图里追加 OptiFine：先并行下载 jar，再生成 patch。
 ///
 /// 「下载 OptiFine」只依赖版本列表与共享的 `libraries/`，因此和原版元数据、版本 jar、
-/// 资源、Forge 安装同时起跑；改版本 JSON 的节点依赖 `previous`，确保 Forge 的
-/// `mainClass` / launchwrapper 已经就位。
-#[expect(clippy::too_many_arguments)]
+/// 资源、Forge 安装同时起跑。
 pub(crate) fn add_optifine_install(
     builder: &mut TaskGraphBuilder,
     step: StepId,
     options: Arc<InstallOptions>,
     downloads: Arc<DownloadContext>,
-    previous: Handle<ResolvedVersion>,
-    version_name: String,
     mc_version: String,
     optifine_version: String,
     has_forge: bool,
-) -> Handle<ResolvedVersion> {
+) -> Handle<VersionJsonPatch> {
     let files = builder.add(
         step,
         "下载 OptiFine",
@@ -80,18 +74,15 @@ pub(crate) fn add_optifine_install(
 
     builder.add(
         step,
-        "安装 OptiFine",
-        (previous, files),
-        task_fn({
-            let version_name = version_name.clone();
-            move |(previous, files): (Arc<ResolvedVersion>, Arc<OptifineFiles>),
-                  ctx: TaskContext| {
-                let version_name = version_name.clone();
-                async move {
-                    install_optifine(&previous, &files, &version_name, has_forge, &ctx).await
-                }
-            }
-        }),
+        "生成 patch",
+        files,
+        task_fn(
+            move |files: Arc<OptifineFiles>, ctx: TaskContext| async move {
+                let patch = install_optifine(&files, has_forge);
+                ctx.log(format!("已生成 OptiFine {} patch", patch.version));
+                Ok(patch)
+            },
+        ),
     )
 }
 
@@ -139,7 +130,7 @@ pub async fn download_optifine(
         downloads,
         "OptiFine",
         vec![PlannedFile {
-            url: entry.download_url(),
+            url: Some(entry.download_url()),
             save_to: path.clone(),
             checksum: None,
             size: None,
@@ -176,90 +167,46 @@ pub async fn download_optifine(
     })
 }
 
-/// 把 OptiFine 写进版本 JSON。
-///
-/// 这一步要等前面的加载器（尤其是 Forge）合并完版本 JSON，才能在它们的 `mainClass` /
-/// launchwrapper 之上追加 OptiFine 的库与 tweaker。
-pub async fn install_optifine(
-    previous: &ResolvedVersion,
-    files: &OptifineFiles,
-    version_name: &str,
-    has_forge: bool,
-    ctx: &TaskContext,
-) -> Result<ResolvedVersion> {
-    let mut json = previous.json.clone();
-    apply_optifine_version_json(
-        &mut json,
-        &files.library_version,
-        files.launchwrapper.as_deref(),
-        has_forge,
-    );
-    finish_version_json(&mut json, version_name);
-    write_json_safe(
-        &version_json_path(&previous.reference.root, version_name),
-        &json,
-    )
-    .await?;
-    ctx.log("OptiFine 已写入版本元数据");
-    Ok(ResolvedVersion {
-        reference: previous.reference.clone(),
-        json,
-    })
-}
-
-/// 把 OptiFine 的库与 tweakClass 写进版本 JSON。
+/// 生成 OptiFine 的 patch。
 ///
 /// * 没有 Forge：加 OptiFine + launchwrapper，主类改成 launchwrapper 的 `Launch`；
 /// * 同时有 Forge：Forge 已经提供 launchwrapper，只加 OptiFine 库，主类保持 Forge 的，
-///   tweakClass 用 `OptiFineForgeTweaker`。
-fn apply_optifine_version_json(
-    json: &mut VersionJson,
-    optifine_library_version: &str,
-    launchwrapper: Option<&str>,
-    has_forge: bool,
-) {
-    json.libraries.push(Library {
-        name: format!("{OPTIFINE_LIBRARY}:{optifine_library_version}"),
+///   tweaker 用 `OptiFineForgeTweaker`。
+///
+/// 真正的合并与写盘由安装图最后的「完成」步骤统一处理。
+pub fn install_optifine(files: &OptifineFiles, has_forge: bool) -> VersionJsonPatch {
+    let mut libraries = vec![Library {
+        name: format!("{OPTIFINE_LIBRARY}:{}", files.library_version),
         ..Default::default()
-    });
-
-    if !has_forge {
-        if let Some(version) = launchwrapper {
-            json.libraries.push(Library {
+    }];
+    let main_class = if has_forge {
+        None
+    } else {
+        if let Some(version) = &files.launchwrapper {
+            libraries.push(Library {
                 name: format!("{LAUNCHWRAPPER_LIBRARY}:of-{version}"),
                 ..Default::default()
             });
         }
-        json.main_class = Some("net.minecraft.launchwrapper.Launch".to_string());
-    }
-
+        Some("net.minecraft.launchwrapper.Launch".to_string())
+    };
     let tweaker = if has_forge {
         "optifine.OptiFineForgeTweaker"
     } else {
         "optifine.OptiFineTweaker"
     };
-    append_game_tweak(json, tweaker);
-}
 
-/// 把 `--tweakClass <tweaker>` 追加到游戏参数里。
-///
-/// 现代版本写在 `arguments.game`；1.12.2 及更早没有 `arguments`，写在
-/// `minecraftArguments` 字符串末尾。
-fn append_game_tweak(json: &mut VersionJson, tweaker: &str) {
-    if let Some(arguments) = json.arguments.as_mut() {
-        let game = arguments.game.get_or_insert_with(Vec::new);
-        game.push(Argument::Plain(TWEAK_CLASS.to_string()));
-        game.push(Argument::Plain(tweaker.to_string()));
-        return;
+    VersionJsonPatch {
+        name: "optifine".to_string(),
+        version: files.library_version.clone(),
+        libraries,
+        tweakers: vec![tweaker.to_string()],
+        main_class,
+        kind: None,
+        release_time: None,
+        arguments: None,
+        extra: JsonMap::new(),
     }
-
-    let arguments = json.minecraft_arguments.get_or_insert_with(String::new);
-    if !arguments.is_empty() && !arguments.chars().last().is_some_and(char::is_whitespace) {
-        arguments.push(' ');
-    }
-    arguments.push_str(TWEAK_CLASS);
-    arguments.push(' ');
-    arguments.push_str(tweaker);
 }
 
 /// 从 OptiFine jar 里读 launchwrapper 版本。
@@ -307,6 +254,7 @@ fn validate_launchwrapper_version(version: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dmcl_mcmeta::vanilla::VersionJson;
 
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buffer = Vec::new();
@@ -362,14 +310,17 @@ mod tests {
                 "id": "1.19",
                 "mainClass": "net.minecraft.client.main.Main",
                 "minecraftArguments": "--username ${auth_player_name}",
-                "libraries": [
-                    {"name": "net.minecraft:launchwrapper:1.5"},
-                    {"name": "net.sf.jopt-simple:jopt-simple:5.0.4"}
-                ]
+                "libraries": [{"name": "net.sf.jopt-simple:jopt-simple:5.0.4"}]
             }"#,
         )
         .unwrap();
-        apply_optifine_version_json(&mut json, "1.19_HD_U_H8", Some("2.2"), false);
+        let files = OptifineFiles {
+            library_version: "1.19_HD_U_H8".to_string(),
+            launchwrapper: Some("2.2".to_string()),
+        };
+
+        let patch = install_optifine(&files, false);
+        json.apply_patch(&patch).unwrap();
 
         assert_eq!(
             json.main_class.as_deref(),
@@ -387,15 +338,12 @@ mod tests {
         assert!(json
             .libraries
             .iter()
-            .any(|library| library.name == "net.minecraft:launchwrapper:1.5"));
-        assert!(json
-            .libraries
-            .iter()
             .any(|library| library.name == "net.sf.jopt-simple:jopt-simple:5.0.4"));
         assert_eq!(
             json.minecraft_arguments.as_deref(),
             Some("--username ${auth_player_name} --tweakClass optifine.OptiFineTweaker")
         );
+        assert!(json.arguments.is_none());
     }
 
     #[test]
@@ -408,7 +356,13 @@ mod tests {
             }"#,
         )
         .unwrap();
-        apply_optifine_version_json(&mut json, "1.19_HD_U_H8", None, true);
+        let files = OptifineFiles {
+            library_version: "1.19_HD_U_H8".to_string(),
+            launchwrapper: None,
+        };
+
+        let patch = install_optifine(&files, true);
+        json.apply_patch(&patch).unwrap();
 
         assert_eq!(
             json.main_class.as_deref(),
@@ -426,11 +380,11 @@ mod tests {
         let game = json.arguments.as_ref().unwrap().game.as_ref().unwrap();
         assert!(matches!(
             &game[game.len() - 2],
-            Argument::Plain(value) if value == TWEAK_CLASS
+            dmcl_mcmeta::vanilla::Argument::Plain(value) if value == "--tweakClass"
         ));
         assert!(matches!(
             &game[game.len() - 1],
-            Argument::Plain(value) if value == "optifine.OptiFineForgeTweaker"
+            dmcl_mcmeta::vanilla::Argument::Plain(value) if value == "optifine.OptiFineForgeTweaker"
         ));
     }
 }

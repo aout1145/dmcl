@@ -33,9 +33,12 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 
 ### 规划与下载分离
 
-「这个版本由哪些文件组成」是**纯函数**（`plan`）：输入 `VersionRef` / `VersionJson`
-（以及可选的资源索引），输出 `Vec<PlannedFile>`。`PlannedFile` 里的 url 仍是模板，
-直到 `into_item` 才按 `DownloadSource` 的镜像策略展开成候选地址。
+「这个版本由哪些文件组成」是**纯函数**（`plan`）：输入 `VersionRef` 和具体字段
+（库列表、`downloads`、`assetIndex` 等，以及可选的资源索引），输出 `Vec<PlannedFile>`。
+库列表用切片传入，所以加载器可以直接规划自己的 `Vec<Library>`，不需要构造整份版本
+JSON。`PlannedFile` 里的 url 仍是模板，直到 `into_item` 才按 `DownloadSource` 的镜像
+策略展开成候选地址；没有下载地址的库（例如安装器内嵌的库）`url` 为 `None`，仍然参与
+存在性 / hash / size 检查，缺失时由下载层报「无法获取下载地址」。
 
 主 jar 由 `VersionJson.jar` 决定：`main_jar_path` 在 `jar` 为空或无值时回退当前版本名，
 `plan_client_jar` 把客户端 jar 保存到该路径。安装器写回的版本会显式把 `jar` 设成自己的

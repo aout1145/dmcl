@@ -1,4 +1,4 @@
-//! 规划：给定版本 JSON，算出「这个版本需要哪些文件」。
+//! 规划：给定版本引用和具体字段，算出「这个版本需要哪些文件」。
 //!
 //! 这一层是**纯函数**：不碰网络、不碰磁盘，所以规则过滤、困难库、natives 分类器、
 //! 虚拟资源目录、跳过音乐这些判断都能被穷举单测覆盖。
@@ -15,18 +15,19 @@ use dmcl_mcmeta::layout::{
 use dmcl_mcmeta::maven::lib_name_to_path;
 use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{
-    asset_object_url, maven_library_url, rules_allow, Artifact, AssetIndexFile, Library,
-    RuleContext, VersionJson,
+    asset_object_url, maven_library_url, rules_allow, Artifact, AssetIndexFile, AssetIndexRef,
+    Library, RuleContext, VersionDownloads,
 };
 
 use crate::options::GameFilesOptions;
-use crate::version::{main_jar_path, ResolvedVersion, VersionRef};
+use crate::version::{main_jar_path_for, ResolvedVersion, VersionRef};
 
 /// 一个计划中的下载项。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedFile {
-    /// URL 模板（`${MC_MAVEN}/…`），或不可镜像的普通 url。
-    pub url: String,
+    /// URL 模板（`${MC_MAVEN}/…`），或不可镜像的普通 url；`None` 表示只能检查本地文件，
+    /// 无法从网络补下载（例如安装器内嵌的库）。
+    pub url: Option<String>,
     /// 目标路径。
     pub save_to: PathBuf,
     /// 期望的校验值（由 SHA-1 摘要构造，Minecraft 文档里给的就是 sha1）。
@@ -38,8 +39,15 @@ pub struct PlannedFile {
 
 impl PlannedFile {
     /// 变成真正的下载项：这里才把模板按镜像策略展开成**候选地址**。
+    ///
+    /// `url = None` 时得到没有候选地址的下载项，下载层只会检查本地文件，缺失就报错。
     pub fn into_item(self, options: &GameFilesOptions) -> DownloadItem {
-        DownloadItem::new(options.source.candidates(&self.url), &self.save_to)
+        let urls = self
+            .url
+            .as_deref()
+            .map(|url| options.source.candidates(url))
+            .unwrap_or_default();
+        DownloadItem::new(urls, &self.save_to)
             .with_checksum(self.checksum)
             .with_size(self.size)
             .named(self.name)
@@ -55,13 +63,17 @@ pub fn base_name(path: impl AsRef<Path>) -> String {
 }
 
 /// 客户端 jar（`downloads.client`）。
-pub fn plan_client_jar(reference: &VersionRef, json: &VersionJson) -> Option<PlannedFile> {
-    let client = json.downloads.as_ref()?.client.as_ref()?;
+pub fn plan_client_jar(
+    reference: &VersionRef,
+    downloads: Option<&VersionDownloads>,
+    jar: Option<&str>,
+) -> Option<PlannedFile> {
+    let client = downloads?.client.as_ref()?;
     let url = client.url.clone()?;
-    let save_to = main_jar_path(reference, json);
+    let save_to = main_jar_path_for(reference, jar);
     let name = base_name(&save_to);
     Some(PlannedFile {
-        url,
+        url: Some(url),
         save_to,
         checksum: client.sha1.clone().map(Checksum::sha1),
         size: client.size,
@@ -70,15 +82,18 @@ pub fn plan_client_jar(reference: &VersionRef, json: &VersionJson) -> Option<Pla
 }
 
 /// 资源索引本身（`assets/indexes/<id>.json`）。
-pub fn plan_assets_index(reference: &VersionRef, json: &VersionJson) -> Option<PlannedFile> {
-    let index = json.asset_index.as_ref()?;
-    let id = json.asset_index_id();
+pub fn plan_assets_index(
+    reference: &VersionRef,
+    asset_index: Option<&AssetIndexRef>,
+) -> Option<PlannedFile> {
+    let index = asset_index?;
+    let id = index.id.as_deref().unwrap_or("");
     if id.is_empty() {
         return None;
     }
     let url = index.url.clone()?;
     Some(PlannedFile {
-        url,
+        url: Some(url),
         save_to: assets_index_path(&reference.root, id),
         checksum: index.sha1.clone().map(Checksum::sha1),
         size: index.size,
@@ -118,12 +133,12 @@ fn lib_checksum(lib: &Library) -> Option<Checksum> {
 
 /// 库文件（**不含** natives 分类器 jar；natives 由 [`plan_native_jars`] 单独规划，
 /// 因为它依赖启动时选中的 java 架构）。
-pub fn plan_libraries(reference: &VersionRef, json: &VersionJson) -> Vec<PlannedFile> {
-    let libraries = libraries_dir(&reference.root);
+pub fn plan_libraries(reference: &VersionRef, libraries: &[Library]) -> Vec<PlannedFile> {
+    let libraries_dir = libraries_dir(&reference.root);
     let rules = RuleContext::current();
     let mut planned = Vec::new();
 
-    for lib in &json.libraries {
+    for lib in libraries {
         if !rules_allow(&lib.rules, &rules) {
             continue;
         }
@@ -131,17 +146,18 @@ pub fn plan_libraries(reference: &VersionRef, json: &VersionJson) -> Vec<Planned
         let lib_path = lib_name_to_path(coord);
 
         match lib.downloads.as_ref() {
-            // 有 downloads 的「普通库」：直接用文档里给的地址
+            // 有 downloads 的「普通库」：用文档里给的地址；地址为空时只检查本地文件。
             Some(downloads) => {
-                if let Some(artifact) = downloads.artifact.as_ref().filter(|a| a.url.is_some()) {
+                if let Some(artifact) = downloads.artifact.as_ref() {
                     // `path` 是仓库里的相对路径；极少数文档不带它，这时按 maven 坐标推导
                     let relative = artifact
                         .path
                         .clone()
                         .unwrap_or_else(|| lib_name_to_path(coord));
+                    let url = artifact.url.clone().filter(|url| !url.trim().is_empty());
                     planned.push(PlannedFile {
-                        url: artifact.url.clone().unwrap_or_default(),
-                        save_to: libraries.join(&relative),
+                        url,
+                        save_to: libraries_dir.join(&relative),
                         checksum: artifact.sha1.clone().map(Checksum::sha1),
                         size: artifact.size,
                         name: base_name(&relative),
@@ -150,8 +166,8 @@ pub fn plan_libraries(reference: &VersionRef, json: &VersionJson) -> Vec<Planned
             }
             // 没有仓库地址的「困难库」：按 maven 坐标拼到官方库仓库
             None if lib.url.is_none() => planned.push(PlannedFile {
-                url: maven_library_url(&lib_path),
-                save_to: libraries.join(&lib_path),
+                url: Some(maven_library_url(&lib_path)),
+                save_to: libraries_dir.join(&lib_path),
                 checksum: lib_checksum(lib),
                 size: None,
                 name: base_name(&lib_path),
@@ -160,8 +176,8 @@ pub fn plan_libraries(reference: &VersionRef, json: &VersionJson) -> Vec<Planned
             None => {
                 let base = lib.url.as_deref().unwrap_or("").trim_end_matches('/');
                 planned.push(PlannedFile {
-                    url: format!("{base}/{lib_path}"),
-                    save_to: libraries.join(&lib_path),
+                    url: Some(format!("{base}/{lib_path}")),
+                    save_to: libraries_dir.join(&lib_path),
                     checksum: lib_checksum(lib),
                     size: None,
                     name: base_name(&lib_path),
@@ -178,26 +194,29 @@ pub fn plan_libraries(reference: &VersionRef, json: &VersionJson) -> Vec<Planned
 /// 与普通库分开规划：natives 只有在启动时选好 java、知道架构后才能确定要哪一个。
 pub fn plan_native_jars(
     reference: &VersionRef,
-    json: &VersionJson,
+    libraries: &[Library],
     os: Os,
     arch: Arch,
 ) -> Vec<PlannedFile> {
-    let libraries = libraries_dir(&reference.root);
+    let libraries_dir = libraries_dir(&reference.root);
     let rules = RuleContext::current();
     let mut planned = Vec::new();
 
-    for lib in &json.libraries {
+    for lib in libraries {
         if !rules_allow(&lib.rules, &rules) {
             continue;
         }
         if let Some(artifact) = native_artifact(lib, os, arch) {
-            let (Some(url), Some(path)) = (artifact.url.clone(), artifact.path.clone()) else {
+            let (Some(url), Some(path)) = (
+                artifact.url.clone().filter(|url| !url.trim().is_empty()),
+                artifact.path.clone(),
+            ) else {
                 // 文档里没给地址的 natives 直接跳过
                 continue;
             };
             planned.push(PlannedFile {
-                url,
-                save_to: libraries.join(&path),
+                url: Some(url),
+                save_to: libraries_dir.join(&path),
                 checksum: artifact.sha1.clone().map(Checksum::sha1),
                 size: artifact.size,
                 name: base_name(&path),
@@ -211,20 +230,20 @@ pub fn plan_native_jars(
 /// 需要解压的 natives jar（路径 + 显示名），按 java 架构 `arch` 选分类器。
 pub fn plan_natives(
     reference: &VersionRef,
-    json: &VersionJson,
+    libraries: &[Library],
     os: Os,
     arch: Arch,
 ) -> Vec<(PathBuf, String)> {
-    let libraries = libraries_dir(&reference.root);
+    let libraries_dir = libraries_dir(&reference.root);
     let rules = RuleContext::current();
-    json.libraries
+    libraries
         .iter()
         .filter(|lib| rules_allow(&lib.rules, &rules))
         .filter_map(|lib| native_artifact(lib, os, arch))
         .filter_map(|artifact| artifact.path.clone())
         .map(|path| {
             let name = base_name(&path);
-            (libraries.join(path), name)
+            (libraries_dir.join(path), name)
         })
         .collect()
 }
@@ -232,12 +251,11 @@ pub fn plan_natives(
 /// 资源对象。
 pub fn plan_asset_objects(
     reference: &VersionRef,
-    json: &VersionJson,
+    asset_index_id: &str,
     index: &AssetIndexFile,
     options: &GameFilesOptions,
 ) -> Vec<PlannedFile> {
-    let id = json.asset_index_id();
-    let virtual_dir = assets_virtual_dir(&reference.root, id);
+    let virtual_dir = assets_virtual_dir(&reference.root, asset_index_id);
     let objects_dir = assets_objects_dir(&reference.root);
     let mut planned = Vec::new();
 
@@ -256,7 +274,7 @@ pub fn plan_asset_objects(
             objects_dir.join(&relative)
         };
         planned.push(PlannedFile {
-            url: asset_object_url(&relative),
+            url: Some(asset_object_url(&relative)),
             save_to,
             checksum: Some(Checksum::sha1(asset.hash.clone())),
             size: Some(asset.size),
@@ -281,15 +299,20 @@ pub fn plan_files(
     let json = &version.json;
 
     let mut files = Vec::new();
-    if let Some(client) = plan_client_jar(reference, json) {
+    if let Some(client) = plan_client_jar(reference, json.downloads.as_ref(), json.jar.as_deref()) {
         files.push(client);
     }
-    files.extend(plan_libraries(reference, json));
-    if let Some(index_file) = plan_assets_index(reference, json) {
+    files.extend(plan_libraries(reference, &json.libraries));
+    if let Some(index_file) = plan_assets_index(reference, json.asset_index.as_ref()) {
         files.push(index_file);
     }
     if let Some(index) = asset_index {
-        files.extend(plan_asset_objects(reference, json, index, options));
+        files.extend(plan_asset_objects(
+            reference,
+            json.asset_index_id(),
+            index,
+            options,
+        ));
     }
     files
 }
@@ -306,6 +329,7 @@ fn is_music(key: &str) -> bool {
 mod tests {
     use super::*;
     use dmcl_mcmeta::source::{DownloadSource, Mirror, MirrorPolicy};
+    use dmcl_mcmeta::vanilla::VersionJson;
 
     fn reference() -> VersionRef {
         VersionRef::new("/mc", "1.20.1")
@@ -334,8 +358,12 @@ mod tests {
             }"#,
         );
 
-        let client = plan_client_jar(&reference, &json).unwrap();
-        assert_eq!(client.url, "${MC_DATA}/v1/objects/x/client.jar");
+        let client =
+            plan_client_jar(&reference, json.downloads.as_ref(), json.jar.as_deref()).unwrap();
+        assert_eq!(
+            client.url.as_deref(),
+            Some("${MC_DATA}/v1/objects/x/client.jar")
+        );
         assert_eq!(
             client.save_to,
             PathBuf::from("/mc/versions/1.20.1/1.20.1.jar")
@@ -347,8 +375,11 @@ mod tests {
             vec!["https://piston-data.mojang.com/v1/objects/x/client.jar".to_string()]
         );
 
-        let index = plan_assets_index(&reference, &json).unwrap();
-        assert_eq!(index.url, "${MC_META}/v1/packages/beef/5.json");
+        let index = plan_assets_index(&reference, json.asset_index.as_ref()).unwrap();
+        assert_eq!(
+            index.url.as_deref(),
+            Some("${MC_META}/v1/packages/beef/5.json")
+        );
         assert_eq!(index.save_to, PathBuf::from("/mc/assets/indexes/5.json"));
         assert_eq!(
             index.into_item(&options).urls,
@@ -367,7 +398,8 @@ mod tests {
             }"#,
         );
 
-        let client = plan_client_jar(&reference, &json).unwrap();
+        let client =
+            plan_client_jar(&reference, json.downloads.as_ref(), json.jar.as_deref()).unwrap();
         assert_eq!(client.save_to, PathBuf::from("/mc/versions/base/base.jar"));
         assert_eq!(client.name, "base.jar");
     }
@@ -385,12 +417,14 @@ mod tests {
                     {"name": "reposed:lib:3", "url": "https://maven.example.com/repo/"},
                     {"name": "net.minecraftforge:forge:1.20.1-47.2.0", "url": "https://maven.minecraftforge.net/"},
                     {"name": "skipped:lib:9", "rules": [{"action": "allow", "os": {"name": "plan9"}}]},
+                    {"name": "empty:url:1",
+                     "downloads": {"artifact": {"url": "", "path": "empty/url/1/url-1.jar"}}},
                     {"name": "old:lib:4", "downloads": {"artifact": {"url": "https://example.com/x.jar"}}}
                 ]
             }"#,
         );
 
-        let planned = plan_libraries(&reference, &json);
+        let planned = plan_libraries(&reference, &json.libraries);
         let names: Vec<&str> = planned.iter().map(|file| file.name.as_str()).collect();
         assert_eq!(
             names,
@@ -399,34 +433,47 @@ mod tests {
                 "lib-2.jar",
                 "lib-3.jar",
                 "forge-1.20.1-47.2.0.jar",
+                "url-1.jar",
                 "lib-4.jar"
             ]
         );
 
         // 普通库：用文档里的（已模板化的）地址
-        assert_eq!(planned[0].url, "${MC_MAVEN}/normal/lib/1/lib-1.jar");
+        assert_eq!(
+            planned[0].url.as_deref(),
+            Some("${MC_MAVEN}/normal/lib/1/lib-1.jar")
+        );
         // 没有仓库地址的困难库：走官方库仓库
-        assert_eq!(planned[1].url, "${MC_MAVEN}/difficult/lib/2/lib-2.jar");
+        assert_eq!(
+            planned[1].url.as_deref(),
+            Some("${MC_MAVEN}/difficult/lib/2/lib-2.jar")
+        );
         assert_eq!(
             planned[1].save_to,
             PathBuf::from("/mc/libraries/difficult/lib/2/lib-2.jar")
         );
         // 自带仓库地址的困难库：仓库地址不认得，原样拼上去
         assert_eq!(
-            planned[2].url,
-            "https://maven.example.com/repo/reposed/lib/3/lib-3.jar"
+            planned[2].url.as_deref(),
+            Some("https://maven.example.com/repo/reposed/lib/3/lib-3.jar")
         );
         // forge 的困难库同样按 {url}/{lib_path} 下载（不再跳过）
         assert_eq!(
-            planned[3].url,
-            "${FORGE_MAVEN}/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0.jar"
+            planned[3].url.as_deref(),
+            Some("${FORGE_MAVEN}/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0.jar")
         );
         // 规则不通过的库不下
         assert!(!names.iter().any(|name| name.contains("lib-9")));
-        // 只给了 url 没给 path 的 artifact：按 maven 坐标推导路径
-        assert_eq!(planned[4].url, "https://example.com/x.jar");
+        // 空 URL 的 artifact 仍然进入计划，只是没有可下载地址（例如 Forge 安装器内嵌的库）
+        assert_eq!(planned[4].url, None);
         assert_eq!(
             planned[4].save_to,
+            PathBuf::from("/mc/libraries/empty/url/1/url-1.jar")
+        );
+        // 只给了 url 没给 path 的 artifact：按 maven 坐标推导路径
+        assert_eq!(planned[5].url.as_deref(), Some("https://example.com/x.jar"));
+        assert_eq!(
+            planned[5].save_to,
             PathBuf::from("/mc/libraries/old/lib/4/lib-4.jar")
         );
     }
@@ -470,14 +517,14 @@ mod tests {
         );
 
         let (os, arch) = (Os::current(), Arch::X86_64);
-        let planned = plan_native_jars(&reference, &json, os, arch);
+        let planned = plan_native_jars(&reference, &json.libraries, os, arch);
         let names: Vec<&str> = planned.iter().map(|file| file.name.as_str()).collect();
         // 平台不匹配的 natives 不下载；`${arch}` 会被替换成 64
         #[cfg(target_os = "linux")]
         {
             assert!(names.contains(&"lwjgl-3.3.1-natives-linux.jar"));
             assert!(names.contains(&"arch-1-natives-linux-64.jar"));
-            let natives = plan_natives(&reference, &json, os, arch);
+            let natives = plan_natives(&reference, &json.libraries, os, arch);
             assert_eq!(natives.len(), 2);
             assert_eq!(
                 natives[0].0,
@@ -487,11 +534,11 @@ mod tests {
         #[cfg(not(target_os = "linux"))]
         {
             assert!(!names.iter().any(|name| name.contains("natives")));
-            assert!(plan_natives(&reference, &json, os, arch).is_empty());
+            assert!(plan_natives(&reference, &json.libraries, os, arch).is_empty());
         }
 
         // 32 位时 `${arch}` 取 32，找不到对应分类器就不下载
-        let planned = plan_native_jars(&reference, &json, os, Arch::X86);
+        let planned = plan_native_jars(&reference, &json.libraries, os, Arch::X86);
         assert!(!planned.iter().any(|file| file.name.contains("arch-1")));
     }
 
@@ -510,7 +557,7 @@ mod tests {
         )
         .unwrap();
 
-        let planned = plan_asset_objects(&reference, &json, &index, &options);
+        let planned = plan_asset_objects(&reference, json.asset_index_id(), &index, &options);
         let names: Vec<&str> = planned.iter().map(|file| file.name.as_str()).collect();
         // 虚拟索引：音乐被跳过，hash 太短的被跳过
         assert_eq!(names, vec!["icon_16x16.png"]);
@@ -518,14 +565,14 @@ mod tests {
             planned[0].save_to,
             PathBuf::from("/mc/assets/virtual/legacy/icons/icon_16x16.png")
         );
-        assert_eq!(planned[0].url, "${MC_ASSETS}/bb/bb22");
+        assert_eq!(planned[0].url.as_deref(), Some("${MC_ASSETS}/bb/bb22"));
 
         // 不跳过音乐 + 非虚拟索引 → 走 objects 目录
         let options = options.with_skip_music(false);
         let index: AssetIndexFile =
             serde_json::from_str(r#"{"objects": {"music/a.ogg": {"hash": "aa11", "size": 1}}}"#)
                 .unwrap();
-        let planned = plan_asset_objects(&reference, &json, &index, &options);
+        let planned = plan_asset_objects(&reference, json.asset_index_id(), &index, &options);
         assert_eq!(planned.len(), 1);
         assert_eq!(
             planned[0].save_to,
@@ -556,7 +603,7 @@ mod tests {
     fn planned_files_resolve_against_the_configured_mirror() {
         let options = options();
         let planned = PlannedFile {
-            url: "${MC_MAVEN}/a/b.jar".to_string(),
+            url: Some("${MC_MAVEN}/a/b.jar".to_string()),
             save_to: PathBuf::from("/mc/libraries/a/b.jar"),
             checksum: Some(Checksum::sha1("abc")),
             size: Some(7),
@@ -577,7 +624,7 @@ mod tests {
     fn planned_files_expand_into_mirror_candidates() {
         let options = GameFilesOptions::new(DownloadSource::from_policy(MirrorPolicy::MirrorFirst));
         let planned = PlannedFile {
-            url: "${MC_MAVEN}/a/b.jar".to_string(),
+            url: Some("${MC_MAVEN}/a/b.jar".to_string()),
             save_to: PathBuf::from("/mc/libraries/a/b.jar"),
             checksum: None,
             size: None,

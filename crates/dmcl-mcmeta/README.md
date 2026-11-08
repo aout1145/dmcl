@@ -51,14 +51,17 @@ macros.rs    string_enum! 内部宏
 
 #### patch
 
-`VersionJsonPatch` 描述要改什么：`libraries`、`tweakers`、可选的 `mainClass`。对当前版本
-依次应用 patch：
+`VersionJsonPatch` 描述要改什么：`libraries`、`tweakers`、可选的 `mainClass` /
+`arguments`，以及只用于显示的 `type` / `releaseTime`。对当前版本依次应用 patch：
 
 - 库的合并顺序与普通合并相同；和原版库同键 + 同 `rules` 时仍按版本号比较，
   和之前应用过的 patch 同键 + 同 `rules` 时由后应用的 patch **无条件覆盖**；
 - `mainClass` 有值就替换；
+- `arguments` 按 `jvm` / `game` / `default-user-jvm` 分别追加到当前版本的参数末尾；
+  当前版本只有 `minecraftArguments` 时，把 patch 参数转成字符串 token 接到末尾；
 - 每个 tweaker 写成 `--tweakClass <tweaker>`：先移除已有的同名参数对，再追加到游戏参数末尾
   （有 `arguments` 时写 `arguments.game`，否则写 `minecraftArguments`）；
+- `type` / `releaseTime` 只保留在 patch 历史里供显示，不覆盖版本 JSON 的对应字段；
 - 第一次应用 patch 时把未修改的 JSON 放进 `patches[0]`，之后每个 patch 依次追加。
 
 `patches[0]` 是原版快照，`patches[1..]` 是应用过的 patch，可用于显示或回退。

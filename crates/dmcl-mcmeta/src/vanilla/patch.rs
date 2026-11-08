@@ -1,14 +1,15 @@
 //! 版本 JSON 的 patch 与 patch 历史。
 //!
-//! patch 是一份只描述"要改什么"的文档：库、主类、tweaker。应用过的 patch 会追加到
-//! [`VersionJson::patches`]；`patches[0]` 是应用前的原版快照。
+//! patch 是一份只描述"要改什么"的文档：库、主类、启动参数、tweaker，以及仅用于显示的
+//! `type` / `releaseTime`。应用过的 patch 会追加到 [`VersionJson::patches`]；
+//! `patches[0]` 是应用前的原版快照。
 
 use serde_json::Value;
 
 use crate::json::JsonMap;
 use crate::vanilla::merge::{combine_libraries, same_rules, version_is_higher};
 use crate::vanilla::rules::Rule;
-use crate::vanilla::version::{Argument, Library, VersionJson};
+use crate::vanilla::version::{Argument, Arguments, Library, VersionJson};
 
 /// 一份版本 patch。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -23,6 +24,19 @@ pub struct VersionJsonPatch {
     pub tweakers: Vec<String>,
     #[serde(default, rename = "mainClass", skip_serializing_if = "Option::is_none")]
     pub main_class: Option<String>,
+    /// 这个 patch 对应的版本类型；只用于显示，不写回版本 JSON。
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// 这个 patch 对应的发布时间；只用于显示，不写回版本 JSON。
+    #[serde(
+        default,
+        rename = "releaseTime",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub release_time: Option<String>,
+    /// 要追加到目标版本参数末尾的启动参数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Arguments>,
     /// 未知字段原样保留（例如 `priority`、`min_java_version`）。
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -77,6 +91,10 @@ impl VersionJson {
                 self.main_class = Some(main_class.clone());
             }
 
+            if let Some(arguments) = &patch.arguments {
+                append_patch_arguments(self, arguments);
+            }
+
             for tweaker in &patch.tweakers {
                 append_tweaker(self, tweaker);
             }
@@ -114,6 +132,65 @@ fn is_forced(library: &Library, forced: &[(String, Option<Vec<Rule>>)]) -> bool 
     forced.iter().any(|(forced_key, forced_rules)| {
         forced_key == &key && same_rules(forced_rules, &library.rules)
     })
+}
+
+/// 把 patch 的 `arguments` 追加到目标版本的参数末尾。
+///
+/// 目标版本有 `arguments` 时按 `jvm` / `game` / `default-user-jvm` 分别追加；
+/// 只有 `minecraftArguments`（1.12.2 及更早）时，把 patch 参数按字符串 token 接到末尾。
+fn append_patch_arguments(json: &mut VersionJson, patch: &Arguments) {
+    if let Some(arguments) = json.arguments.as_mut() {
+        append_argument_list(&mut arguments.jvm, &patch.jvm);
+        append_argument_list(&mut arguments.game, &patch.game);
+        append_argument_list(&mut arguments.default_user_jvm, &patch.default_user_jvm);
+        crate::json::merge_json_map(&mut arguments.extra, &patch.extra);
+        return;
+    }
+
+    let mut tokens = Vec::new();
+    for list in [&patch.game, &patch.jvm, &patch.default_user_jvm]
+        .into_iter()
+        .flatten()
+    {
+        push_plain_arguments(list, &mut tokens);
+    }
+    if tokens.is_empty() {
+        return;
+    }
+
+    let arguments = json.minecraft_arguments.get_or_insert_with(String::new);
+    if !arguments.is_empty() {
+        arguments.push(' ');
+    }
+    arguments.push_str(&tokens.join(" "));
+}
+
+fn append_argument_list(target: &mut Option<Vec<Argument>>, source: &Option<Vec<Argument>>) {
+    let Some(source) = source else {
+        return;
+    };
+    match target {
+        Some(target) => target.extend(source.iter().cloned()),
+        None => *target = Some(source.clone()),
+    }
+}
+
+fn push_plain_arguments(arguments: &[Argument], out: &mut Vec<String>) {
+    for argument in arguments {
+        match argument {
+            Argument::Plain(value) => out.push(value.clone()),
+            Argument::Ruled(ruled) => {
+                if let Some(value) = &ruled.value {
+                    value.push_into(out);
+                }
+            }
+            Argument::Other(value) => {
+                if let Some(value) = value.as_str() {
+                    out.push(value.to_string());
+                }
+            }
+        }
+    }
 }
 
 const TWEAK_CLASS: &str = "--tweakClass";
@@ -214,6 +291,75 @@ mod tests {
         assert_eq!(json.patches[0]["mainClass"], "A");
         assert!(json.patches[0].get("patches").is_none());
         assert_eq!(json.patches[1], serde_json::to_value(&patch).unwrap());
+    }
+
+    #[test]
+    fn patch_arguments_are_appended_after_the_existing_arguments() {
+        let mut json = version(serde_json::json!({
+            "arguments": {
+                "jvm": ["-Xa"],
+                "game": ["--one"]
+            }
+        }));
+        let patch = patch(serde_json::json!({
+            "name": "p",
+            "version": "1",
+            "arguments": {
+                "jvm": ["-Xb"],
+                "game": ["--two"],
+                "default-user-jvm": ["-Dd"]
+            }
+        }));
+
+        json.apply_patch(&patch).unwrap();
+
+        let arguments = json.arguments.as_ref().unwrap();
+        assert_eq!(plain_arguments(&arguments.jvm), ["-Xa", "-Xb"]);
+        assert_eq!(plain_arguments(&arguments.game), ["--one", "--two"]);
+        assert_eq!(plain_arguments(&arguments.default_user_jvm), ["-Dd"]);
+    }
+
+    #[test]
+    fn patch_arguments_are_appended_to_legacy_minecraft_arguments() {
+        let mut json = version(serde_json::json!({
+            "minecraftArguments": "--username x"
+        }));
+        let patch = patch(serde_json::json!({
+            "name": "p",
+            "version": "1",
+            "arguments": {"game": ["--two", "--three"]}
+        }));
+
+        json.apply_patch(&patch).unwrap();
+
+        assert_eq!(
+            json.minecraft_arguments.as_deref(),
+            Some("--username x --two --three")
+        );
+    }
+
+    #[test]
+    fn patch_type_and_release_time_are_display_only() {
+        let mut json = version(serde_json::json!({
+            "type": "release",
+            "releaseTime": "2023-01-01T00:00:00+00:00"
+        }));
+        let patch = patch(serde_json::json!({
+            "name": "p",
+            "version": "1",
+            "type": "snapshot",
+            "releaseTime": "2024-02-02T00:00:00+00:00"
+        }));
+
+        json.apply_patch(&patch).unwrap();
+
+        assert_eq!(json.kind.as_deref(), Some("release"));
+        assert_eq!(
+            json.release_time.as_deref(),
+            Some("2023-01-01T00:00:00+00:00")
+        );
+        assert_eq!(json.patches[1]["type"], "snapshot");
+        assert_eq!(json.patches[1]["releaseTime"], "2024-02-02T00:00:00+00:00");
     }
 
     #[test]

@@ -147,7 +147,7 @@ pub async fn check_integrity(
         };
         status.missing.push(MissingFile {
             path: file.save_to,
-            url: Some(file.url),
+            url: file.url,
             checksum: file.checksum,
             reason,
         });
@@ -285,6 +285,54 @@ mod tests {
         assert_eq!(status.checked, 1);
 
         // 内容被改坏后应当报「内容不符」
+        tokio::fs::write(&library, b"corrupted").await.unwrap();
+        let status = check_integrity(&resolved(&root).await, &options())
+            .await
+            .unwrap();
+        assert_eq!(status.missing.len(), 1);
+        assert_eq!(status.missing[0].reason, MissingReason::Incomplete);
+    }
+
+    #[tokio::test]
+    async fn a_library_without_a_download_url_is_still_checked_locally() {
+        let root = work_dir("no-url");
+        let content = b"embedded library";
+        let sha1 = dmcl_download::hash_bytes(dmcl_download::HashAlgorithm::Sha1, content);
+        write_json(
+            &root,
+            serde_json::json!({
+                "id": "1.0",
+                "libraries": [{
+                    "name": "a:a:1",
+                    "downloads": {"artifact": {
+                        "url": "",
+                        "path": "a/a/1/a-1.jar",
+                        "sha1": sha1,
+                        "size": content.len()
+                    }}
+                }]
+            }),
+        )
+        .await;
+
+        let status = check_integrity(&resolved(&root).await, &options())
+            .await
+            .unwrap();
+        assert_eq!(status.checked, 1);
+        assert_eq!(status.missing.len(), 1);
+        assert_eq!(status.missing[0].url, None);
+        assert_eq!(status.missing[0].reason, MissingReason::Missing);
+
+        let library = root.join("libraries/a/a/1/a-1.jar");
+        tokio::fs::create_dir_all(library.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&library, content).await.unwrap();
+        let status = check_integrity(&resolved(&root).await, &options())
+            .await
+            .unwrap();
+        assert!(status.is_complete(), "{:?}", status.missing);
+
         tokio::fs::write(&library, b"corrupted").await.unwrap();
         let status = check_integrity(&resolved(&root).await, &options())
             .await

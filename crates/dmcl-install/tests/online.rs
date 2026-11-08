@@ -90,7 +90,7 @@ async fn planning_holds_for_a_real_version_json() {
         .await
         .unwrap()
         .json;
-    let planned = plan_libraries(&options.version(VERSION), &json);
+    let planned = plan_libraries(&options.version(VERSION), &json.libraries);
     assert!(!planned.is_empty());
 
     for file in &planned {
@@ -106,7 +106,12 @@ async fn planning_holds_for_a_real_version_json() {
         // 1.7.10 有 linux natives，必须规划到解压清单里
     }
     // 客户端 jar 也在计划里
-    let client = dmcl_game::plan_client_jar(&options.version(VERSION), &json).unwrap();
+    let client = dmcl_game::plan_client_jar(
+        &options.version(VERSION),
+        json.downloads.as_ref(),
+        json.jar.as_deref(),
+    )
+    .unwrap();
     assert!(client
         .into_item(&options.game)
         .urls
@@ -128,7 +133,7 @@ async fn a_few_planned_libraries_really_download() {
         .unwrap()
         .json;
     // 挑几个小文件，避免测试太重
-    let small: Vec<_> = plan_libraries(&options.version(VERSION), &json)
+    let small: Vec<_> = plan_libraries(&options.version(VERSION), &json.libraries)
         .into_iter()
         .take(3)
         .collect();
@@ -216,14 +221,16 @@ async fn optifine_downloads_extracts_launchwrapper_and_rewrites_the_json() {
                     &options, &downloads, "1.12.2", "HD_U_G5", false, &ctx,
                 )
                 .await?;
-                dmcl_install::optifine::install_optifine(
-                    &previous,
-                    &files,
-                    &version_name,
-                    false,
-                    &ctx,
+                let patch = dmcl_install::optifine::install_optifine(&files, false);
+                let mut json = previous.json.clone();
+                json.apply_patch(&patch)?;
+                json.resolve_official_urls();
+                tokio::fs::write(
+                    dmcl_mcmeta::layout::version_json_path(&previous.reference.root, &version_name),
+                    serde_json::to_vec(&json)?,
                 )
-                .await
+                .await?;
+                Ok(())
             }
         }),
     );

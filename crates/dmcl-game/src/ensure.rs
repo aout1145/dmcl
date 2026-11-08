@@ -20,7 +20,8 @@ pub async fn ensure_asset_index(
     downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<Option<AssetIndexFile>> {
-    let Some(planned) = plan_assets_index(&version.reference, &version.json) else {
+    let Some(planned) = plan_assets_index(&version.reference, version.json.asset_index.as_ref())
+    else {
         return Ok(None);
     };
     let path = planned.save_to.clone();
@@ -42,7 +43,11 @@ pub async fn ensure_client_jar(
     ctx: &TaskContext,
 ) -> Result<()> {
     let mut planned = Vec::new();
-    if let Some(client) = plan_client_jar(&version.reference, &version.json) {
+    if let Some(client) = plan_client_jar(
+        &version.reference,
+        version.json.downloads.as_ref(),
+        version.json.jar.as_deref(),
+    ) {
         planned.push(client);
     }
     download_planned(options, downloads, "客户端 jar", planned, ctx).await
@@ -55,7 +60,7 @@ pub async fn ensure_libraries(
     downloads: &Arc<DownloadContext>,
     ctx: &TaskContext,
 ) -> Result<()> {
-    let planned = plan_libraries(&version.reference, &version.json);
+    let planned = plan_libraries(&version.reference, &version.json.libraries);
     download_planned(options, downloads, "依赖库", planned, ctx).await
 }
 
@@ -69,7 +74,12 @@ pub async fn ensure_assets(
     let Some(index) = ensure_asset_index(version, options, downloads, ctx).await? else {
         return Ok(());
     };
-    let planned = plan_asset_objects(&version.reference, &version.json, &index, options);
+    let planned = plan_asset_objects(
+        &version.reference,
+        version.json.asset_index_id(),
+        &index,
+        options,
+    );
     download_planned(options, downloads, "资源", planned, ctx).await
 }
 
