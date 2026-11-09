@@ -3,166 +3,35 @@
 `crates/dmcl/src/gui/gtk4/pages/home` —— 一个 Minecraft 根目录下的实例列表、运行状态与
 游戏进程。整体架构见 [gtk4/README.md](../../README.md)。
 
+## 职责
+
+- 监听该 root 下 `versions/` 的变化，展示实例磁贴并按分类分组；
+- 创建实例（跳转到新建实例页）；
+- 启动 / 取消 / 停止实例，并跟踪游戏进程状态；
+- 读取实例配置并处理启动覆盖与警告。
+
 ## 一个主页 = 一个 root
 
-`HomePage` 的初始化参数里带该 root 已展开的 `PathBuf`。版本目录监听、实例配置读取、
-安装参数与启动参数都只用这个 root，不再读取全局 `minecraft_root`。`Config` 不随参数传入：
-页面持有全局 `ConfigStore` 的只读句柄，启动 / 安装时现读，运行时改配置立即生效。
+`HomePage` 初始化时带该 root 的路径。版本目录监听、实例配置读取、安装参数与启动参数都只用
+这个 root，不读取全局 `minecraft_root`。页面持有全局 `ConfigStore` 的只读句柄，启动 / 安装
+时现读配置，运行时改配置立即生效。
 
-主页标签可以随时关闭，但关闭只影响显示：`HomePage` 从程序启动起就常驻，标签只是它的
-一个挂载点。
+主页从程序启动起常驻，标签只是挂载点：关闭标签不会中止目录 watcher、monitor task 或
+`GameMonitor`，游戏继续运行；重新打开同一 root 时把同一个根 widget 挂回新标签，选中项、
+运行状态和启动链都保留。
 
-- 关闭标签不会中止版本目录 watcher；
-- 关闭标签不会中止 monitor task，也不会 drop `GameMonitor`；
-- 游戏进程继续独立运行；
-- 重新打开同一 root 时把同一个根 widget 挂回新标签，选中项、运行状态和启动链都保留。
+## 设计约定
 
-最后一个主页标签也可以关闭，此时内容区为空，仍可从标题栏的根目录菜单重新打开。
-
-## 视图
-
-`HomePage` 是 relm4 组件，**视图用 `view!` 声明**（`GtkOverlay` + `GtkStack` +
-`GtkBox` + `AdwWrapBox` + 底部胶囊操作栏），`#[watch]` 负责在模型变化后刷新空状态 / 操作栏文案 / 图标 /
-可用性；实例按分类分组，每组用 `FactoryVecDeque<CategorySection>`，组内再用
-`FactoryVecDeque<InstanceCard>` 排磁贴。
-
-- 磁贴单击选中、双击启动；底部胶囊操作栏显示启动 / 取消 / 停止、管理、取消选择。
-- 右下角有一个悬浮的圆形 `+` 按钮：点开模态「创建实例」对话框。对话框有标题栏和关闭
-  按钮；目前只有「自定义」一项，副标题是「创建自定义的 Minecraft 实例」。选择后主页发出
-  `HomeOut::CreateCustom { categories }`，App 使用这个主页创建时捕获的 root 和分类拷贝打开
-  `CustomPage`，不依赖当前选中的标签。
-- **运行中**时磁贴右上角显示小绿点；启动链阶段不显示。
-- 选中项按**版本名**保存；列表重建后按名字恢复。
-
-## 实例列表
-
-`versions/` 目录用 `notify` watch；`versions` 还不存在时先 watch 最近存在的祖先目录，
-它创建后再重新挂到 `versions`。每个 `versions/<名字>/` 也各挂一个非递归 watcher，专门
-接收该实例 `dmcl.json` 的变化（手改分类、安装成功后写入分类）；不使用递归监听，避免
-安装或游戏在版本目录深处产生大量无关事件。事件先做 200ms 合并，再发 `HomeMsg::Reload`，
-不做固定轮询。
-
-显示列表是：
-
-```text
-installed（目录里的版本，保持顺序）
-  ∪
-runtimes（Starting / Running / Stopping 的版本）
-```
-
-活动但目录里暂时不存在的版本会追加成幽灵卡片，直到进程退出；这样不会因为目录被删就
-失去停止入口。
-
-`Reload` 重建卡片时状态从 `runtimes` 取，不会把 Running 重置成 Idle。
-
-## 分类分组
-
-实例分类只由 `versions/<名字>/dmcl.json` 的 `instance.category` 决定，值就是分类名；
-缺省或空白归入「未分类」。分组顺序按分类在实例列表中第一次出现的顺序，「未分类」固定
-放最后；组内保持 `visible_versions` 的顺序。
-
-主页读取分类时只解析 `instance.category`，不校验 `launch`；坏文件按未分类处理，不会
-因为一个实例的分类问题让整个列表读取失败。活动但目录里暂时不存在的幽灵卡片沿用上一次
-读到的分类。
-
-## 运行状态
-
-每个活动实例用：
-
-```text
-Idle / Starting / Running / Stopping
-```
-
-`Idle` 不进入 `runtimes`；没有条目就是 Idle。
-
-运行状态只有一个来源：本页启动成功后拿到的 `GameMonitor`。
-
-启动链成功拿到 `GameMonitor` 后，主页启动一个 monitor task：
-
-```text
-select! {
-    status = monitor.wait() => 自然退出
-    _ = stop_rx => kill + wait
-}
-  ↓
-HomeMsg::MonitorExited { name, stopped, abnormal }
-```
-
-它能精确判断正常退出、异常退出、用户主动停止。关闭标签页后 monitor task 和 `GameMonitor`
-继续工作；重新打开页面时看到的就是最新状态。只有程序退出时才会中止这些任务。
-
-## Java 选择
-
-主页启动链使用 `home/java.rs` 的 `GuiJavaResolver`，与 CLI「只认配置」的策略不同：
-
-- `JavaChoice::Named`：只按配置名取；路径失效直接报错，不自动扫描或下载；
-- `JavaChoice::Auto`：先从 `javas` 里路径存在的条目自动选择；没有可用条目时扫描本机，
-  把结果合并进 `javas`；仍然没有匹配版本时由启动链的「选择 Java」步骤下载 Mojang 的
-  JRE 到官方启动器的 runtime 目录，并通过 `GuiJavaInstalledHook` 写回 `javas`。写配置
-  失败静默忽略，本次仍使用下载结果；
-- 选中的 Java 与版本要求不匹配时，由启动链的「选择 Java」步骤向用户确认，确认后才继续。
-
-安装器 processor 用的 Java 不走这个解析器：`Config::install_options` 使用
-`download.java`（默认 `autoselect`），从 `javas` 自动选择并要求精确匹配版本要求，没有
-匹配时扫描本机，仍然没有就由安装流程用当前任务上下文下载到官方 runtime 目录（进度进入
-安装任务）；与启动选中的 Java 无关。
-
-## 启动 / 停止
-
-- **启动**：同步读取实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」
-  和本主页 root 拼出 `launch_chain`，交给 `Shell::run`，并立即用 `Shell::open_tasks`
-  弹出任务对话框。全局 `launch` 从共享配置的 `ConfigRef` 现读，不缓存启动那一刻的副本。
-- 启动链的完成任务不挂在 `HomePage` 的 `TaskGuard` 上：关闭标签后启动链继续跑，
-  结果仍会回到常驻的 `HomePage`。
-- **Starting 阶段取消**：取消启动链；如果链刚好成功，`Launched` 会看到 `Stopping`，
-  立即给 monitor task 发停止信号。
-- **Running 阶段停止**：给 monitor task 发 stop。
-- **取消任务**：任务对话框自己持有 `CancelHandle`，与主页停止是两条路径。
-
-## 提示
-
-`HomePage` 持有自己的 `PageToast`：
-
-- 游戏正常退出 / 异常退出 / 用户停止、启动失败、版本目录 watcher 失败走
-  `Shell::global_toast`，标签关闭时也能看到。
-- 页面内反馈走 `Shell::page_toast`，页面不可见时直接丢弃。包括“正在启动 / 已在运行 /
-  正在停止”、读取已安装版本失败和管理页占位提示。
-
-## 消息
-
-`HomeMsg`（`message.rs`）包括：
-
-```text
-Reload / Loaded
-Select / Deselect / Launch / Toggle
-LaunchConfirmed { name, launch }
-Launched { name, monitor }
-LaunchFailed { name }
-MonitorExited { name, stopped, abnormal }
-WatchFailed(String)
-Manage
-CreateInstance
-ConfigChanged
-```
-
-对外只输出 `HomeOut::CreateCustom { categories }`；App 用创建主页时捕获的 root 打开新建
-实例页，并带上分类建议的拷贝。
-
-迟到消息按 runtime 是否存在、来源是否匹配来忽略；不使用 run id。
-
-## 实例配置警告
-
-实例目录里的 `dmcl.json` 的 `launch` 段只覆盖全局启动配置，`instance` 段是实例元数据
-（目前只有分类）。启动覆盖是只读的；读取后若有坏字段、未知键或失效的账户 / Java 选择，
-先弹 `AdwAlertDialog` 逐条列出警告；「取消」是默认响应，实例保持 `Idle`；「继续启动」才
-用内存里修复过的 `LaunchConfig` 开始启动链。不写回实例文件。分类由主页单独读取，不走这条
-启动警告流程。
-
-## 测试
-
-- `watch_target`：`versions` 存在时监听它，否则回退到最近存在的祖先目录。
-- `visible_versions`：保留 installed 顺序，活动幽灵版本追加并去重。
-- `group_instances`：分类按首次出现排序、未分类放最后、空分类归入未分类。
-- `event_changes_versions`：只接受直接子项的创建 / 删除 / 重命名，以及
-  `versions/<名字>/dmcl.json`（含写入临时文件）的变化；忽略版本目录内其它文件和 metadata
-  变化。
+- 视图用 `view!` 声明，实例按分类分组，组内用 `FactoryVecDeque<InstanceCard>` 排磁贴；
+  `#[watch]` 只负责模型变化后的刷新，不在 `update` 里重建控件树。
+- 显示列表 = 目录里已安装的版本 ∪ 正在启动 / 运行 / 停止的版本。活动但目录暂时不存在的
+  版本追加为幽灵卡片，保证仍有停止入口。
+- 分类只由实例 `dmcl.json` 的 `instance.category` 决定；缺省或空白归入「未分类」，分组顺序
+  按分类首次出现的顺序，未分类固定最后。坏文件按未分类处理，不影响整个列表。
+- 运行状态只有一份：`Idle / Starting / Running / Stopping`，来源是本页启动成功后拿到的
+  `GameMonitor`。目录重新加载时从运行状态表恢复，不把 Running 重置成 Idle。
+- 启动时先读实例配置；有警告先弹确认框，确认后用「全局 `launch` + 实例覆盖」和本页 root
+  拼出启动链，交给 `Shell` 并弹出任务对话框。启动链不挂在标签生命周期上，关闭标签后继续。
+- 启动 Java 使用主页自己的解析策略：按名指定时只认配置；自动选择时先读配置缓存，没有可用
+  条目才扫描本机，仍没有匹配版本时由启动链下载 Mojang JRE 并写回配置。
+- 游戏退出 / 启动失败等应用级反馈走全局提示，页面内反馈走页面提示（页面不可见时丢弃）。

@@ -6,107 +6,31 @@
 
 ## 模块
 
-- `mod.rs`：页面组件、状态、`init` / `update` 与安装流程；
-- `message.rs`：`CustomMsg`；
-- `loaders.rs`：`LoaderDef` / `LOADER_DEFS`、运行时 `LoaderSlot` 与 `loader_init`；
-- `versions.rs`：各数据源的取数器与 `VersionItem` 适配。
+```text
+mod.rs        页面组件、状态、init / update 与安装流程
+message.rs    CustomMsg
+loaders.rs    LoaderDef / LOADER_DEFS、运行时 LoaderSlot 与 loader_init
+versions.rs   各数据源的取数器与 VersionItem 适配
+```
 
 ## 装配
 
-`CustomPage` 的 `Init = PageInit<(Rc<Shell>, PathBuf, Vec<String>)>`。第三个参数是打开页面
-时从主页拷来的已有分类，用作输入建议。页面由
-`InstanceSummary` 与五个 `VersionSelect` 组成：
+`CustomPage` 由 `InstanceSummary` 与五个 `VersionSelect`（MC + 四种加载器）组成。打开页面时
+从主页传入 `Shell`、该主页的根目录和已有分类拷贝；安装目标、实例是否已存在都只用这个 root。
+下载源与安装参数从全局共享配置现读，页面不持有 `Config` 副本。
 
-- `InstanceSummary` 负责名称 / 分类 / 图标 / 安装按钮：格式校验、`versions/<名称>` 冲突检查
-  与按钮可用性都在组件内完成；分类建议是主页已有分类的拷贝，组件 Init 还收到安装根目录；
-- MC 一行 + Forge / Fabric / NeoForge / OptiFine 四个加载器行；
-- 打开时只给 MC 下拉发一次 `SetContext(Some(""))`，让清单取数跑起来（MC 取数器忽略上下文）；
-- 主页右下角「新建实例」→「自定义」把 `Rc<Shell>`、该主页的根目录路径和已有分类拷贝传进来；
-  安装目标、实例是否已存在都只用这个 root；`download::common::CSS` 注册到全局样式。
-- 下载源与安装参数从全局共享配置现读（`ConfigRef`），页面不持有 `Config` 副本。
+## 设计约定
 
-整页包在 `GtkScrolledWindow` 里；展开多个版本列表时页面可以滚。
-
-## 自动命名与图标
-
-MC 或任一加载器选择变化后，页面用
-`dmcl_install::default_version_name(mc, [(LoaderKind, Some(label))…])`（CLI 与 GUI 共用）算
-默认名，推 `SetAutoName`。
-
-- 加载器这里传**展示版本**（Forge 是 `version` 字段，不含 mcversion 前缀），安装仍用条目 id
-  （Forge `full_name`）。
-- 有选中的加载器就推 `SetAutoIcon(Loader(kind))`，否则 `Initials`。
-- `InstanceSummary` 用 `name_user_modified` / `icon_user_modified` 守住用户输入：改过就
-  **永不**再应用自动值；名称清空则视为「从未编辑」、恢复跟随自动命名；图标菜单的「自动」
-  会清掉修改标记、恢复跟随。
-- 标签标题随名称显示为 `安装 <名称>`（还没名字时 `安装 新实例`）。
-- MC 上下文**真正变化**时才清空加载器选择并重发 `SetContext`；重复选同一个 MC 版本保留
-  加载器选择。
-
-## 名称校验与冲突检查
-
-名称的格式校验、`versions/<名称>` 冲突检查和安装按钮可用性都在 `InstanceSummary` 内完成：
-
-- 名称变化（自动命名或用户编辑）时先调 `dmcl_install::validate_version_name`，非法时提示
-  「实例名称不合法」并禁用安装；名称不合法时不会去探测磁盘；
-- 合法后再用 `dmcl_mcmeta::layout::version_dir(root, name).exists()` 判断是否已被占用，
-  同名时提示「实例已经存在」并禁用安装；
-- 空名称不算错误（不显示提示、输入框不标红），但安装按钮不可用；
-- 页面通过 `SetReady` 告诉组件「名称之外的条件是否满足」（即是否已选 MC 版本）；
-- 最终的同名 / 非法名称仍由 `install_task` 把关（创建版本目录时失败）。
-
-## 加载器互斥
-
-`LOADER_DEFS` 是 `LoaderDef { kind, mutex_groups }` 常量表，页面持 `Vec<LoaderSlot>`
-（定义 + 控制器 + 当前选择）。
-
-两行只要共享任意一个组就冲突：选中一个就对其它冲突项发 `SetConflict(Some(选中项名字))`，
-组件禁用该行并显示「与 xx 冲突」；取消选择后发 `None` 恢复。Forge / Fabric / NeoForge
-共享 `"loader"`，Fabric / NeoForge / OptiFine 共享 `"optifine"`，因此 Forge 可以和 OptiFine
-叠加，而 Fabric / NeoForge 与两者都冲突。加新加载器或调整组合只改表。
-
-## 版本适配层
-
-`versions.rs` 里的纯函数把各数据源转成 `VersionItem`：
-
-- **MC**：`latest.release` → 「最新正式版」，`latest.snapshot` → 「最新预览版」；两者都可进
-  置顶区。`old_alpha` / `old_beta`（以及部分镜像的 `alpha` / `beta`）合并成 `old` 类别，
-  供「远古版」chip 过滤。
-- **Forge**：第一条 → 「最新版本」，`branch == "recommended"` → 「推荐版本」；类别 chips
-  暂缺（TODO）。列表展示与自动命名用 `version` 字段（如 `47.2.0`），安装 id 仍是
-  `full_name`（如 `1.20.1-47.2.0`）。
-- **Fabric**：不区分版本类型（和 Forge / NeoForge 一样没有 chips）；第一条 → 「最新版本」，
-  第一条 `stable` → 「推荐版本」。两者可以不是同一条。
-- **NeoForge**：第一条 → 「最新版本」，没有 recommended / stable，也没有 chips。
-- **OptiFine**：分「稳定版 / 预览版」两类 chips（默认都开）；最新稳定版与最新预览版各
-  带一个置顶徽标，其余条目只按顺序展示。详情列显示该版本推荐的 Forge 版本（如果有）。
-- 空列表是常态（Forge 对不少 MC 版本没有构建、NeoForge 只覆盖 1.20.1+），走 `Empty`
+- **自动命名与图标**：MC 或加载器选择变化后，用 CLI 与 GUI 共用的命名规则算默认名，推给
+  `InstanceSummary`；有加载器时用对应图标，否则用首字母头像。用户改过名称 / 图标后不再
+  自动覆盖。
+- **名称校验**：格式校验、`versions/<名称>` 冲突检查与按钮可用性都在 `InstanceSummary`
+  内完成；最终的同名 / 非法名称仍由 `install_task` 把关。
+- **加载器互斥**：`LOADER_DEFS` 用互斥组描述组合关系，两行共享任意组就冲突。Forge 可与
+  OptiFine 叠加，Fabric / NeoForge 与两者都冲突；调整组合只改表。
+- **版本适配**：`versions.rs` 里的纯函数把各数据源转成统一的 `VersionItem`，负责最新 /
+  推荐徽标、MC 类型合并、Forge 展示版本与安装 id 的区分等。空列表是常态，走「无可用版本」
   而不是错误。
-
-## 安装
-
-`SummaryOut::Install { name, category }` → 按装配态组 `InstallSpec`（加载器按
-`LOADER_DEFS` 顺序，Forge 在 OptiFine 之前）→ `Shell::run(dmcl_install::install_task(...))`
-→ `Shell::open_tasks()` 主动弹出任务列表 → 下一轮 idle 里 `tab.close()` 立即关页。
-
-任务本身由 `Shell` / 任务对话框独立跑，结果（完成 / 失败 / 取消）都在任务对话框里看，页面
-不再等结果。
-
-安装成功且分类非空时，页面留下一个 `spawn_local` 在任务结果返回后把 `instance.category`
-写进该实例的 `dmcl.json`；安装失败 / 取消时版本目录已被安装链回滚，不写分类。写入失败走
-全局 toast（此时页面可能已经关闭）。
-
-## 消息
-
-| 类型 | 说明 |
-| --- | --- |
-| `CustomMsg` | `McChanged` / `LoaderChanged { slot, item }` / `NameChanged` / `Install { name, category }` |
-
-## 测试
-
-`mod.rs` 的单测覆盖标签标题（空名称回退到「安装 新实例」）；`versions.rs` 覆盖：
-
-- MC 类型合并与最新徽标；
-- Forge 展示 `version` / 安装 `full_name`、第一条与 recommended 徽标；
-- Fabric 第一条 + 第一条 stable（可以重合，也可以没有 stable）；
-- NeoForge 只有第一条带徽标。
+- **安装**：点击安装后按装配态组 `InstallSpec`，用 `Shell` 跑 `install_task` 并弹出任务
+  对话框，页面立即关闭；任务结果在任务对话框里看。安装成功且分类非空时，再把分类写进该
+  实例的 `dmcl.json`；失败 / 取消时安装链已回滚，不写分类。

@@ -2,10 +2,9 @@
 
 Java 探测、扫描、自动选择，以及 Mojang JRE 的安装。
 
-在 workspace 内依赖 `dmcl-mcmeta`（平台信息、JRE 索引类型、目录键）、`dmcl-download`
-（并发下载）和 `dmcl-task`（任务上下文）。它**不读配置文件**：Java 选择由调用者实现
-`JavaResolver`，JRE 下载参数由 `JavaRuntimeOptions` / `JreInstallRequest` 传入；
-自动安装成功后的配置写回由调用者实现 `JavaInstalledHook`。
+在 workspace 内依赖 `dmcl-mcmeta`、`dmcl-download` 和 `dmcl-task`。它**不读配置文件**：
+Java 选择由调用者实现 `JavaResolver`，JRE 下载参数由 `JavaRuntimeOptions` /
+`JreInstallRequest` 传入；自动安装成功后的配置写回由调用者实现 `JavaInstalledHook`。
 
 ## 模块布局
 
@@ -19,39 +18,25 @@ runtime.rs   JavaRuntimeOptions（下载源 + 下载策略）
 jre.rs       Mojang JRE 安装（raw / lzma）与组件选择
 ```
 
-## 设计要点
+## 设计意图
 
 ### 只解析，不产生副作用
 
-`JavaResolver::resolve(major)` 只返回 `JavaOption`（路径 / 大版本 / 架构）。安装流程只
-需要其中的 `path`，启动流程需要全部三项。固定 Java 就是 `Arc<JavaOption>`，不再需要额外
-的包装类型。
-
-自动下载 JRE 并探测成功后，由 `JavaInstalledHook` 交给调用方决定是否写回配置；GUI 实现
-这个 hook，CLI 与安装流程不设置它。
+`JavaResolver` 只根据要求的大版本返回可用的 `JavaOption`（路径 / 大版本 / 架构），安装流程
+只用路径，启动流程用全部三项。扫描与探测各自返回结果，不自动写配置；需要写回时由调用方
+通过 `JavaInstalledHook` 决定。这样 CLI、GUI 与安装流程可以按各自的策略使用同一套解析。
 
 ### 自动选择
 
-`auto_select_java` 只读缓存的 `major` / `arch`，不执行 Java：版本相等优先，其次最接近的
-更高版本，再其次最高的更低版本；同一档内优先当前平台架构。
-
-`find_java` 只返回扫描结果；是否写回配置由调用方决定。
+`auto_select_java` 只读缓存的版本与架构，不执行 Java：版本相等优先，其次最接近的更高版本，
+再其次最高的更低版本；同一档内优先当前平台架构。
 
 ### JRE 安装
 
-`install_jre` 是唯一的公共安装入口；它接收调用方共享的 `DownloadContext`，因此 JRE 文件
-与安装 / 启动图里的其它下载共用连接、文件、worker 预算与全局进度。`JreInstallRequest`
-强制要求 `major`，`component` 可选：
-
-- `None`：按 `major` 在所有组件里选，优先非 snapshot；没有匹配直接报错；
-- `Some(name)`：只检查该组件，它必须实际提供 `major`，否则直接报错。
-
-两种情况都没有 `jre-legacy` 兜底。目标目录固定为
-`<runtime_root>/<组件名>/<平台键>/<组件名>`。
-
-安装按增量缓存处理：已经完整（sha1 / 大小一致）的文件跳过，缺的、坏的重新下载，目录里
-其它文件不动。默认用 lzma，没有 lzma 版的文件回退 `raw`；失败时只删除入口
-（`bin/java` / `bin/javaw`，macOS 在 `jre.bundle/Contents/Home/bin/` 下）。
+`install_jre` 是唯一的公共安装入口，接收调用方共享的 `DownloadContext`，因此 JRE 文件与
+安装 / 启动图里的其它下载共用并发预算和全局进度。请求强制要求大版本，可选指定组件；目标
+目录固定为官方 runtime 布局。安装按增量缓存处理：已完整的文件跳过，缺失或损坏的重新下载，
+目录里的其它文件不动；默认优先 lzma，缺失时回退 raw。
 
 ## 相关文档
 
