@@ -44,14 +44,6 @@ impl StepRow {
         }
     }
 
-    fn toggle_tooltip(&self) -> &'static str {
-        if self.expanded {
-            "收起任务列表"
-        } else {
-            "展开查看具体任务"
-        }
-    }
-
     fn hidden_text(&self) -> String {
         if self.view.hidden_tasks > 0 {
             format!("还有 {} 个任务未显示", self.view.hidden_tasks)
@@ -85,8 +77,6 @@ impl FactoryComponent for StepRow {
                 set_hexpand: true,
                 add_css_class: "flat",
                 add_css_class: "dmcl-step-header",
-                #[watch]
-                set_tooltip_text: Some(self.toggle_tooltip()),
                 connect_clicked[sender] => move |_| {
                     sender.input(StepRowMsg::Toggle);
                 },
