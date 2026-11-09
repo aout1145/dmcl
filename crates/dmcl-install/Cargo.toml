@@ -20,3 +20,6 @@ serde_json.workspace = true
 zip.workspace = true
 anyhow.workspace = true
 sanitize-filename.workspace = true
+
+[lints]
+workspace = true

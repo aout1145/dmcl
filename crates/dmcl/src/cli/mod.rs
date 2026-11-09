@@ -573,7 +573,6 @@ mod tests {
 
         // `--help` 走的是"错误"通道，但绝不能被当成报错翻译
         let err = command
-            .clone()
             .try_get_matches_from(["dmcl", "--help"])
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DisplayHelp);

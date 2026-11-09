@@ -48,10 +48,6 @@ pub(crate) fn add_optifine_install(
         "下载 OptiFine",
         (),
         task_fn({
-            let options = options.clone();
-            let downloads = downloads.clone();
-            let mc_version = mc_version.clone();
-            let optifine_version = optifine_version.clone();
             move |_: (), ctx: TaskContext| {
                 let options = options.clone();
                 let downloads = downloads.clone();

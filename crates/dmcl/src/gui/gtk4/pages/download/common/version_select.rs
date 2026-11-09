@@ -380,7 +380,6 @@ impl VersionSelect {
         self.sync_view();
 
         let fetch = self.fetch.clone();
-        let sender = sender.clone();
         relm4::spawn(async move {
             let result = fetch
                 .fetch(&context)

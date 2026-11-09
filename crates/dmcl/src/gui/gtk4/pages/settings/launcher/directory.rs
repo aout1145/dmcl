@@ -95,10 +95,7 @@ impl SimpleComponent for DirectoryPage {
             .title("添加目录")
             .start_icon_name("list-add-symbolic")
             .build();
-        add_row.connect_activated({
-            let sender = sender.clone();
-            move |_| sender.input(DirectoryMsg::Add)
-        });
+        add_row.connect_activated(move |_| sender.input(DirectoryMsg::Add));
         group.add(&add_row);
 
         let mut model = DirectoryPage {
@@ -496,13 +493,9 @@ fn show(
 
     save_button.connect_clicked({
         let dialog = dialog.clone();
-        let notice_label = notice_label.clone();
         let name_row = name_row.clone();
-        let path_row = path_row.clone();
-        let style_row = style_row.clone();
         let sender = sender.clone();
         let roots = Rc::clone(&roots);
-        let original = original.clone();
         move |_| {
             // 先按所选格式改写输入框；写不成相对路径时这里会切回绝对路径并提示。
             normalize_entry(&path_row, &style_row, &notice_label);
@@ -528,10 +521,7 @@ fn show(
     });
 
     // 名称行回车等同于点确认按钮；路径行回车先规范化路径。
-    name_row.connect_apply({
-        let save_button = save_button.clone();
-        move |_| save_button.emit_clicked()
-    });
+    name_row.connect_apply(move |_| save_button.emit_clicked());
 
     let parent = relm4::main_adw_application().active_window();
     dialog.present(parent.as_ref());
@@ -822,7 +812,6 @@ impl FactoryComponent for RootRow {
             &widgets.drag_handle,
             self.name.clone(),
             {
-                let sender = sender.clone();
                 move |mv| {
                     let _ = sender.output(RootRowOut::Move(mv));
                 }

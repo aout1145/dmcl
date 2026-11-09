@@ -169,7 +169,7 @@ impl CustomPage {
         let category = category.trim().to_string();
         let shell = Rc::clone(&self.shell);
         let root = self.root_path.clone();
-        let instance_name = name.clone();
+        let instance_name = name;
         relm4::spawn_local(async move {
             // 安装是版本级原子的：失败 / 取消会回滚整个版本目录，分类也不留下。
             if handle.finished().await.is_err() || category.is_empty() {

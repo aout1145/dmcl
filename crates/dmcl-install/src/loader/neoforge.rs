@@ -53,7 +53,6 @@ pub(crate) fn add_neoforge_install(
         task_fn({
             let options = options.clone();
             let downloads = downloads.clone();
-            let installer = installer.clone();
             move |_: Arc<VersionRef>, ctx: TaskContext| {
                 let options = options.clone();
                 let downloads = downloads.clone();
@@ -130,7 +129,6 @@ pub(crate) fn add_neoforge_install(
         (plan.clone(), previous.clone(), extracted.clone()),
         task_fn({
             let options = options.clone();
-            let downloads = downloads.clone();
             let version_name = version_name.clone();
             let neoforge_version = neoforge_version.clone();
             move |(plan, previous, _extracted): (
@@ -165,9 +163,6 @@ pub(crate) fn add_neoforge_install(
         "运行安装器",
         (plan.clone(), deps, extracted, client_jar, base_libraries),
         task_fn({
-            let options = options.clone();
-            let version_name = version_name.clone();
-            let neoforge_version = neoforge_version.clone();
             move |(plan, deps, _extracted, _client_jar, _base_libraries): ProcessorInput,
                   ctx: TaskContext| {
                 let options = options.clone();

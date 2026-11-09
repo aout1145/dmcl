@@ -256,7 +256,7 @@ impl FactoryComponent for TaskCard {
 
         // 展开时等布局完成再滚到最后一行。
         if self.scroll_to_end_pending.replace(false) {
-            let adjustment = widgets.log_scroll.vadjustment().clone();
+            let adjustment = widgets.log_scroll.vadjustment();
             glib::idle_add_local_once(move || {
                 adjustment.set_value(
                     (adjustment.upper() - adjustment.page_size()).max(adjustment.lower()),

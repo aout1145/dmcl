@@ -143,10 +143,7 @@ impl SimpleComponent for JavaPage {
             .title("手动添加 Java")
             .start_icon_name("list-add-symbolic")
             .build();
-        add_row.connect_activated({
-            let sender = sender.clone();
-            move |_| sender.input(JavaMsg::Add)
-        });
+        add_row.connect_activated(move |_| sender.input(JavaMsg::Add));
         group.add(&search_row);
         group.add(&add_row);
 
@@ -686,12 +683,10 @@ fn show(
     save_button.connect_clicked({
         let dialog = dialog.clone();
         let notice_label = notice_label.clone();
-        let path_row = path_row.clone();
         let sender = sender.clone();
         let javas = Rc::clone(&javas);
         let state = Rc::clone(&state);
         let refresh = Rc::clone(&refresh);
-        let original = original.clone();
         let save_button = save_button.clone();
         move |_| {
             // 路径还没探测过（或已改过）：先探测，成功后再自动回到这里保存。
@@ -1180,7 +1175,6 @@ impl FactoryComponent for JavaRow {
             &widgets.drag_handle,
             self.name.clone(),
             {
-                let sender = sender.clone();
                 move |mv| {
                     let _ = sender.output(JavaRowOut::Move(mv));
                 }
@@ -1202,7 +1196,6 @@ impl FactoryComponent for JavaRow {
                 relm4::spawn(async move {
                     let _ = tx.send(JavaDetails::probe(path).await);
                 });
-                let sender = sender.clone();
                 relm4::spawn_local(async move {
                     let result = rx
                         .await

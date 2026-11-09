@@ -31,7 +31,6 @@ impl ScriptedServer {
         let requests = Arc::new(AtomicUsize::new(0));
 
         let task = {
-            let responses = responses.clone();
             let requests = requests.clone();
             tokio::spawn(async move {
                 loop {

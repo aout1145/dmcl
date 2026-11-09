@@ -121,10 +121,7 @@ impl SimpleComponent for AccountPage {
 
         let login_button = gtk::Button::with_label("登录微软账户");
         login_button.add_css_class("flat");
-        login_button.connect_clicked({
-            let sender = sender.clone();
-            move |_| sender.input(AccountMsg::LoginMicrosoft)
-        });
+        login_button.connect_clicked(move |_| sender.input(AccountMsg::LoginMicrosoft));
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         actions.set_halign(gtk::Align::End);
@@ -239,7 +236,6 @@ impl SimpleComponent for AccountPage {
                 self.update_config(|config| config.remove_account(&key));
                 self.reload();
                 if matches!(account, AccountConfig::Microsoft { .. }) {
-                    let key = key.clone();
                     let sender = sender.clone();
                     relm4::spawn(async move {
                         if let Err(err) = KeyringTokenStore::new(key).delete().await {
@@ -628,7 +624,6 @@ impl FactoryComponent for AccountRow {
             }
         });
         widgets.remove_button.connect_clicked({
-            let sender = sender.clone();
             let key = self.key.clone();
             move |_| {
                 let _ = sender.output(AccountRowOut::Remove(key.clone()));

@@ -490,7 +490,7 @@ impl Runtime {
                 });
             }
             if reaches(&inner, dependency.node, creator) {
-                let slot = NodeSlot::new(self.graph, inner.nodes.len(), step, name.clone());
+                let slot = NodeSlot::new(self.graph, inner.nodes.len(), step, name);
                 return Err(AddTaskError::Cycle {
                     task: slot.task_ref(),
                 });

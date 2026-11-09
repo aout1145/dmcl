@@ -433,7 +433,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
         finish,
         "写入版本 JSON",
         (resolved, patches, client_jar, assets, libraries),
-        finish_step(spec.version_name.clone()),
+        finish_step(spec.version_name),
     );
     builder.build(sink).expect("安装图的最终节点由构造保证")
 }

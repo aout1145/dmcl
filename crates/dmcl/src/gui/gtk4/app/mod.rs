@@ -256,7 +256,7 @@ impl SimpleComponent for AppModel {
             shell,
             config,
             tab_view,
-            window: root.clone(),
+            window: root,
         };
         model.open_home(&startup_root_name);
         ComponentParts { model, widgets }

@@ -405,7 +405,6 @@ impl SimpleComponent for GameOptionsPage {
 
         // 系统可用内存会随其他进程变化，设置页可见时每秒刷新一次自动值。
         let auto_memory_source = glib::timeout_add_seconds_local(1, {
-            let sender = sender.clone();
             move || {
                 sender.input(GameOptionsMsg::RefreshAutoMemory);
                 glib::ControlFlow::Continue
@@ -434,18 +433,18 @@ impl SimpleComponent for GameOptionsPage {
             account_rows,
             java_rows,
             window_rows,
-            custom_size_row: custom_size_row.clone(),
-            custom_mark: custom_mark.clone(),
-            width_spin: width_spin.clone(),
-            height_spin: height_spin.clone(),
-            auto_memory_row: auto_memory_row.clone(),
-            auto_memory_mark: auto_memory_mark.clone(),
-            manual_memory_mark: manual_memory_mark.clone(),
-            min_memory_spin: min_memory_spin.clone(),
-            max_memory_spin: max_memory_spin.clone(),
-            custom_info_row: custom_info_row.clone(),
-            additional_jvm_row: additional_jvm_row.clone(),
-            additional_game_row: additional_game_row.clone(),
+            custom_size_row,
+            custom_mark,
+            width_spin,
+            height_spin,
+            auto_memory_row,
+            auto_memory_mark,
+            manual_memory_mark,
+            min_memory_spin,
+            max_memory_spin,
+            custom_info_row,
+            additional_jvm_row,
+            additional_game_row,
             version_isolation_row: version_isolation_row.clone(),
         };
         let widgets = view_output!();

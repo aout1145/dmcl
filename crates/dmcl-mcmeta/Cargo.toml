@@ -17,3 +17,6 @@ anyhow.workspace = true
 regex.workspace = true
 os_info.workspace = true
 version-compare.workspace = true
+
+[lints]
+workspace = true

@@ -70,7 +70,6 @@ pub(crate) fn add_fabric_install(
         base.clone(),
         task_fn({
             let options = options.clone();
-            let mc_version = mc_version.clone();
             let loader_version = loader_version.clone();
             move |_base: Arc<ResolvedVersion>, _ctx: TaskContext| {
                 let options = options.clone();
@@ -86,8 +85,6 @@ pub(crate) fn add_fabric_install(
         "下载 Fabric 依赖库",
         (base, metadata.clone()),
         task_fn({
-            let options = options.clone();
-            let downloads = downloads.clone();
             move |(base, metadata): (Arc<ResolvedVersion>, Arc<VersionJson>), ctx: TaskContext| {
                 let options = options.clone();
                 let downloads = downloads.clone();

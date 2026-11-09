@@ -136,7 +136,6 @@ impl FactoryComponent for InstanceCard {
         let double_click = gtk::GestureClick::new();
         double_click.set_propagation_phase(gtk::PropagationPhase::Capture);
         double_click.connect_pressed({
-            let sender = sender.clone();
             move |_, n_press, _, _| {
                 if n_press >= 2 {
                     let _ = sender.output(CardOut::Launch(name.clone()));

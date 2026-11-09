@@ -24,3 +24,6 @@ uuid.workspace = true
 version-compare.workspace = true
 sysinfo.workspace = true
 anyhow.workspace = true
+
+[lints]
+workspace = true

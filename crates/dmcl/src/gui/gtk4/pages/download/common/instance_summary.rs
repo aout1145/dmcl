@@ -490,7 +490,7 @@ impl SimpleComponent for InstanceSummary {
                 self.apply_icon(self.auto_icon.clone());
             }
             SummaryIn::EditIconFile => {
-                pick_icon_file(sender.clone());
+                pick_icon_file(sender);
             }
             SummaryIn::NameEdited(text) => {
                 // 用户输入只在「事件文本 == 输入框当前文本」时成立：程序 `set_text` 时

@@ -19,3 +19,6 @@ md-5.workspace = true
 hex.workspace = true
 path-clean.workspace = true
 anyhow.workspace = true
+
+[lints]
+workspace = true

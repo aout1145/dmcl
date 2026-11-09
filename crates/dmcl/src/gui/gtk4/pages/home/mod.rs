@@ -402,7 +402,7 @@ impl HomePage {
         if let Some(error) = loaded.error {
             let launch = loaded.launch;
             let sender = sender.clone();
-            let msg_name = name.clone();
+            let msg_name = name;
             instance_warning::show(&self.window, &error, move || {
                 sender.input(HomeMsg::LaunchConfirmed {
                     name: msg_name.clone(),
@@ -439,7 +439,7 @@ impl HomePage {
         // 启动链已经在任务对话框里跑，主动打开让用户看到进度。
         self.shell.open_tasks();
         let sender = sender.clone();
-        let task_name = name.clone();
+        let task_name = name;
         // 这个任务不挂在 HomePage 的 TaskGuard 上：关闭标签后启动链继续跑，结果仍会
         // 回到常驻的组件。只有程序退出时发送失败，GameMonitor 随消息一起丢弃，
         // 游戏进程继续独立运行。

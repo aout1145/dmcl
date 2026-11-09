@@ -22,6 +22,12 @@ members = [
     "crates/dmcl-launch",
 ]
 
+[workspace.lints.clippy]
+# nursery：抓「clone 了却没用」的冗余 clone。
+redundant_clone = "warn"
+# restriction：Rc 不是 Send，Rc<Mutex<T>> 没有意义。
+rc_mutex = "warn"
+
 [workspace.package]
 version = "0.0.1"
 edition = "2021"

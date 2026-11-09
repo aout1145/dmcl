@@ -11,3 +11,6 @@ authors.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+
+[lints]
+workspace = true

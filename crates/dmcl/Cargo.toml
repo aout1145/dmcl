@@ -51,3 +51,6 @@ keyring.workspace = true
 relm4 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
+
+[lints]
+workspace = true

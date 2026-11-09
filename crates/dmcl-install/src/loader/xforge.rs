@@ -394,7 +394,7 @@ pub(crate) fn mojmaps_download(json: &VersionJson, args: &[String]) -> Option<Pl
         save_to: PathBuf::from(output),
         checksum: artifact.sha1.clone().map(Checksum::sha1),
         size: artifact.size,
-        name: base_name(output).to_string(),
+        name: base_name(output),
     })
 }
 

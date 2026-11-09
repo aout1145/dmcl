@@ -308,7 +308,7 @@ impl SimpleComponent for SetupWizard {
         let widgets = view_output!();
 
         // 主窗口和别的启动期提示都先显示，再把模态向导叠上来。
-        let dialog = root.clone();
+        let dialog = root;
         let window = model.window.clone();
         glib::idle_add_local_once(move || dialog.present(Some(&window)));
 
