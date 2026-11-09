@@ -520,6 +520,36 @@ mod tests {
     }
 
     #[test]
+    fn applying_a_patch_keeps_complementary_duplicate_libraries() {
+        let mut json = version(serde_json::json!({
+            "libraries": [
+                {
+                    "name": "org.lwjgl:lwjgl:3.2.2",
+                    "downloads": {"artifact": {"path": "lwjgl.jar"}}
+                },
+                {
+                    "name": "org.lwjgl:lwjgl:3.2.2",
+                    "downloads": {
+                        "artifact": {"path": "lwjgl.jar"},
+                        "classifiers": {"natives-linux": {"path": "lwjgl-natives.jar"}}
+                    },
+                    "natives": {"linux": "natives-linux"}
+                }
+            ]
+        }));
+        let patch = patch(serde_json::json!({
+            "name": "p",
+            "version": "1",
+            "libraries": [{"name": "foo:bar:1"}]
+        }));
+
+        json.apply_patch(&patch).unwrap();
+
+        assert_eq!(library_names(&json), ["foo:bar:1", "org.lwjgl:lwjgl:3.2.2"]);
+        assert!(json.libraries[1].natives.is_some());
+    }
+
+    #[test]
     fn an_unparsable_history_fails_without_modifying_the_version() {
         let mut json = version(serde_json::json!({
             "mainClass": "A",

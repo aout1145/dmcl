@@ -2,7 +2,7 @@
 //!
 //! `self` 是父版本，`child` 是子版本。字段语义见 [`VersionJson::merge`]。
 
-use crate::json::merge_json_map;
+use crate::json::{fill_json_map, merge_json_map};
 use crate::vanilla::rules::Rule;
 use crate::vanilla::version::{Argument, Arguments, Library, VersionJson};
 
@@ -92,18 +92,96 @@ pub(super) fn combine_libraries(
         });
 
         match existing {
-            Some(index) if parent_wins(parent_lib, &result[index]) => {
-                // 父版本更高：替换，但保留子版本的位置
-                result[index] = parent_lib.clone();
-            }
-            Some(_) => {
-                // 否则保留子版本
+            Some(index) => {
+                // 同一条库可能被拆成互补的多个条目（例如 Mojang 文档里一条只带
+                // artifact，另一条带 natives / classifiers），不能简单丢掉其中一条。
+                let current = result[index].clone();
+                result[index] = if parent_wins(parent_lib, &current) {
+                    merge_library(parent_lib.clone(), &current)
+                } else {
+                    merge_library(current, parent_lib)
+                };
             }
             None => result.push(parent_lib.clone()),
         }
     }
 
     result
+}
+
+/// 合并同一条库的两份条目：`winner` 已有的值优先，`loser` 只补空缺。
+///
+/// 只在坐标完全相同时合并，避免把不同版本的 natives / classifier 混在一起；
+/// 不同版本仍整体按版本号胜负取一份。
+fn merge_library(mut winner: Library, loser: &Library) -> Library {
+    if winner.name != loser.name {
+        return winner;
+    }
+
+    match (&mut winner.downloads, &loser.downloads) {
+        (Some(winner_downloads), Some(loser_downloads)) => {
+            // artifact 是整体替换的单位，不逐字段拼，否则会把不同来源的 url / sha1 混在一起
+            if winner_downloads.artifact.is_none() {
+                winner_downloads.artifact = loser_downloads.artifact.clone();
+            }
+            match (
+                &mut winner_downloads.classifiers,
+                &loser_downloads.classifiers,
+            ) {
+                (Some(winner_classifiers), Some(loser_classifiers)) => {
+                    for (name, artifact) in loser_classifiers {
+                        winner_classifiers
+                            .entry(name.clone())
+                            .or_insert_with(|| artifact.clone());
+                    }
+                }
+                (None, Some(loser_classifiers)) => {
+                    winner_downloads.classifiers = Some(loser_classifiers.clone());
+                }
+                _ => {}
+            }
+            fill_json_map(&mut winner_downloads.extra, &loser_downloads.extra);
+        }
+        (None, Some(loser_downloads)) => winner.downloads = Some(loser_downloads.clone()),
+        _ => {}
+    }
+
+    match (&mut winner.natives, &loser.natives) {
+        (Some(winner_natives), Some(loser_natives)) => {
+            for (os, classifier) in loser_natives {
+                winner_natives
+                    .entry(os.clone())
+                    .or_insert_with(|| classifier.clone());
+            }
+        }
+        (None, Some(loser_natives)) => winner.natives = Some(loser_natives.clone()),
+        _ => {}
+    }
+
+    if winner.extract.is_none() {
+        winner.extract = loser.extract.clone();
+    }
+    if winner.url.is_none() {
+        winner.url = loser.url.clone();
+    }
+    if winner.sha1.is_none() {
+        winner.sha1 = loser.sha1.clone();
+    }
+    if winner.sha256.is_none() {
+        winner.sha256 = loser.sha256.clone();
+    }
+    if winner.sha512.is_none() {
+        winner.sha512 = loser.sha512.clone();
+    }
+    if winner.md5.is_none() {
+        winner.md5 = loser.md5.clone();
+    }
+    if winner.size.is_none() {
+        winner.size = loser.size;
+    }
+    fill_json_map(&mut winner.extra, &loser.extra);
+
+    winner
 }
 
 /// 普通版本合并：同键 + 同 rules 时版本号高者胜出。
@@ -289,6 +367,80 @@ mod tests {
 
         let rules = parent.libraries[0].rules.as_ref().unwrap();
         assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn complementary_duplicate_libraries_are_merged() {
+        let mut parent = parse(serde_json::json!({
+            "libraries": [
+                {
+                    "name": "org.lwjgl:lwjgl:3.2.2",
+                    "rules": [{"action": "allow"}],
+                    "downloads": {"artifact": {"path": "a.jar", "url": "https://a/a.jar"}}
+                },
+                {
+                    "name": "org.lwjgl:lwjgl:3.2.2",
+                    "rules": [{"action": "allow"}],
+                    "downloads": {
+                        "artifact": {"path": "a.jar", "url": "https://a/a.jar"},
+                        "classifiers": {
+                            "natives-linux": {"path": "a-natives.jar", "url": "https://a/n.jar"}
+                        }
+                    },
+                    "natives": {"linux": "natives-linux"},
+                    "extract": {"exclude": ["META-INF/"]}
+                }
+            ]
+        }));
+        let child = parse(serde_json::json!({}));
+
+        parent.merge(&child);
+
+        assert_eq!(parent.libraries.len(), 1);
+        let library = &parent.libraries[0];
+        assert_eq!(
+            library
+                .natives
+                .as_ref()
+                .unwrap()
+                .get("linux")
+                .map(String::as_str),
+            Some("natives-linux")
+        );
+        assert_eq!(
+            library
+                .downloads
+                .as_ref()
+                .unwrap()
+                .classifiers
+                .as_ref()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(library.extract.is_some());
+    }
+
+    #[test]
+    fn libraries_of_different_versions_do_not_share_fields() {
+        let mut parent = parse(serde_json::json!({
+            "libraries": [{
+                "name": "foo:bar:1",
+                "downloads": {"artifact": {"path": "old.jar"}},
+                "natives": {"linux": "natives-linux"}
+            }]
+        }));
+        let child = parse(serde_json::json!({
+            "libraries": [{
+                "name": "foo:bar:2",
+                "downloads": {"artifact": {"path": "new.jar"}}
+            }]
+        }));
+
+        parent.merge(&child);
+
+        assert_eq!(library_names(&parent), ["foo:bar:2"]);
+        assert!(parent.libraries[0].natives.is_none());
     }
 
     #[test]

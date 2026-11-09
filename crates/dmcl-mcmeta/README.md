@@ -42,6 +42,9 @@ macros.rs    string_enum! 内部宏
 - `arguments` 按 `jvm` / `game` / `default-user-jvm` 分别**父在前、子在后**追加；
 - `libraries` 子版本在前、父版本追加在后；同库键 + 同 `rules` 时版本号高者胜出，
   版本号相同或无法比较时保留子版本；
+- 版本号相同的同一条库（坐标完全一致）会合并互补字段：胜出条目缺少的
+  `downloads.artifact` / `downloads.classifiers` / `natives` / `extract` 等由另一条补齐，
+  但不会覆盖已有值；不同版本之间不共享这些字段；
 - `rules` 是库身份的一部分，不拼接数组：同键但 `rules` 不同时两个平台变体都保留；
 - 未建模的顶层字段（`extra`）继续按对象递归、数组拼接、标量覆盖的通用规则合并；
 - `patches` 不参与合并，结果直接采用子版本的值。
