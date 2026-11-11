@@ -85,7 +85,8 @@ pub async fn download_vanilla(
         .source
         .fetch_version_json_by_id(version_id)
         .await?;
-    json.id = Some(version_name.to_string());
+    // 保留官方 id：安装最后一步才把 id 改成实例名，这样 patches[0] 仍记录真正的
+    // Minecraft 版本，不会被自定义实例名污染。
     json.resolve_official_urls();
 
     write_json_safe(version_json_path(&options.root_path, version_name), &json).await

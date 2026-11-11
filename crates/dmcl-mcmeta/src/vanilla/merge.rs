@@ -12,7 +12,7 @@ impl VersionJson {
     /// * 标量 / 可选块：子版本有值就覆盖，没有就保留父版本；
     /// * `arguments`：每个 key 父在前、子在后追加；
     /// * `libraries`：子版本库在前、父版本追加在后，同键 + 同 rules 时版本号高者胜出；
-    /// * `patches`：不合并历史，直接采用子版本的值（子版本没有就清空）。
+    /// * `dmcl-patches`：不合并历史，直接采用子版本的值（子版本没有就清空）。
     pub fn merge(&mut self, child: &VersionJson) {
         replace_if_some(&mut self.id, &child.id);
         replace_if_some(&mut self.jar, &child.jar);
@@ -38,8 +38,8 @@ impl VersionJson {
         let parent_libraries = std::mem::take(&mut self.libraries);
         self.libraries = merge_libraries(&parent_libraries, &child.libraries);
 
-        // patches 不合并历史：子版本有什么就用什么，没有就清空
-        self.patches = child.patches.clone();
+        // dmcl-patches 不合并历史：子版本有什么就用什么，没有就清空
+        self.dmcl_patches = child.dmcl_patches.clone();
 
         merge_json_map(&mut self.extra, &child.extra);
     }
@@ -480,12 +480,12 @@ mod tests {
     #[test]
     fn patches_do_not_merge_and_follow_the_child() {
         let mut parent = parse(serde_json::json!({
-            "patches": [{"id": "snapshot"}]
+            "dmcl-patches": [{"id": "snapshot"}]
         }));
         let child = parse(serde_json::json!({"id": "child"}));
 
         parent.merge(&child);
 
-        assert!(parent.patches.is_empty());
+        assert!(parent.dmcl_patches.is_empty());
     }
 }

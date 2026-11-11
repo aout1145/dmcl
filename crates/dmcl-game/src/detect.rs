@@ -1,6 +1,6 @@
 //! 从版本 JSON 与主 jar 识别实例的 Minecraft 版本和已安装加载器。
 //!
-//! 优先相信 DMCL 写入的 [`VersionJson::patches`]；没有 patch 历史时分析 maven 库坐标；
+//! 优先相信 DMCL 写入的 [`VersionJson::dmcl_patches`]；没有 patch 历史时分析 maven 库坐标；
 //! 仍然不知道 Minecraft 版本时才读主 jar。所有字段都允许为空，识别不出就不猜。
 
 use std::collections::BTreeSet;
@@ -31,7 +31,8 @@ pub struct DetectedVersion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedLoader {
     pub kind: DetectedLoaderKind,
-    /// 加载器版本，原样保留来源里的写法；来源没有版本时为 `None`。
+    /// 加载器版本；Forge / NeoForge 去掉 `{mc}-` 前缀，OptiFine 去掉 `{mc}_` 前缀。
+    /// 来源没有版本时为 `None`。
     pub version: Option<String>,
 }
 
@@ -58,7 +59,7 @@ impl DetectedLoaderKind {
 
 /// 只分析版本 JSON，不读 jar。
 fn detect_json(json: &VersionJson) -> DetectedVersion {
-    if json.patches.is_empty() {
+    if json.dmcl_patches.is_empty() {
         detect_libraries(&json.libraries)
     } else {
         detect_patches(json)
@@ -90,14 +91,14 @@ pub async fn detect_version(reference: &VersionRef) -> Result<DetectedVersion> {
 // ---------------------------------------------------------------------------
 
 fn detect_patches(json: &VersionJson) -> DetectedVersion {
-    let minecraft = json.patches[0]
+    let minecraft = json.dmcl_patches[0]
         .get("id")
         .and_then(|value| value.as_str())
         .filter(|id| !id.is_empty())
         .map(str::to_owned);
 
     let mut loaders = LoaderSet::default();
-    for patch in &json.patches[1..] {
+    for patch in &json.dmcl_patches[1..] {
         let Some(name) = patch.get("name").and_then(|value| value.as_str()) else {
             continue;
         };
@@ -108,7 +109,7 @@ fn detect_patches(json: &VersionJson) -> DetectedVersion {
             .get("version")
             .and_then(|value| value.as_str())
             .filter(|version| !version.is_empty())
-            .map(str::to_owned);
+            .map(|version| loader_version_label(kind, version));
         loaders.add(kind, version);
     }
 
@@ -126,6 +127,23 @@ fn loader_kind(name: &str) -> Option<DetectedLoaderKind> {
         "optifine" => Some(DetectedLoaderKind::OptiFine),
         _ => None,
     }
+}
+
+/// Forge / NeoForge 的版本号常带 `{mc}-` 前缀，OptiFine 用 `{mc}_`；显示时去掉。
+fn loader_version_label(kind: DetectedLoaderKind, version: &str) -> String {
+    let separator = match kind {
+        DetectedLoaderKind::Forge | DetectedLoaderKind::NeoForge => '-',
+        DetectedLoaderKind::OptiFine => '_',
+        DetectedLoaderKind::Fabric => return version.to_string(),
+    };
+    let Some((prefix, rest)) = version.split_once(separator) else {
+        return version.to_string();
+    };
+    if !is_release_version(prefix) {
+        return version.to_string();
+    }
+    let suffix = format!("{separator}{prefix}");
+    rest.strip_suffix(&suffix).unwrap_or(rest).to_string()
 }
 
 /// 按首次出现顺序收集加载器；同一加载器出现多个不同版本时版本字段留空。
@@ -207,14 +225,16 @@ fn detect_libraries(libraries: &[Library]) -> DetectedVersion {
                 }
             }
             ("net.minecraftforge", "forge" | "fmlloader" | "fmlearlydisplay") => {
-                forge.seen(version);
+                forge.seen(&loader_version_label(DetectedLoaderKind::Forge, version));
                 if let Some(mc) = version.split('-').next() {
                     insert_version(&mut minecraft, mc);
                 }
             }
-            ("net.neoforged", "neoforge") => neoforge.seen(version),
+            ("net.neoforged", "neoforge") => {
+                neoforge.seen(&loader_version_label(DetectedLoaderKind::NeoForge, version));
+            }
             ("net.neoforged", "forge") => {
-                neoforge.seen(version);
+                neoforge.seen(&loader_version_label(DetectedLoaderKind::NeoForge, version));
                 if version.contains('-') {
                     if let Some(mc) = version.split('-').next() {
                         insert_version(&mut minecraft, mc);
@@ -223,7 +243,7 @@ fn detect_libraries(libraries: &[Library]) -> DetectedVersion {
             }
             ("net.neoforged.fancymodloader", "loader" | "earlydisplay") => neoforge.present(),
             ("optifine", artifact) if artifact.eq_ignore_ascii_case("OptiFine") => {
-                optifine.seen(version);
+                optifine.seen(&loader_version_label(DetectedLoaderKind::OptiFine, version));
                 if let Some(mc) = version.split('_').next() {
                     insert_version(&mut minecraft, mc);
                 }
@@ -498,7 +518,7 @@ mod tests {
     #[test]
     fn patches_take_precedence_over_libraries() {
         let json = version(serde_json::json!({
-            "patches": [
+            "dmcl-patches": [
                 {"id": "1.20.1"},
                 {"name": "forge", "version": "1.20.1-47.2.0"},
                 {"name": "optifine", "version": "1.20.1_HD_U_I6"}
@@ -511,8 +531,8 @@ mod tests {
         assert_eq!(
             detected.loaders,
             [
-                loader(DetectedLoaderKind::Forge, "1.20.1-47.2.0"),
-                loader(DetectedLoaderKind::OptiFine, "1.20.1_HD_U_I6"),
+                loader(DetectedLoaderKind::Forge, "47.2.0"),
+                loader(DetectedLoaderKind::OptiFine, "HD_U_I6"),
             ]
         );
     }
@@ -520,7 +540,7 @@ mod tests {
     #[test]
     fn patches_without_an_id_do_not_fall_back_to_libraries_for_loaders() {
         let json = version(serde_json::json!({
-            "patches": [{"jar": "vanilla"}],
+            "dmcl-patches": [{"jar": "vanilla"}],
             "libraries": [{"name": "net.fabricmc:fabric-loader:0.15.0"}]
         }));
 
@@ -532,7 +552,7 @@ mod tests {
     #[test]
     fn conflicting_patch_loader_versions_leave_the_version_empty() {
         let json = version(serde_json::json!({
-            "patches": [
+            "dmcl-patches": [
                 {"id": "1.20.1"},
                 {"name": "forge", "version": "1.20.1-47.2.0"},
                 {"name": "Forge", "version": "1.20.1-47.3.0"}
@@ -592,7 +612,7 @@ mod tests {
         assert_eq!(detected.minecraft.as_deref(), Some("1.20.1"));
         assert_eq!(
             detected.loaders,
-            [loader(DetectedLoaderKind::Forge, "1.20.1-47.2.0")]
+            [loader(DetectedLoaderKind::Forge, "47.2.0")]
         );
     }
 
@@ -623,7 +643,7 @@ mod tests {
         assert_eq!(detected.minecraft.as_deref(), Some("1.20.1"));
         assert_eq!(
             detected.loaders,
-            [loader(DetectedLoaderKind::NeoForge, "1.20.1-47.1.0")]
+            [loader(DetectedLoaderKind::NeoForge, "47.1.0")]
         );
     }
 
@@ -654,7 +674,7 @@ mod tests {
         assert_eq!(detected.minecraft.as_deref(), Some("1.12.2"));
         assert_eq!(
             detected.loaders,
-            [loader(DetectedLoaderKind::OptiFine, "1.12.2_HD_U_G5")]
+            [loader(DetectedLoaderKind::OptiFine, "HD_U_G5")]
         );
     }
 
@@ -674,6 +694,40 @@ mod tests {
     fn an_empty_document_has_no_identifiable_version() {
         let detected = detect_json(&VersionJson::default());
         assert_eq!(detected, DetectedVersion::default());
+    }
+
+    #[test]
+    fn a_foreign_patches_field_is_ignored() {
+        let json = version(serde_json::json!({
+            "patches": [{"id": "resolved.1.12.2-forge"}],
+            "libraries": [{"name": "net.minecraftforge:forge:1.12.2-14.23.5.2864"}]
+        }));
+
+        let detected = detect_json(&json);
+        assert_eq!(detected.minecraft.as_deref(), Some("1.12.2"));
+        assert_eq!(
+            detected.loaders,
+            [loader(DetectedLoaderKind::Forge, "14.23.5.2864")]
+        );
+    }
+
+    #[test]
+    fn loader_versions_drop_the_minecraft_prefix() {
+        for (kind, version, expected) in [
+            (DetectedLoaderKind::Forge, "1.20.1-47.4.28", "47.4.28"),
+            (
+                DetectedLoaderKind::Forge,
+                "1.7.10-10.13.4.1614-1.7.10",
+                "10.13.4.1614",
+            ),
+            (DetectedLoaderKind::NeoForge, "1.20.1-47.1.106", "47.1.106"),
+            (DetectedLoaderKind::NeoForge, "21.1.265", "21.1.265"),
+            (DetectedLoaderKind::OptiFine, "1.12.2_HD_U_G5", "HD_U_G5"),
+            (DetectedLoaderKind::OptiFine, "HD_U_G5", "HD_U_G5"),
+            (DetectedLoaderKind::Fabric, "0.15.0", "0.15.0"),
+        ] {
+            assert_eq!(loader_version_label(kind, version), expected, "{version}");
+        }
     }
 
     #[tokio::test]

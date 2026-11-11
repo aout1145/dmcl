@@ -1,8 +1,8 @@
 //! 版本 JSON 的 patch 与 patch 历史。
 //!
 //! patch 是一份只描述"要改什么"的文档：库、主类、启动参数、tweaker，以及仅用于显示的
-//! `type` / `releaseTime`。应用过的 patch 会追加到 [`VersionJson::patches`]；
-//! `patches[0]` 是应用前的原版快照。
+//! `type` / `releaseTime`。应用过的 patch 会追加到 [`VersionJson::dmcl_patches`]；
+//! `dmcl-patches[0]` 是应用前的原版快照。
 
 use serde_json::Value;
 
@@ -50,12 +50,12 @@ impl VersionJson {
 
     /// 按顺序应用多个 patch。
     ///
-    /// 第一次调用（`patches` 为空）会先把当前文档记录为原版快照；即使 `patches` 为空，
-    /// 也会留下这条历史，因此原版安装同样会得到 `patches[0]`。
+    /// 第一次调用（`dmcl-patches` 为空）会先把当前文档记录为原版快照；即使 `dmcl-patches`
+    /// 为空，也会留下这条历史，因此原版安装同样会得到 `dmcl-patches[0]`。
     pub fn apply_patches(&mut self, patches: &[VersionJsonPatch]) -> anyhow::Result<()> {
         // 1. 先解析已有历史，并预先序列化新 patch，保证失败时不做任何修改。
         let mut forced: Vec<(String, Option<Vec<Rule>>)> = Vec::new();
-        for value in self.patches.iter().skip(1) {
+        for value in self.dmcl_patches.iter().skip(1) {
             let applied: VersionJsonPatch = serde_json::from_value(value.clone())
                 .map_err(|err| anyhow::anyhow!("无法解析已应用的 patch 历史：{err}"))?;
             forced.extend(applied.libraries.iter().map(|library| {
@@ -71,7 +71,7 @@ impl VersionJson {
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()?;
 
-        let original = if self.patches.is_empty() {
+        let original = if self.dmcl_patches.is_empty() {
             Some(serde_json::to_value(&*self)?)
         } else {
             None
@@ -79,7 +79,7 @@ impl VersionJson {
 
         // 2. 以下步骤不再失败。
         if let Some(original) = original {
-            self.patches.push(original);
+            self.dmcl_patches.push(original);
         }
 
         for (patch, encoded) in patches.iter().zip(encoded_patches) {
@@ -106,7 +106,7 @@ impl VersionJson {
                 )
             }));
 
-            self.patches.push(encoded);
+            self.dmcl_patches.push(encoded);
         }
 
         Ok(())
@@ -286,10 +286,10 @@ mod tests {
             &game[game.len() - 2..],
             ["--tweakClass", "optifine.OptiFineTweaker"]
         );
-        assert_eq!(json.patches.len(), 2);
-        assert_eq!(json.patches[0]["mainClass"], "A");
-        assert!(json.patches[0].get("patches").is_none());
-        assert_eq!(json.patches[1], serde_json::to_value(&patch).unwrap());
+        assert_eq!(json.dmcl_patches.len(), 2);
+        assert_eq!(json.dmcl_patches[0]["mainClass"], "A");
+        assert!(json.dmcl_patches[0].get("dmcl-patches").is_none());
+        assert_eq!(json.dmcl_patches[1], serde_json::to_value(&patch).unwrap());
     }
 
     #[test]
@@ -357,8 +357,11 @@ mod tests {
             json.release_time.as_deref(),
             Some("2023-01-01T00:00:00+00:00")
         );
-        assert_eq!(json.patches[1]["type"], "snapshot");
-        assert_eq!(json.patches[1]["releaseTime"], "2024-02-02T00:00:00+00:00");
+        assert_eq!(json.dmcl_patches[1]["type"], "snapshot");
+        assert_eq!(
+            json.dmcl_patches[1]["releaseTime"],
+            "2024-02-02T00:00:00+00:00"
+        );
     }
 
     #[test]
@@ -427,7 +430,7 @@ mod tests {
             &game[game.len() - 4..],
             ["--tweakClass", "A", "--tweakClass", "B"]
         );
-        assert_eq!(json.patches.len(), 3);
+        assert_eq!(json.dmcl_patches.len(), 3);
     }
 
     #[test]
@@ -466,9 +469,9 @@ mod tests {
         json.apply_patch(&second).unwrap();
 
         assert_eq!(library_names(&json), ["foo:bar:1"]);
-        assert_eq!(json.patches.len(), 3);
+        assert_eq!(json.dmcl_patches.len(), 3);
 
-        let history: Vec<&str> = json.patches[1..]
+        let history: Vec<&str> = json.dmcl_patches[1..]
             .iter()
             .map(|value| value["name"].as_str().unwrap())
             .collect();
@@ -552,7 +555,7 @@ mod tests {
     fn an_unparsable_history_fails_without_modifying_the_version() {
         let mut json = version(serde_json::json!({
             "mainClass": "A",
-            "patches": [{"id": "original"}, {"libraries": []}]
+            "dmcl-patches": [{"id": "original"}, {"libraries": []}]
         }));
         let before = serde_json::to_value(&json).unwrap();
         let patch = patch(serde_json::json!({
@@ -575,13 +578,13 @@ mod tests {
 
         json.apply_patches(&[]).unwrap();
 
-        assert_eq!(json.patches.len(), 1);
-        assert_eq!(json.patches[0]["mainClass"], "A");
-        assert!(json.patches[0].get("patches").is_none());
+        assert_eq!(json.dmcl_patches.len(), 1);
+        assert_eq!(json.dmcl_patches[0]["mainClass"], "A");
+        assert!(json.dmcl_patches[0].get("dmcl-patches").is_none());
 
         // 已经有历史时再次应用空列表不会重复记录。
         json.apply_patches(&[]).unwrap();
-        assert_eq!(json.patches.len(), 1);
+        assert_eq!(json.dmcl_patches.len(), 1);
     }
 
     #[test]
@@ -608,22 +611,44 @@ mod tests {
 
         json.templatize_urls();
         assert_eq!(
-            json.patches[0]["libraries"][0]["downloads"]["artifact"]["url"],
+            json.dmcl_patches[0]["libraries"][0]["downloads"]["artifact"]["url"],
             "${MC_MAVEN}/foo/bar/1/bar-1.jar"
         );
         assert_eq!(
-            json.patches[1]["libraries"][0]["downloads"]["artifact"]["url"],
+            json.dmcl_patches[1]["libraries"][0]["downloads"]["artifact"]["url"],
             "${MC_MAVEN}/foo/baz/1/baz-1.jar"
         );
 
         json.resolve_official_urls();
         assert_eq!(
-            json.patches[0]["libraries"][0]["downloads"]["artifact"]["url"],
+            json.dmcl_patches[0]["libraries"][0]["downloads"]["artifact"]["url"],
             "https://libraries.minecraft.net/foo/bar/1/bar-1.jar"
         );
         assert_eq!(
-            json.patches[1]["libraries"][0]["downloads"]["artifact"]["url"],
+            json.dmcl_patches[1]["libraries"][0]["downloads"]["artifact"]["url"],
             "https://libraries.minecraft.net/foo/baz/1/baz-1.jar"
         );
+    }
+
+    #[test]
+    fn patch_history_is_stored_under_the_dmcl_key() {
+        let mut json = version(serde_json::json!({"id": "1.20.1"}));
+
+        json.apply_patches(&[]).unwrap();
+
+        let value = serde_json::to_value(&json).unwrap();
+        assert!(value.get("patches").is_none());
+        assert_eq!(value["dmcl-patches"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_foreign_patches_field_stays_in_extra() {
+        let json = version(serde_json::json!({
+            "id": "1.12.2-forge",
+            "patches": [{"id": "resolved.1.12.2-forge"}]
+        }));
+
+        assert!(json.dmcl_patches.is_empty());
+        assert_eq!(json.extra["patches"][0]["id"], "resolved.1.12.2-forge");
     }
 }

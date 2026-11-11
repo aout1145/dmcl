@@ -410,11 +410,16 @@ pub struct VersionJson {
     /// 1.7+ 的 log4j 配置。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logging: Option<Logging>,
-    /// 这个版本已经应用过的 patch。
+    /// 这个版本已经应用过的 patch（JSON 键为 `dmcl-patches`）。
     ///
-    /// `patches[0]` 是未修改的原版 JSON，其后按应用顺序存放 `VersionJsonPatch` 的 JSON。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub patches: Vec<Value>,
+    /// `dmcl-patches[0]` 是未修改的原版 JSON，其后按应用顺序存放 `VersionJsonPatch` 的 JSON。
+    /// 不使用 `patches` 这个键，避免和 HMCL 写在版本 JSON 里的同名字段冲突。
+    #[serde(
+        default,
+        rename = "dmcl-patches",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub dmcl_patches: Vec<Value>,
     /// 所有未建模的字段，原样保留。
     ///
     /// 真实文档里通常只剩 Forge 写在 `version.json` 顶部的 `_comment_` / `_comment`
@@ -441,7 +446,7 @@ impl UrlFields for VersionJson {
         for library in &mut self.libraries {
             library.for_each_url_mut(f);
         }
-        for patch in &mut self.patches {
+        for patch in &mut self.dmcl_patches {
             if let Ok(mut entry) = serde_json::from_value::<VersionJson>(patch.clone()) {
                 entry.for_each_url_mut(f);
                 if let Ok(value) = serde_json::to_value(entry) {

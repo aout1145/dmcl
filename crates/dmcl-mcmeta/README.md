@@ -33,8 +33,8 @@ macros.rs    string_enum! 内部宏
 
 版本 JSON 通过 `inheritsFrom` 沿祖先链逐层合并；`VersionJson::merge` 负责父子版本的字段、
 参数、库与未建模字段的合并。加载器安装不直接改写版本 JSON，而是产出 `VersionJsonPatch`，
-由上层按顺序统一应用。`patches` 保留原版快照与已应用的 patch，便于显示或回退；没有加载器
-的原版安装也会在写盘前把原版文档记为 `patches[0]`。
+由上层按顺序统一应用。`dmcl-patches` 保留原版快照与已应用的 patch，便于显示或回退；没有加载器
+的原版安装也会在写盘前把原版文档记为 `dmcl-patches[0]`。
 
 ### URL 模板与下载源
 
