@@ -38,7 +38,8 @@ Forge / NeoForge 的 processor 之前就位，processor 节点会显式依赖它
 
 三种加载器各有自己的安装步骤，但都只**返回 patch**，不直接改写版本 JSON。Forge 与 NeoForge
 的安装器档案分别建模；Forge 同时兼容现代式与经典式安装器，NeoForge 只有现代式。需要跑
-processor 时，由安装图按需选择 Java，JRE 下载复用同一份下载上下文与全局进度。
+processor 时，由安装图按需选择 Java，JRE 下载复用同一份下载上下文与全局进度。没有加载器
+的原版安装也会在写盘前把原版文档记为 `patches[0]`，让识别流程能直接读到版本 id。
 
 ### OptiFine
 

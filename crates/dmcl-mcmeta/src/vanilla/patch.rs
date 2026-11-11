@@ -49,11 +49,10 @@ impl VersionJson {
     }
 
     /// 按顺序应用多个 patch。
+    ///
+    /// 第一次调用（`patches` 为空）会先把当前文档记录为原版快照；即使 `patches` 为空，
+    /// 也会留下这条历史，因此原版安装同样会得到 `patches[0]`。
     pub fn apply_patches(&mut self, patches: &[VersionJsonPatch]) -> anyhow::Result<()> {
-        if patches.is_empty() {
-            return Ok(());
-        }
-
         // 1. 先解析已有历史，并预先序列化新 patch，保证失败时不做任何修改。
         let mut forced: Vec<(String, Option<Vec<Rule>>)> = Vec::new();
         for value in self.patches.iter().skip(1) {
@@ -568,17 +567,21 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_patch_list_is_a_no_op() {
+    fn an_empty_patch_list_records_the_original_snapshot() {
         let mut json = version(serde_json::json!({
             "mainClass": "A",
             "libraries": [{"name": "foo:bar:1"}]
         }));
-        let before = serde_json::to_value(&json).unwrap();
 
         json.apply_patches(&[]).unwrap();
 
-        assert_eq!(serde_json::to_value(&json).unwrap(), before);
-        assert!(json.patches.is_empty());
+        assert_eq!(json.patches.len(), 1);
+        assert_eq!(json.patches[0]["mainClass"], "A");
+        assert!(json.patches[0].get("patches").is_none());
+
+        // 已经有历史时再次应用空列表不会重复记录。
+        json.apply_patches(&[]).unwrap();
+        assert_eq!(json.patches.len(), 1);
     }
 
     #[test]
