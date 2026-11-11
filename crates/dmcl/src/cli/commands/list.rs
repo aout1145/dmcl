@@ -3,6 +3,8 @@
 use std::path::Path;
 
 use anyhow::Result;
+use dialoguer::console::Style;
+use dmcl_game::{detect_version, DetectedVersion, VersionRef};
 
 use crate::config::Config;
 
@@ -15,9 +17,29 @@ pub(crate) async fn installed(root_path: &Path) -> Result<()> {
     }
     println!("已安装的版本：");
     for version in versions {
-        println!("{}", version.name);
+        let detected = detect_version(&VersionRef::new(root_path, &version.name)).await;
+        match detected.ok().and_then(|detected| summary(&detected)) {
+            Some(summary) => println!("{} {}", version.name, Style::new().dim().apply_to(summary)),
+            None => println!("{}", version.name),
+        }
     }
     Ok(())
+}
+
+/// 把识别结果压成名称后面的一段说明；没有任何信息时返回 `None`。
+fn summary(detected: &DetectedVersion) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(minecraft) = &detected.minecraft {
+        parts.push(minecraft.clone());
+    }
+    for loader in &detected.loaders {
+        let name = loader.kind.display_name();
+        parts.push(match &loader.version {
+            Some(version) => format!("{name} {version}"),
+            None => name.to_string(),
+        });
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 /// `list-mc`。
@@ -85,4 +107,44 @@ pub(crate) async fn optifine(config: &Config, verid: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dmcl_game::{DetectedLoader, DetectedLoaderKind};
+
+    fn loader(kind: DetectedLoaderKind, version: Option<&str>) -> DetectedLoader {
+        DetectedLoader {
+            kind,
+            version: version.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn summary_puts_the_minecraft_version_before_the_loaders() {
+        let detected = DetectedVersion {
+            minecraft: Some("1.12.2".to_string()),
+            loaders: vec![loader(DetectedLoaderKind::Forge, Some("x.xx"))],
+        };
+
+        assert_eq!(summary(&detected).as_deref(), Some("1.12.2, Forge x.xx"));
+    }
+
+    #[test]
+    fn summary_skips_unknown_parts() {
+        let detected = DetectedVersion {
+            minecraft: None,
+            loaders: vec![
+                loader(DetectedLoaderKind::Fabric, Some("0.15.0")),
+                loader(DetectedLoaderKind::NeoForge, None),
+            ],
+        };
+
+        assert_eq!(
+            summary(&detected).as_deref(),
+            Some("Fabric 0.15.0, NeoForge")
+        );
+        assert_eq!(summary(&DetectedVersion::default()), None);
+    }
 }

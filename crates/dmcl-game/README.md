@@ -11,6 +11,7 @@
 ```text
 version.rs    VersionRef / ResolvedVersion / resolve_version
 detect.rs     从 patches / libraries / 主 jar 识别 Minecraft 版本与加载器
+class_parse.rs 从 jar 条目读取 class 常量池字符串
 options.rs    GameFilesOptions、download_planned
 plan.rs       纯函数规划：这个版本需要哪些文件
 integrity.rs  完整性检查：完整吗？缺什么？

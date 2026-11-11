@@ -14,7 +14,8 @@
 //! 配置（下载源、并发策略、是否跳过音乐）由调用者通过 [`GameFilesOptions`] 传入，
 //! **这个 crate 不读任何配置文件**。
 
-pub mod detect;
+mod class_parse;
+mod detect;
 pub mod ensure;
 mod extract;
 pub mod integrity;
@@ -23,10 +24,7 @@ pub mod options;
 pub mod plan;
 pub mod version;
 
-pub use detect::{
-    detect_jar_version, detect_json, detect_version, DetectedLoader, DetectedLoaderKind,
-    DetectedVersion,
-};
+pub use detect::{detect_version, DetectedLoader, DetectedLoaderKind, DetectedVersion};
 pub use ensure::{
     ensure_asset_index, ensure_assets, ensure_client_jar, ensure_files, ensure_libraries,
 };

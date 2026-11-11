@@ -10,9 +10,8 @@ use std::path::Path;
 use anyhow::Result;
 use dmcl_mcmeta::vanilla::{Library, VersionJson};
 
+use crate::class_parse::{class_strings, constant_pool_strings, Zip};
 use crate::version::{main_jar_path, resolve_version, VersionRef};
-
-type Zip = zip::ZipArchive<std::fs::File>;
 
 const MINECRAFT_SERVER: &str = "net/minecraft/server/MinecraftServer.class";
 const REALMS_CONSTANTS: &str = "net/minecraft/realms/RealmsSharedConstants.class";
@@ -45,8 +44,20 @@ pub enum DetectedLoaderKind {
     OptiFine,
 }
 
+impl DetectedLoaderKind {
+    /// 显示用的名字。
+    pub fn display_name(self) -> &'static str {
+        match self {
+            DetectedLoaderKind::Fabric => "Fabric",
+            DetectedLoaderKind::Forge => "Forge",
+            DetectedLoaderKind::NeoForge => "NeoForge",
+            DetectedLoaderKind::OptiFine => "OptiFine",
+        }
+    }
+}
+
 /// 只分析版本 JSON，不读 jar。
-pub fn detect_json(json: &VersionJson) -> DetectedVersion {
+fn detect_json(json: &VersionJson) -> DetectedVersion {
     if json.patches.is_empty() {
         detect_libraries(&json.libraries)
     } else {
@@ -55,7 +66,7 @@ pub fn detect_json(json: &VersionJson) -> DetectedVersion {
 }
 
 /// 从主 jar 提取适合显示的 Minecraft 版本标签；没有可靠的版本信息时返回 `None`。
-pub async fn detect_jar_version(path: impl AsRef<Path>) -> Option<String> {
+async fn detect_jar_version(path: impl AsRef<Path>) -> Option<String> {
     let path = path.as_ref().to_path_buf();
     tokio::task::spawn_blocking(move || read_jar_version(&path))
         .await
@@ -365,83 +376,6 @@ fn scan_class_titles(archive: &mut Zip) -> Option<String> {
         titles.extend(strings.iter().filter_map(|value| title_label(value)));
     }
     single_version(titles)
-}
-
-fn class_strings(archive: &mut Zip, entry: &str) -> Option<Vec<String>> {
-    let mut entry = archive.by_name(entry).ok()?;
-    let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).ok()?;
-    constant_pool_strings(&bytes)
-}
-
-/// 只收集 class 常量池里的 UTF-8 字符串。
-fn constant_pool_strings(bytes: &[u8]) -> Option<Vec<String>> {
-    let mut cursor = ByteCursor::new(bytes);
-    if cursor.u4()? != 0xCAFE_BABE {
-        return None;
-    }
-    cursor.skip(4)?; // minor_version + major_version
-    let count = cursor.u2()? as usize;
-
-    let mut strings = Vec::new();
-    let mut index = 1;
-    while index < count {
-        match cursor.u1()? {
-            1 => {
-                let length = cursor.u2()? as usize;
-                let raw = cursor.take(length)?;
-                strings.push(String::from_utf8_lossy(raw).into_owned());
-            }
-            3 | 4 => cursor.skip(4)?,
-            // Long / Double 占两个常量池槽位。
-            5 | 6 => {
-                cursor.skip(8)?;
-                index += 1;
-            }
-            7 | 8 | 16 | 19 | 20 => cursor.skip(2)?,
-            9 | 10 | 11 | 12 | 17 | 18 => cursor.skip(4)?,
-            15 => cursor.skip(3)?,
-            _ => return None,
-        }
-        index += 1;
-    }
-    Some(strings)
-}
-
-struct ByteCursor<'a> {
-    bytes: &'a [u8],
-    position: usize,
-}
-
-impl<'a> ByteCursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, position: 0 }
-    }
-
-    fn take(&mut self, length: usize) -> Option<&'a [u8]> {
-        let end = self.position.checked_add(length)?;
-        let slice = self.bytes.get(self.position..end)?;
-        self.position = end;
-        Some(slice)
-    }
-
-    fn skip(&mut self, length: usize) -> Option<()> {
-        self.take(length).map(|_| ())
-    }
-
-    fn u1(&mut self) -> Option<u8> {
-        Some(*self.take(1)?.first()?)
-    }
-
-    fn u2(&mut self) -> Option<u16> {
-        let bytes = self.take(2)?;
-        Some(u16::from_be_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn u4(&mut self) -> Option<u32> {
-        let bytes = self.take(4)?;
-        Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
 }
 
 /// 正式版 `1.x` / `1.x.y`。
