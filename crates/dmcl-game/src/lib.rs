@@ -7,12 +7,14 @@
 //! * 本地缺了什么 / 坏了什么（[`check_integrity`]）；
 //! * 怎么把缺的文件补齐（[`ensure_files`] / [`ensure_client_jar`] / [`ensure_libraries`] /
 //!   [`ensure_assets`] / [`ensure_asset_index`]）；
+//! * 它对应的 Minecraft 版本是什么、装了哪些加载器（[`detect_version`]）；
 //! * natives 怎么按 os / arch 下载并解压（[`ensure_natives`]）。
 //!
 //! 它不创建版本目录、不写原版元数据、不安装加载器或 JRE，也不认识账户与启动参数。
 //! 配置（下载源、并发策略、是否跳过音乐）由调用者通过 [`GameFilesOptions`] 传入，
 //! **这个 crate 不读任何配置文件**。
 
+pub mod detect;
 pub mod ensure;
 mod extract;
 pub mod integrity;
@@ -21,6 +23,10 @@ pub mod options;
 pub mod plan;
 pub mod version;
 
+pub use detect::{
+    detect_jar_version, detect_json, detect_version, DetectedLoader, DetectedLoaderKind,
+    DetectedVersion,
+};
 pub use ensure::{
     ensure_asset_index, ensure_assets, ensure_client_jar, ensure_files, ensure_libraries,
 };

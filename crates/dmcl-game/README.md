@@ -10,6 +10,7 @@
 
 ```text
 version.rs    VersionRef / ResolvedVersion / resolve_version
+detect.rs     从 patches / libraries / 主 jar 识别 Minecraft 版本与加载器
 options.rs    GameFilesOptions、download_planned
 plan.rs       纯函数规划：这个版本需要哪些文件
 integrity.rs  完整性检查：完整吗？缺什么？
@@ -44,6 +45,14 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 `ensure_natives` 按给定 os / arch 下载分类器 jar 并解压到 `dmcl_mcmeta::layout::natives_dir`
 约定的目录。缺失的 jar 跳过并记日志，不把「库还没下」当成失败；解压使用安全实现，不创建
 符号链接。
+
+### 版本与加载器识别
+
+`detect_version` 回答「这个实例是什么版本、装了哪些加载器」。识别结果只用于展示，字段都
+可以为空：优先读 DMCL 写入的 `patches`，没有历史时分析 `libraries` 的 maven 坐标，仍拿不到
+Minecraft 版本才读主 jar。旧版本的显示标签（`1.0.0`、`Alpha v1.2.6`、`Classic 0.0.13a`、
+`Infdev`）保持 jar 里的写法，不映射成官方清单 id；无法从 jar 确定到具体构建时返回 `None`。
+jar 读取失败只代表识别不出，不影响实例本身的读取。
 
 ## 相关文档
 
