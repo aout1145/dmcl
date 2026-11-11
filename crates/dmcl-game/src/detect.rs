@@ -8,7 +8,7 @@ use std::io::Read;
 use std::path::Path;
 
 use anyhow::Result;
-use dmcl_mcmeta::vanilla::{Library, VersionJson};
+use dmcl_mcmeta::vanilla::{Argument, Library, VersionJson};
 
 use crate::class_parse::{class_strings, constant_pool_strings, Zip};
 use crate::version::{main_jar_path, resolve_version, VersionRef};
@@ -17,6 +17,10 @@ const MINECRAFT_SERVER: &str = "net/minecraft/server/MinecraftServer.class";
 const REALMS_CONSTANTS: &str = "net/minecraft/realms/RealmsSharedConstants.class";
 const MINECRAFT_CLIENT: &str = "net/minecraft/client/Minecraft.class";
 const CLASSIC_MINECRAFT: &str = "com/mojang/minecraft/Minecraft.class";
+
+const FML_NEOFORGE_VERSION: &str = "--fml.neoForgeVersion";
+const FML_FORGE_VERSION: &str = "--fml.forgeVersion";
+const FML_MC_VERSION: &str = "--fml.mcVersion";
 
 /// 一个实例的识别结果。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -59,11 +63,71 @@ impl DetectedLoaderKind {
 
 /// 只分析版本 JSON，不读 jar。
 fn detect_json(json: &VersionJson) -> DetectedVersion {
-    if json.dmcl_patches.is_empty() {
+    let mut detected = if json.dmcl_patches.is_empty() {
         detect_libraries(&json.libraries)
     } else {
         detect_patches(json)
+    };
+    supplement_fml_arguments(json, &mut detected);
+    detected
+}
+
+/// FML / NeoForge 会在启动参数里写明加载器版本；库坐标缺失时用它补齐。
+fn supplement_fml_arguments(json: &VersionJson, detected: &mut DetectedVersion) {
+    let tokens = argument_tokens(json);
+    if detected.minecraft.is_none() {
+        detected.minecraft = argument_value(&tokens, FML_MC_VERSION);
     }
+
+    let neoforge = argument_value(&tokens, FML_NEOFORGE_VERSION);
+    let forge = argument_value(&tokens, FML_FORGE_VERSION);
+    for loader in &mut detected.loaders {
+        if loader.version.is_some() {
+            continue;
+        }
+        loader.version = match loader.kind {
+            DetectedLoaderKind::NeoForge => neoforge.clone().or_else(|| forge.clone()),
+            DetectedLoaderKind::Forge => forge.clone(),
+            DetectedLoaderKind::Fabric | DetectedLoaderKind::OptiFine => None,
+        };
+    }
+}
+
+fn argument_tokens(json: &VersionJson) -> Vec<String> {
+    let mut tokens = Vec::new();
+    if let Some(arguments) = &json.arguments {
+        for list in [&arguments.jvm, &arguments.game, &arguments.default_user_jvm]
+            .into_iter()
+            .flatten()
+        {
+            for argument in list {
+                match argument {
+                    Argument::Plain(value) => tokens.push(value.clone()),
+                    Argument::Ruled(ruled) => {
+                        if let Some(value) = &ruled.value {
+                            value.push_into(&mut tokens);
+                        }
+                    }
+                    Argument::Other(value) => {
+                        if let Some(value) = value.as_str() {
+                            tokens.push(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(arguments) = &json.minecraft_arguments {
+        tokens.extend(arguments.split_whitespace().map(str::to_owned));
+    }
+    tokens
+}
+
+fn argument_value(tokens: &[String], flag: &str) -> Option<String> {
+    tokens
+        .windows(2)
+        .find(|pair| pair[0] == flag && !pair[1].is_empty())
+        .map(|pair| pair[1].clone())
 }
 
 /// 从主 jar 提取适合显示的 Minecraft 版本标签；没有可靠的版本信息时返回 `None`。
@@ -708,6 +772,46 @@ mod tests {
         assert_eq!(
             detected.loaders,
             [loader(DetectedLoaderKind::Forge, "14.23.5.2864")]
+        );
+    }
+
+    #[test]
+    fn neoforge_version_comes_from_the_fml_arguments() {
+        let json = version(serde_json::json!({
+            "arguments": {
+                "game": [
+                    "--fml.neoForgeVersion", "21.1.248",
+                    "--fml.fmlVersion", "4.0.43",
+                    "--fml.mcVersion", "1.21.1"
+                ]
+            },
+            "libraries": [
+                {"name": "net.neoforged.fancymodloader:loader:4.0.43"}
+            ]
+        }));
+
+        let detected = detect_json(&json);
+        assert_eq!(detected.minecraft.as_deref(), Some("1.21.1"));
+        assert_eq!(
+            detected.loaders,
+            [loader(DetectedLoaderKind::NeoForge, "21.1.248")]
+        );
+    }
+
+    #[test]
+    fn forge_version_comes_from_the_fml_arguments() {
+        let json = version(serde_json::json!({
+            "minecraftArguments": "--fml.forgeVersion 47.4.13 --fml.mcVersion 1.20.1",
+            "libraries": [
+                {"name": "net.minecraftforge:fmlloader:1.20.1-47.4.13"}
+            ]
+        }));
+
+        let detected = detect_json(&json);
+        assert_eq!(detected.minecraft.as_deref(), Some("1.20.1"));
+        assert_eq!(
+            detected.loaders,
+            [loader(DetectedLoaderKind::Forge, "47.4.13")]
         );
     }
 
