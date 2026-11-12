@@ -9,7 +9,7 @@ Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下�
 - **实例管理** —— 自动识别实例并按分类归组，显示运行状态；启动时自动完成账户登录、Java
   选择、文件检查与补全，并支持取消与停止。
 - **创建实例** —— 支持原版与 Forge / Fabric / NeoForge / OptiFine，可指定版本、名称、图标
-  和分类，并检查实例名是否已被占用。
+  和分类，并检查实例名是否已被占用；图标会按版本类型和加载器自动选择，也可以指定本地图片。
 - **账户** —— 支持离线账户与 Microsoft 账户、设备代码登录和默认账户。
 - **Minecraft 目录** —— 添加、重命名、修改路径、设为默认、调整顺序和删除，路径支持相对与
   绝对形式。
@@ -37,6 +37,11 @@ Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下�
 Forge 与 OptiFine 可以组合，Fabric、NeoForge 与二者互斥。实例名称和图标会根据选择自动
 生成，也可以手动指定；分类可沿用已有分类或新建。安装以任务形式进行，失败或取消不会留下
 不完整的实例。
+
+自动图标按加载器与版本类型选择：Forge / NeoForge / Fabric 优先于 OptiFine，OptiFine
+优先于原版类型；原版正式版、快照版、远古版分别使用草方块、命令方块、远古圆石。主页上
+版本 JSON 读不出来的实例使用红石块。用户选择的自定义图标会转成 PNG 保存为
+`versions/<实例名>/logo.png`；自动图标不写文件。
 
 ### 任务与设置
 
@@ -137,6 +142,14 @@ cargo test -p dmcl --features gtk4
 总体结构、依赖关系与文档索引见 [ARCHITECTURE.md](ARCHITECTURE.md)；各 crate 的职责与设计
 见各自的 `README.md`，GTK4 前端从
 [crates/dmcl/src/gui/gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md) 开始。
+
+## 第三方素材
+
+`crates/dmcl/src/gui/gtk4/assets/icons` 里的方块与加载器图标取自
+[Minecraft Wiki](https://minecraft.wiki)（草方块、命令方块、圆石、铁砧、红石块、Fabric）、
+[NeoForged](https://neoforged.net)（NeoForge logo）和 [OptiFine 官网](https://optifine.net)
+（OF 图标）。Minecraft 相关材质的版权归
+Mojang / Microsoft 所有；这些图片不适用本项目的 GPL 许可，仅作为界面图标使用。
 
 ## 许可
 

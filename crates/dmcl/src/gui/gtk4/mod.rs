@@ -2,6 +2,7 @@
 
 pub(crate) mod app;
 pub(crate) mod pages;
+pub(crate) mod widgets;
 
 use crate::config::LoadedConfig;
 

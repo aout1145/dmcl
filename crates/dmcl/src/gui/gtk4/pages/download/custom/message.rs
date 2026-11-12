@@ -1,5 +1,7 @@
 //! 新建实例页的消息。
 
+use std::path::PathBuf;
+
 use crate::gui::gtk4::pages::download::common::version_select::VersionItem;
 
 /// 页面消息。
@@ -15,5 +17,9 @@ pub(crate) enum CustomMsg {
     /// 实例名称显示值变化（自动命名 / 用户编辑都会发）。
     NameChanged(String),
     /// 用户点了安装按钮。
-    Install { name: String, category: String },
+    Install {
+        name: String,
+        category: String,
+        icon: Option<PathBuf>,
+    },
 }

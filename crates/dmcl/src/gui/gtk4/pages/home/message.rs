@@ -3,12 +3,14 @@
 use dmcl_launch::GameMonitor;
 
 use crate::config::LaunchConfig;
+use crate::gui::gtk4::widgets::instance_icon::InstanceIcon;
 
-/// 一个已安装实例及其分类。
+/// 一个已安装实例及其分类与图标。
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceEntry {
     pub(crate) name: String,
     pub(crate) category: Option<String>,
+    pub(crate) icon: InstanceIcon,
 }
 
 /// 主页组件收到的消息。

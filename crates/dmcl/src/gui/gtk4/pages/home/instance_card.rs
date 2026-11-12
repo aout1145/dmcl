@@ -1,14 +1,16 @@
-//! 单个实例磁贴（工厂组件）：头像 + 名称；运行中时右上角有小绿点。
+//! 单个实例磁贴（工厂组件）：图标 + 名称；运行中时右上角有小绿点。
 //!
 //! 磁贴只负责渲染自己的模型，选中/启动由父组件决定；点击和双击通过
 //! [`CardOut`] 上报。
 
 use relm4::adw;
 use relm4::gtk;
+use relm4::gtk::gdk;
 use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
 use super::InstanceState;
+use crate::gui::gtk4::widgets::instance_icon::InstanceIcon;
 
 /// 磁贴发给主页的消息。直接带实例名，分组重建后索引变化也不会指错。
 #[derive(Debug)]
@@ -23,6 +25,8 @@ pub(crate) struct InstanceCard {
     pub(crate) name: String,
     pub(crate) state: InstanceState,
     pub(crate) selected: bool,
+    /// 已装载的实例图标；装载失败或幽灵卡片没有图标时显示首字母头像。
+    image: Option<gdk::Texture>,
 }
 
 impl InstanceCard {
@@ -37,7 +41,7 @@ impl InstanceCard {
 
 #[relm4::factory(pub(crate))]
 impl FactoryComponent for InstanceCard {
-    type Init = (String, InstanceState, bool);
+    type Init = (String, InstanceState, bool, Option<InstanceIcon>);
     type Input = ();
     type Output = CardOut;
     type CommandOutput = ();
@@ -63,11 +67,34 @@ impl FactoryComponent for InstanceCard {
                     set_margin_start: 8,
                     set_margin_end: 8,
 
-                    // 首字母彩色头像（暂无实例图标来源）。
-                    adw::Avatar {
-                        set_size: 48,
-                        set_text: Some(&self.name),
-                        set_show_initials: true,
+                    // 实例图标按原比例完整显示，不做圆形裁剪。
+                    gtk::Box {
+                        set_size_request: (48, 48),
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+
+                        adw::Clamp {
+                            set_maximum_size: 48,
+                            set_tightening_threshold: 48,
+                            #[watch]
+                            set_visible: self.image.is_some(),
+
+                            gtk::Picture {
+                                set_content_fit: gtk::ContentFit::Contain,
+                                set_can_shrink: true,
+                                #[watch]
+                                set_paintable: self.image.as_ref(),
+                            },
+                        },
+
+                        // 没有图标（幽灵卡片或装载失败）时退回首字母头像。
+                        adw::Avatar {
+                            set_size: 48,
+                            set_text: Some(&self.name),
+                            set_show_initials: true,
+                            #[watch]
+                            set_visible: self.image.is_none(),
+                        },
                     },
 
                     // 最多三行，和 GNOME Files 一样；短名字不会硬撑高度。
@@ -102,7 +129,7 @@ impl FactoryComponent for InstanceCard {
     }
 
     fn init_model(
-        (name, state, selected): Self::Init,
+        (name, state, selected, icon): Self::Init,
         _index: &DynamicIndex,
         _sender: FactorySender<Self>,
     ) -> Self {
@@ -110,6 +137,7 @@ impl FactoryComponent for InstanceCard {
             name,
             state,
             selected,
+            image: icon.and_then(|icon| icon.texture()),
         }
     }
 

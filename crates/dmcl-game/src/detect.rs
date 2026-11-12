@@ -27,8 +27,28 @@ const FML_MC_VERSION: &str = "--fml.mcVersion";
 pub struct DetectedVersion {
     /// 显示用的 Minecraft 版本标签；旧版本可能是 `1.0.0`、`Alpha v1.2.6` 等。
     pub minecraft: Option<String>,
+    /// 版本 JSON 声明的版本类型。
+    pub kind: Option<DetectedVersionKind>,
     /// 已识别出的加载器。
     pub loaders: Vec<DetectedLoader>,
+}
+
+/// 版本类型，对应版本 JSON 的 `type` 字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedVersionKind {
+    Release,
+    Snapshot,
+    /// `old_alpha` / `old_beta`；也接受部分镜像使用的 `alpha` / `beta`。
+    Old,
+}
+
+fn version_kind(kind: &str) -> Option<DetectedVersionKind> {
+    match kind {
+        "release" => Some(DetectedVersionKind::Release),
+        "snapshot" => Some(DetectedVersionKind::Snapshot),
+        "old_alpha" | "old_beta" | "alpha" | "beta" => Some(DetectedVersionKind::Old),
+        _ => None,
+    }
 }
 
 /// 一个已安装的加载器。
@@ -68,6 +88,7 @@ fn detect_json(json: &VersionJson) -> DetectedVersion {
     } else {
         detect_patches(json)
     };
+    detected.kind = json.kind.as_deref().and_then(version_kind);
     supplement_fml_arguments(json, &mut detected);
     detected
 }
@@ -179,6 +200,7 @@ fn detect_patches(json: &VersionJson) -> DetectedVersion {
 
     DetectedVersion {
         minecraft,
+        kind: None,
         loaders: loaders.finish(),
     }
 }
@@ -318,6 +340,7 @@ fn detect_libraries(libraries: &[Library]) -> DetectedVersion {
 
     DetectedVersion {
         minecraft: single_version(minecraft),
+        kind: None,
         loaders: [
             (DetectedLoaderKind::Fabric, fabric),
             (DetectedLoaderKind::Forge, forge),
@@ -577,6 +600,21 @@ mod tests {
         let version = detect_jar_version(&path).await;
         let _ = std::fs::remove_dir_all(&dir);
         version
+    }
+
+    #[test]
+    fn version_kind_comes_from_the_json_type() {
+        for (kind, expected) in [
+            ("release", DetectedVersionKind::Release),
+            ("snapshot", DetectedVersionKind::Snapshot),
+            ("old_beta", DetectedVersionKind::Old),
+        ] {
+            let detected = detect_json(&version(serde_json::json!({ "type": kind })));
+            assert_eq!(detected.kind, Some(expected));
+        }
+
+        let detected = detect_json(&version(serde_json::json!({ "type": "unknown" })));
+        assert_eq!(detected.kind, None);
     }
 
     #[test]

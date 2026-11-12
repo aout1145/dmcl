@@ -24,7 +24,9 @@ pub mod options;
 pub mod plan;
 pub mod version;
 
-pub use detect::{detect_version, DetectedLoader, DetectedLoaderKind, DetectedVersion};
+pub use detect::{
+    detect_version, DetectedLoader, DetectedLoaderKind, DetectedVersion, DetectedVersionKind,
+};
 pub use ensure::{
     ensure_asset_index, ensure_assets, ensure_client_jar, ensure_files, ensure_libraries,
 };

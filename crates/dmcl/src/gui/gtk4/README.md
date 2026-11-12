@@ -34,8 +34,8 @@
   `AdwDialog` / `AdwAlertDialog`；空状态用 `AdwStatusPage`；加载用 `AdwSpinner`；卡片流式
   布局用 `AdwWrapBox`；设置页用 `AdwPreferencesPage` 及其行控件；标签页用
   `AdwTabView` / `AdwTabBar`。
-- **图标**：UI 图标用 Adwaita 主题的 `*-symbolic`，只挑稳定常见的名字；实例图标用
-  `AdwAvatar` 首字母彩色头像。
+- **图标**：UI 图标用 Adwaita 主题的 `*-symbolic`，只挑稳定常见的名字；实例图标用内置
+  方块 / 加载器素材或实例目录的 `logo.png`，按原比例完整显示，不裁成圆形。
 - **样式**：优先 Adw 的标准 class；需要自定义 CSS 时用 class + display 级 provider，
   class 带 `dmcl-` 命名空间。各模块自带 CSS，由 `run` 统一挂上。
 - 用到新的 Adw 控件时，把 relm4 的 `gnome_4x` feature 抬到对应版本。
@@ -88,11 +88,14 @@ gtk4/
 │   ├── toast.rs
 │   ├── header/                  # 标题栏、根目录菜单、外观切换、关于
 │   └── tasks/                   # 任务对话框
-└── pages/                       # 页面
-    ├── home/                    # 主页 / 实例磁贴 / 启动停止
-    ├── settings/                # 首选项
-    └── download/                # 新建实例页与公共组件
-        └── custom/              # 「自定义」新建实例页
+├── pages/                       # 页面
+│   ├── home/                    # 主页 / 实例磁贴 / 启动停止
+│   ├── settings/                # 首选项
+│   └── download/                # 新建实例页与公共组件
+│       └── custom/              # 「自定义」新建实例页
+├── widgets/                     # 跨页面复用的部件与逻辑
+│   └── instance_icon.rs         # 实例图标来源、自动规则与 PNG 编码
+└── assets/icons/                # 实例图标内置素材
 ```
 
 ## 组件索引

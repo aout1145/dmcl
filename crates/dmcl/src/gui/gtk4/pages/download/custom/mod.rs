@@ -28,15 +28,17 @@ use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
 use dmcl_install::{default_version_name, InstallSpec, LoaderKind};
+use dmcl_mcmeta::layout::version_dir;
 
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
 use crate::gui::gtk4::pages::download::common::instance_summary::{
-    IconSource, InstanceSummary, SummaryIn, SummaryInit, SummaryOut,
+    InstanceSummary, SummaryIn, SummaryInit, SummaryOut,
 };
 use crate::gui::gtk4::pages::download::common::version_select::{
     KindChip, SelectIn, SelectOut, VersionItem, VersionSelect, VersionSelectInit,
 };
+use crate::gui::gtk4::widgets::instance_icon::{save_png, IconKind, InstanceIcon};
 
 use loaders::{loader_init, LoaderSlot, LOADER_DEFS};
 use message::CustomMsg;
@@ -109,13 +111,17 @@ impl CustomPage {
             Some(mc) => {
                 let name = default_version_name(&mc.id, &loaders);
                 let _ = self.summary.sender().send(SummaryIn::SetAutoName(name));
-                let icon = self
+                let loaders: Vec<LoaderKind> = self
                     .loaders
                     .iter()
-                    .find(|slot| slot.selection.is_some())
-                    .map(|slot| IconSource::Loader(slot.kind))
-                    .unwrap_or(IconSource::Initials);
-                let _ = self.summary.sender().send(SummaryIn::SetAutoIcon(icon));
+                    .filter(|slot| slot.selection.is_some())
+                    .map(|slot| slot.kind)
+                    .collect();
+                let icon = IconKind::auto(Some(&mc.kind), &loaders);
+                let _ = self
+                    .summary
+                    .sender()
+                    .send(SummaryIn::SetAutoIcon(InstanceIcon::Asset(icon)));
             }
             None => {
                 // 没选 MC 版本：清掉自动命名，安装不可用。
@@ -126,7 +132,9 @@ impl CustomPage {
                 let _ = self
                     .summary
                     .sender()
-                    .send(SummaryIn::SetAutoIcon(IconSource::Initials));
+                    .send(SummaryIn::SetAutoIcon(InstanceIcon::Asset(
+                        IconKind::Release,
+                    )));
             }
         }
         let _ = self
@@ -136,7 +144,7 @@ impl CustomPage {
     }
 
     /// 安装当前装配：把任务交给任务对话框，然后打开任务列表并立即关页。
-    fn install(&mut self, name: String, category: String) {
+    fn install(&mut self, name: String, category: String, icon: Option<PathBuf>) {
         let Some(mc) = self.mc_version.clone() else {
             self.shell
                 .page_toast(&self.page_toast, "请先选择 Minecraft 版本");
@@ -171,14 +179,22 @@ impl CustomPage {
         let root = self.root_path.clone();
         let instance_name = name;
         relm4::spawn_local(async move {
-            // 安装是版本级原子的：失败 / 取消会回滚整个版本目录，分类也不留下。
-            if handle.finished().await.is_err() || category.is_empty() {
+            // 安装是版本级原子的：失败 / 取消会回滚整个版本目录，分类和图标也不留下。
+            if handle.finished().await.is_err() {
                 return;
             }
-            if let Err(err) =
-                crate::config::write_instance_category(&root, &instance_name, &category).await
-            {
-                shell.global_toast(&format!("写入实例分类失败：{err:#}"));
+            if !category.is_empty() {
+                if let Err(err) =
+                    crate::config::write_instance_category(&root, &instance_name, &category).await
+                {
+                    shell.global_toast(&format!("写入实例分类失败：{err:#}"));
+                }
+            }
+            if let Some(source) = icon {
+                let destination = version_dir(&root, &instance_name).join("logo.png");
+                if let Err(err) = save_png(&source, &destination) {
+                    shell.global_toast(&format!("写入实例图标失败：{err}"));
+                }
             }
         });
         // 先打开任务对话框，再在下一轮 idle 关页：关页只会移除标签，不影响对话框。
@@ -233,7 +249,15 @@ impl SimpleComponent for CustomPage {
                 root_path: root_path.clone(),
             })
             .forward(sender.input_sender(), |out| match out {
-                SummaryOut::Install { name, category } => CustomMsg::Install { name, category },
+                SummaryOut::Install {
+                    name,
+                    category,
+                    icon,
+                } => CustomMsg::Install {
+                    name,
+                    category,
+                    icon,
+                },
                 SummaryOut::NameChanged(name) => CustomMsg::NameChanged(name),
             });
 
@@ -334,7 +358,11 @@ impl SimpleComponent for CustomPage {
                     self.refresh_auto();
                 }
             }
-            CustomMsg::Install { name, category } => self.install(name, category),
+            CustomMsg::Install {
+                name,
+                category,
+                icon,
+            } => self.install(name, category, icon),
         }
     }
 }

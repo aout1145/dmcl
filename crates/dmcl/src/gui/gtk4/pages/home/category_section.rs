@@ -10,6 +10,7 @@ use relm4::prelude::*;
 
 use super::instance_card::{CardOut, InstanceCard};
 use super::InstanceState;
+use crate::gui::gtk4::widgets::instance_icon::InstanceIcon;
 
 /// 没有分类（或分类为空白）的实例使用的组名。
 pub(crate) const UNCATEGORIZED: &str = "未分类";
@@ -22,7 +23,10 @@ pub(crate) struct CategorySection {
 
 #[relm4::factory(pub(crate))]
 impl FactoryComponent for CategorySection {
-    type Init = (String, Vec<(String, InstanceState, bool)>);
+    type Init = (
+        String,
+        Vec<(String, InstanceState, bool, Option<InstanceIcon>)>,
+    );
     type Input = ();
     type Output = CardOut;
     type CommandOutput = ();

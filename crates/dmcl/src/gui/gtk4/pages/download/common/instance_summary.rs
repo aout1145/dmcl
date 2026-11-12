@@ -19,19 +19,10 @@ use relm4::gtk::gdk;
 use relm4::gtk::gio;
 use relm4::prelude::*;
 
-use dmcl_install::{validate_version_name, LoaderKind};
+use dmcl_install::validate_version_name;
 use dmcl_mcmeta::layout::version_dir;
 
-/// 实例图标的来源。
-///
-/// `Initials` = 首字母彩色头像；`Loader` = 按加载器取徽标字母（头像按文字自动配色，
-/// Forge → F）；`File` = 用户自选的本地图片。
-#[derive(Debug, Clone)]
-pub(crate) enum IconSource {
-    Initials,
-    Loader(LoaderKind),
-    File(PathBuf),
-}
+use crate::gui::gtk4::widgets::instance_icon::{IconKind, InstanceIcon};
 
 /// 组件输入。
 #[derive(Debug)]
@@ -39,14 +30,14 @@ pub(crate) enum SummaryIn {
     /// 外部自动命名（用户没改过名称时生效）。
     SetAutoName(String),
     /// 外部自动图标（用户没改过图标时生效）。
-    SetAutoIcon(IconSource),
+    SetAutoIcon(InstanceIcon),
     /// 除名称外的安装条件是否满足（如是否已选 Minecraft 版本）。
     SetReady(bool),
-    /// 用户在图标菜单里选了某项。
-    PickIcon(IconSource),
+    /// 用户选好了自定义图片。
+    PickCustomIcon(PathBuf),
     /// 用户在图标菜单里选了「自动」。
     PickAutoIcon,
-    /// 用户点了「选择图片…」，发起文件选择。
+    /// 用户点了「自定义…」，发起文件选择。
     EditIconFile,
     /// 名称输入框的文本变化。
     NameEdited(String),
@@ -63,8 +54,12 @@ pub(crate) enum SummaryIn {
 /// 组件输出。
 #[derive(Debug)]
 pub(crate) enum SummaryOut {
-    /// 点了安装，带当前实例名与分类。
-    Install { name: String, category: String },
+    /// 点了安装，带当前实例名、分类与用户选的自定义图标。
+    Install {
+        name: String,
+        category: String,
+        icon: Option<PathBuf>,
+    },
     /// 显示的名称变了（自动 / 用户编辑都会发），页面可用来同步标签标题。
     NameChanged(String),
 }
@@ -103,11 +98,11 @@ pub(crate) struct InstanceSummary {
     /// 已有分类选项。
     category_choices: FactoryVecDeque<CategoryChoice>,
     /// 当前图标 / 自动图标（用户点了「自动」时恢复成它）。
-    icon: IconSource,
-    /// 用户改过图标后，自动图标永不再应用。
+    icon: InstanceIcon,
+    /// 用户选过自定义图片后，自动图标永不再应用。
     icon_user_modified: bool,
-    auto_icon: IconSource,
-    /// `File` 图标装载出来的纹理；装载失败回落为首字母头像。
+    auto_icon: InstanceIcon,
+    /// 当前图标装载出来的纹理。
     custom_image: Option<gdk::Texture>,
     install_enabled: bool,
 }
@@ -176,10 +171,10 @@ impl FactoryComponent for CategoryChoice {
 }
 
 impl InstanceSummary {
-    fn apply_icon(&mut self, icon: IconSource) {
+    fn apply_icon(&mut self, icon: InstanceIcon) {
         self.custom_image = match &icon {
-            IconSource::File(path) => gdk::Texture::from_filename(path).ok(),
-            _ => None,
+            InstanceIcon::File(path) => gdk::Texture::from_filename(path).ok(),
+            InstanceIcon::Asset(kind) => kind.texture(),
         };
         self.icon = icon;
     }
@@ -198,20 +193,6 @@ impl InstanceSummary {
             None
         };
         self.install_enabled = self.ready && !empty && !invalid && !exists;
-    }
-
-    /// 头像文字（`File` 已装载图像时头像不显示文字，这个值无所谓）。
-    fn avatar_text(&self) -> String {
-        let first = |text: &str| {
-            text.chars()
-                .next()
-                .map(|c| c.to_uppercase().to_string())
-                .unwrap_or_else(|| "＋".to_string())
-        };
-        match &self.icon {
-            IconSource::Initials | IconSource::File(_) => first(&self.name),
-            IconSource::Loader(kind) => first(kind.display_name()),
-        }
     }
 
     /// 分类文字变化后同步收起状态的副标题、取消按钮和对勾。
@@ -272,13 +253,22 @@ impl SimpleComponent for InstanceSummary {
                     set_tooltip_text: Some("更换实例图标"),
 
                     #[wrap(Some)]
-                    set_child = &adw::Avatar {
-                        set_size: 64,
-                        set_show_initials: true,
-                        #[watch]
-                        set_text: Some(&model.avatar_text()),
-                        #[watch]
-                        set_custom_image: model.custom_image.as_ref(),
+                    set_child = &gtk::Box {
+                        set_size_request: (64, 64),
+                        set_halign: gtk::Align::Center,
+                        set_valign: gtk::Align::Center,
+
+                        adw::Clamp {
+                            set_maximum_size: 64,
+                            set_tightening_threshold: 64,
+
+                            gtk::Picture {
+                                set_content_fit: gtk::ContentFit::Contain,
+                                set_can_shrink: true,
+                                #[watch]
+                                set_paintable: model.custom_image.as_ref(),
+                            },
+                        },
                     },
 
                     #[wrap(Some)]
@@ -296,38 +286,10 @@ impl SimpleComponent for InstanceSummary {
                                 set_label: "自动",
                                 connect_clicked[sender] => move |_| sender.input(SummaryIn::PickAutoIcon),
                             },
-                            gtk::Button {
-                                add_css_class: "flat",
-                                set_label: LoaderKind::Forge.display_name(),
-                                connect_clicked[sender] => move |_| {
-                                    sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::Forge)));
-                                },
-                            },
-                            gtk::Button {
-                                add_css_class: "flat",
-                                set_label: LoaderKind::OptiFine.display_name(),
-                                connect_clicked[sender] => move |_| {
-                                    sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::OptiFine)));
-                                },
-                            },
-                            gtk::Button {
-                                add_css_class: "flat",
-                                set_label: LoaderKind::NeoForge.display_name(),
-                                connect_clicked[sender] => move |_| {
-                                    sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::NeoForge)));
-                                },
-                            },
-                            gtk::Button {
-                                add_css_class: "flat",
-                                set_label: LoaderKind::Fabric.display_name(),
-                                connect_clicked[sender] => move |_| {
-                                    sender.input(SummaryIn::PickIcon(IconSource::Loader(LoaderKind::Fabric)));
-                                },
-                            },
                             // 文件选择对话框要挂在应用的活动窗口上，逻辑在 update 里。
                             gtk::Button {
                                 add_css_class: "flat",
-                                set_label: "选择图片…",
+                                set_label: "自定义…",
                                 connect_clicked[sender] => move |_| sender.input(SummaryIn::EditIconFile),
                             },
                         },
@@ -446,10 +408,10 @@ impl SimpleComponent for InstanceSummary {
             category_clear,
             category: String::new(),
             category_choices,
-            icon: IconSource::Initials,
+            icon: InstanceIcon::Asset(IconKind::Release),
             icon_user_modified: false,
-            auto_icon: IconSource::Initials,
-            custom_image: None,
+            auto_icon: InstanceIcon::Asset(IconKind::Release),
+            custom_image: IconKind::Release.texture(),
             install_enabled: false,
         };
         let name_row_widget = model.name_row.clone();
@@ -481,9 +443,9 @@ impl SimpleComponent for InstanceSummary {
                 self.ready = enabled;
                 self.refresh_name_state();
             }
-            SummaryIn::PickIcon(icon) => {
+            SummaryIn::PickCustomIcon(path) => {
                 self.icon_user_modified = true;
-                self.apply_icon(icon);
+                self.apply_icon(InstanceIcon::File(path));
             }
             SummaryIn::PickAutoIcon => {
                 self.icon_user_modified = false;
@@ -518,9 +480,15 @@ impl SimpleComponent for InstanceSummary {
             SummaryIn::SelectCategory(category) => self.select_category(category),
             SummaryIn::ClearCategory => self.clear_category(),
             SummaryIn::InstallClicked => {
+                // 只有用户选过自定义图片才写 `logo.png`；自动图标不落盘。
+                let icon = match &self.icon {
+                    InstanceIcon::File(path) if self.icon_user_modified => Some(path.clone()),
+                    InstanceIcon::Asset(_) | InstanceIcon::File(_) => None,
+                };
                 let _ = sender.output(SummaryOut::Install {
                     name: self.name.clone(),
                     category: self.category.clone(),
+                    icon,
                 });
             }
         }
@@ -539,9 +507,7 @@ fn pick_icon_file(sender: ComponentSender<InstanceSummary>) {
     dialog.open(Some(&parent), None::<&gio::Cancellable>, move |result| {
         if let Some(path) = result.ok().and_then(|file| file.path()) {
             // 文件对话框可能比页面活得久：页面关了就当用户放弃选择。
-            let _ = sender
-                .input_sender()
-                .send(SummaryIn::PickIcon(IconSource::File(path)));
+            let _ = sender.input_sender().send(SummaryIn::PickCustomIcon(path));
         }
     });
 }

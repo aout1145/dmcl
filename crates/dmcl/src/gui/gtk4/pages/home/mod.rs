@@ -25,12 +25,14 @@ use relm4::gtk;
 use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
+use dmcl_game::{detect_version, VersionRef};
 use dmcl_launch::GameMonitor;
-use dmcl_mcmeta::layout::installed_versions;
+use dmcl_mcmeta::layout::{installed_versions, version_dir};
 use dmcl_task::CancelHandle;
 
 use crate::config::{read_instance_category, LaunchConfig};
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
+use crate::gui::gtk4::widgets::instance_icon::{IconKind, InstanceIcon};
 
 use category_section::{group_instances, CategorySection};
 use instance_card::CardOut;
@@ -106,6 +108,8 @@ pub(crate) struct HomePage {
     installed: Vec<String>,
     /// 已读取的实例分类；活动但暂时不在目录里的实例保留原分类。
     categories: HashMap<String, Option<String>>,
+    /// 已安装实例的图标。活动但不在目录里的幽灵卡片没有图标，保留首字母头像。
+    icons: HashMap<String, InstanceIcon>,
     /// 当前活动实例，key 是版本名。
     runtimes: HashMap<String, InstanceRuntime>,
     watch_task: Option<TaskGuard>,
@@ -241,6 +245,7 @@ impl SimpleComponent for HomePage {
             selected: None,
             installed: Vec::new(),
             categories: HashMap::new(),
+            icons: HashMap::new(),
             runtimes: HashMap::new(),
             watch_task: None,
         };
@@ -274,7 +279,9 @@ impl SimpleComponent for HomePage {
                     .iter()
                     .map(|instance| instance.name.clone())
                     .collect();
+                self.icons.clear();
                 for instance in instances {
+                    self.icons.insert(instance.name.clone(), instance.icon);
                     self.categories.insert(instance.name, instance.category);
                 }
                 self.sync_sections();
@@ -540,6 +547,7 @@ impl HomePage {
 
         let selected = self.selected.clone();
         let runtimes = &self.runtimes;
+        let icons = &self.icons;
         let mut guard = self.sections.guard();
         guard.clear();
         for (title, names) in groups {
@@ -551,7 +559,8 @@ impl HomePage {
                         .map(|runtime| runtime.state)
                         .unwrap_or(InstanceState::Idle);
                     let is_selected = selected.as_deref() == Some(name.as_str());
-                    (name, state, is_selected)
+                    let icon = icons.get(&name).cloned();
+                    (name, state, is_selected, icon)
                 })
                 .collect();
             guard.push_back((title, cards));
@@ -635,12 +644,26 @@ async fn load_instances(root: &Path) -> anyhow::Result<Vec<InstanceEntry>> {
     let mut entries = Vec::new();
     for version in installed_versions(root).await? {
         let category = read_instance_category(root, &version.name).await;
+        let icon = load_instance_icon(root, &version.name).await;
         entries.push(InstanceEntry {
             name: version.name,
             category,
+            icon,
         });
     }
     Ok(entries)
+}
+
+/// 自定义 `logo.png` 优先；没有时按版本 JSON 与加载器自动选择。
+async fn load_instance_icon(root: &Path, name: &str) -> InstanceIcon {
+    let logo = version_dir(root, name).join("logo.png");
+    if logo.is_file() {
+        return InstanceIcon::File(logo);
+    }
+    match detect_version(&VersionRef::new(root, name)).await {
+        Ok(detected) => InstanceIcon::Asset(IconKind::from_detected(&detected)),
+        Err(_) => InstanceIcon::Asset(IconKind::Broken),
+    }
 }
 
 /// 可见版本：已安装版本保持原顺序，活动但不在目录里的版本按名字追加。
@@ -698,8 +721,8 @@ fn watch_target(versions: &Path) -> Option<PathBuf> {
 }
 
 /// 只关心直接改变 `versions` 子项的事件：创建 / 删除 / 重命名；此外实例自己的
-/// `dmcl.json` 变化（分类可能被手改或安装完成后写入）和 `<name>/<name>.json`
-/// 写入（目录到这时才算已安装版本）也要刷新列表。
+/// `dmcl.json` 变化（分类可能被手改或安装完成后写入）、`<name>/<name>.json`
+/// 写入（目录到这时才算已安装版本）和 `logo.png` 写入（自定义图标）也要刷新列表。
 ///
 /// 版本目录内部的其它文件写入、目录 metadata 变化、访问事件都不算列表变化。即使某个平台
 /// 的 watcher 仍然把子目录里的事件送上来，这个过滤也能把它们挡掉。
@@ -716,10 +739,14 @@ fn event_changes_versions(event: &Event, watched: &Path) -> bool {
         .paths
         .iter()
         .any(|path| is_version_json(path, watched));
-    if !touches_watched && !touches_instance_config && !touches_version_json {
+    let touches_logo = event
+        .paths
+        .iter()
+        .any(|path| is_instance_logo(path, watched));
+    if !touches_watched && !touches_instance_config && !touches_version_json && !touches_logo {
         return false;
     }
-    if touches_instance_config || touches_version_json {
+    if touches_instance_config || touches_version_json || touches_logo {
         return !matches!(event.kind, EventKind::Access(_));
     }
     matches!(
@@ -740,6 +767,12 @@ fn is_version_json(path: &Path, versions: &Path) -> bool {
     dir.parent() == Some(versions)
         && path.extension().is_some_and(|ext| ext == "json")
         && path.file_stem() == dir.file_name()
+}
+
+/// `versions/<name>/logo.png`：实例自定义图标，写入后磁贴要刷新。
+fn is_instance_logo(path: &Path, versions: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "logo.png")
+        && path.parent().and_then(Path::parent) == Some(versions)
 }
 
 /// `versions/<name>/dmcl.json`：实例自己的配置，分类变化要反映到分组。
@@ -906,6 +939,45 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn instance_icon_prefers_logo_and_falls_back_to_detection() {
+        let root = std::env::temp_dir().join(format!("dmcl-home-icon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |name: &str, json: &str| {
+            let dir = version_dir(&root, name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{name}.json")), json).unwrap();
+        };
+
+        write("custom", r#"{"id":"custom","type":"release"}"#);
+        let logo = version_dir(&root, "custom").join("logo.png");
+        std::fs::write(&logo, b"custom").unwrap();
+        assert_eq!(
+            load_instance_icon(&root, "custom").await,
+            InstanceIcon::File(logo)
+        );
+
+        write("release", r#"{"id":"release","type":"release"}"#);
+        assert_eq!(
+            load_instance_icon(&root, "release").await,
+            InstanceIcon::Asset(IconKind::Release)
+        );
+
+        write("unknown", r#"{"id":"unknown"}"#);
+        assert_eq!(
+            load_instance_icon(&root, "unknown").await,
+            InstanceIcon::Asset(IconKind::Broken)
+        );
+
+        write("broken", "{");
+        assert_eq!(
+            load_instance_icon(&root, "broken").await,
+            InstanceIcon::Asset(IconKind::Broken)
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn watch_target_uses_versions_or_the_nearest_existing_parent() {
         let root = std::env::temp_dir().join(format!("dmcl-home-watch-{}", std::process::id()));
@@ -945,6 +1017,11 @@ mod tests {
         let temp = Event::new(EventKind::Create(CreateKind::File))
             .add_path(version.join(".dmcl-1234.json.tmp"));
         assert!(event_changes_versions(&temp, versions));
+
+        // 自定义图标写入也要刷新磁贴。
+        let logo =
+            Event::new(EventKind::Create(CreateKind::File)).add_path(version.join("logo.png"));
+        assert!(event_changes_versions(&logo, versions));
 
         // 版本目录内部其它文件的写入不触发列表刷新。
         let inner = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)))

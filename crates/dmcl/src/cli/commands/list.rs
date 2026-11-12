@@ -125,6 +125,7 @@ mod tests {
     fn summary_puts_the_minecraft_version_before_the_loaders() {
         let detected = DetectedVersion {
             minecraft: Some("1.12.2".to_string()),
+            kind: None,
             loaders: vec![loader(DetectedLoaderKind::Forge, Some("x.xx"))],
         };
 
@@ -135,6 +136,7 @@ mod tests {
     fn summary_skips_unknown_parts() {
         let detected = DetectedVersion {
             minecraft: None,
+            kind: None,
             loaders: vec![
                 loader(DetectedLoaderKind::Fabric, Some("0.15.0")),
                 loader(DetectedLoaderKind::NeoForge, None),
