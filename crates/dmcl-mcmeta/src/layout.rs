@@ -44,15 +44,15 @@ pub struct InstalledVersion {
     pub name: String,
     /// 版本目录 `versions/<name>`。
     pub dir: PathBuf,
-    /// 版本 JSON 路径 `versions/<name>/<name>.json`（不保证存在）。
+    /// 版本 JSON 路径 `versions/<name>/<name>.json`（一定存在）。
     pub json_path: PathBuf,
 }
 
 /// 列出 `<root_path>/versions/` 下的已安装版本，按名字排序。
 ///
-/// `versions/` 不存在（还没装过任何版本）时返回空列表；只统计**目录**，
-/// 忽略同名文件。目录里是否真的装了版本（有 `<name>.json`）不在这一步判断
-/// —— 那是完整性检查的事。
+/// 只有包含 `<name>/<name>.json` 的目录才算已安装版本，其余目录（安装未完成、
+/// 残留或其它工具留下的）直接跳过。`versions/` 不存在（还没装过任何版本）时
+/// 返回空列表。
 pub async fn installed_versions(root_path: &Path) -> Result<Vec<InstalledVersion>> {
     let versions_dir = root_path.join("versions");
     let mut entries = match tokio::fs::read_dir(&versions_dir).await {
@@ -80,6 +80,12 @@ pub async fn installed_versions(root_path: &Path) -> Result<Vec<InstalledVersion
         let name = entry.file_name().to_string_lossy().into_owned();
         let dir = entry.path();
         let json_path = dir.join(format!("{name}.json"));
+        if !tokio::fs::metadata(&json_path)
+            .await
+            .is_ok_and(|metadata| metadata.is_file())
+        {
+            continue;
+        }
         versions.push(InstalledVersion {
             name,
             dir,
@@ -265,14 +271,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn installed_versions_lists_version_directories_sorted() {
+    async fn installed_versions_require_their_json() {
         let root = std::env::temp_dir().join(format!("dmcl-installed-{}", std::process::id()));
         let _ = tokio::fs::remove_dir_all(&root).await;
         let versions = root.join("versions");
-        tokio::fs::create_dir_all(versions.join("1.20.1"))
+        for name in ["1.20.1", "1.20.1-forge"] {
+            tokio::fs::create_dir_all(versions.join(name))
+                .await
+                .unwrap();
+            tokio::fs::write(versions.join(name).join(format!("{name}.json")), "{}")
+                .await
+                .unwrap();
+        }
+        // 没有 <name>.json 的目录不算版本：安装未完成、残留或别的 json。
+        tokio::fs::create_dir_all(versions.join("1.20.2"))
             .await
             .unwrap();
-        tokio::fs::create_dir_all(versions.join("1.20.1-forge"))
+        tokio::fs::create_dir_all(versions.join("1.20.3"))
+            .await
+            .unwrap();
+        tokio::fs::write(versions.join("1.20.3/other.json"), "{}")
             .await
             .unwrap();
         // 同名文件不算版本

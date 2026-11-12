@@ -53,8 +53,8 @@ macros.rs    string_enum! 内部宏
 ### 本地目录布局
 
 `layout.rs` 约定 `versions/<name>/<name>.json`、`libraries/`、`assets/` 以及 natives 解压
-目录的位置，并提供读取版本 JSON 的入口。这里只算路径、读文档，不写盘；真正的落盘在
-`dmcl-install`。
+目录的位置，并提供读取版本 JSON 的入口。列举已安装版本时只认包含 `<name>.json` 的目录；
+安装未完成或残留的目录不算版本。这里只算路径、读文档，不写盘；真正的落盘在 `dmcl-install`。
 
 ## 相关文档
 

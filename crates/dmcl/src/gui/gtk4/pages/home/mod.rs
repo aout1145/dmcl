@@ -698,7 +698,8 @@ fn watch_target(versions: &Path) -> Option<PathBuf> {
 }
 
 /// 只关心直接改变 `versions` 子项的事件：创建 / 删除 / 重命名；此外实例自己的
-/// `dmcl.json` 变化（分类可能被手改或安装完成后写入）也要刷新分类。
+/// `dmcl.json` 变化（分类可能被手改或安装完成后写入）和 `<name>/<name>.json`
+/// 写入（目录到这时才算已安装版本）也要刷新列表。
 ///
 /// 版本目录内部的其它文件写入、目录 metadata 变化、访问事件都不算列表变化。即使某个平台
 /// 的 watcher 仍然把子目录里的事件送上来，这个过滤也能把它们挡掉。
@@ -711,10 +712,14 @@ fn event_changes_versions(event: &Event, watched: &Path) -> bool {
         .paths
         .iter()
         .any(|path| is_instance_config(path, watched));
-    if !touches_watched && !touches_instance_config {
+    let touches_version_json = event
+        .paths
+        .iter()
+        .any(|path| is_version_json(path, watched));
+    if !touches_watched && !touches_instance_config && !touches_version_json {
         return false;
     }
-    if touches_instance_config {
+    if touches_instance_config || touches_version_json {
         return !matches!(event.kind, EventKind::Access(_));
     }
     matches!(
@@ -725,6 +730,16 @@ fn event_changes_versions(event: &Event, watched: &Path) -> bool {
             | EventKind::Remove(_)
             | EventKind::Modify(ModifyKind::Any | ModifyKind::Name(_) | ModifyKind::Other)
     )
+}
+
+/// `versions/<name>/<name>.json`：没有它目录不算已安装版本，写入后列表要刷新。
+fn is_version_json(path: &Path, versions: &Path) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    dir.parent() == Some(versions)
+        && path.extension().is_some_and(|ext| ext == "json")
+        && path.file_stem() == dir.file_name()
 }
 
 /// `versions/<name>/dmcl.json`：实例自己的配置，分类变化要反映到分组。
