@@ -67,8 +67,6 @@ async-trait = "0.1"
 # 微软登录的 refresh token 存系统凭据库（Windows 凭据管理器 / macOS Keychain /
 # Linux Secret Service）。
 keyring = "4.2"
-# 构建脚本用它生成编译期信息（构建时间等）。
-built = { version = "0.8", features = ["chrono"] }
 clap = { version = "4", features = ["derive"] }
 dialoguer = "0.12"
 version-compare = "0.2"

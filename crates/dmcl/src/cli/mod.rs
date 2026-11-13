@@ -20,7 +20,12 @@ use crate::config::{Config, ConfigError};
 
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
-#[command(name = "dmcl", version = env!("CARGO_PKG_VERSION"), long_about = None)]
+#[command(
+    name = "dmcl",
+    version = env!("CARGO_PKG_VERSION"),
+    long_about = None,
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     /// 本次运行使用的 Minecraft 根目录（`minecraft_roots` 里的名字）
     #[arg(long, global = true, value_name = "name")]
@@ -111,8 +116,7 @@ fn translate_error(err: &clap::Error) -> Option<String> {
 /// 把 clap 自动生成的英文说明换成中文（递归处理子命令）。
 fn localized_command() -> clap::Command {
     fn localize(mut command: clap::Command) -> clap::Command {
-        // `--help` / `--version` / `help` 子命令是 clap 在 build 阶段补进命令树的，
-        // 先 build 一次才能改到它们
+        // `--help` / `--version` 是 clap 在 build 阶段补进命令树的，先 build 一次才能改到它们
         command.build();
         let has_subcommands = command.get_subcommands().next().is_some();
         let has_positionals = command.get_positionals().next().is_some();
@@ -132,19 +136,13 @@ fn localized_command() -> clap::Command {
             command = command.mut_arg("version", |arg| arg.help("打印版本信息"));
         }
 
-        // 递归处理子命令（`help` 也要中文化）
+        // 递归处理子命令
         let names: Vec<String> = command
             .get_subcommands()
             .map(|sub| sub.get_name().to_string())
             .collect();
         for name in names {
-            if name == "help" {
-                command = command.mut_subcommand("help", |sub| {
-                    sub.about("打印帮助信息（也可查询某个子命令的帮助）")
-                });
-            } else {
-                command = command.mut_subcommand(name, localize);
-            }
+            command = command.mut_subcommand(name, localize);
         }
         command
     }
@@ -268,9 +266,6 @@ pub enum Commands {
         #[arg(value_name = "frontend")]
         frontend: Option<String>,
     },
-
-    /// 显示版本
-    Version,
 }
 
 /// 执行一个命令。
@@ -334,8 +329,6 @@ pub async fn dispatch(
         Commands::Login { name } => commands::login::run(name.as_deref(), config).await,
 
         Commands::SearchJava => commands::search_java::run(config).await,
-
-        Commands::Version => commands::version::run().await,
     }
 }
 
@@ -360,7 +353,6 @@ mod tests {
             "login",
             "search-java",
             "gui",
-            "version",
         ] {
             assert!(names.contains(&expected), "缺少命令 {expected}: {names:?}");
         }
@@ -372,6 +364,8 @@ mod tests {
             "prompt",
             "config",
             "java",
+            "version",
+            "help",
         ] {
             assert!(
                 !names.contains(&removed),
@@ -543,6 +537,8 @@ mod tests {
             );
         }
         assert!(root.find_subcommand("java").is_none());
+        assert!(root.find_subcommand("version").is_none());
+        assert!(root.find_subcommand("help").is_none());
     }
 
     /// clap 的报错也要是中文。

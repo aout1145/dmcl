@@ -12,12 +12,11 @@
 ```text
 lib.rs         库入口
 main.rs        可执行文件入口：先同步读配置，再决定走 GUI 还是 tokio + CLI
-build_info.rs  编译期信息（构建时间等）
 config/        mod.rs 整份文档读写与逐项容错
                account.rs / java.rs / root.rs / launch.rs / download.rs 各配置段
                instance.rs 实例 dmcl.json 的 instance 段（分类）
 cli/           mod.rs 命令定义、本地化与分发；progress.rs 终端进度
-               commands/ install / launch / list / login / search_java / version
+               commands/ install / launch / list / login / search_java
 gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 README）
 ```
 

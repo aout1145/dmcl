@@ -8,7 +8,6 @@ pub(crate) mod launch;
 pub(crate) mod list;
 pub(crate) mod login;
 pub(crate) mod search_java;
-pub(crate) mod version;
 
 use dialoguer::console::Term;
 use dialoguer::Confirm;
