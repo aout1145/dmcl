@@ -503,7 +503,7 @@ async fn multiple_files_share_the_global_connection_budget() {
     for index in 0..3 {
         let path = format!("/file-{index}");
         let body = vec![index as u8; 512 * 1024];
-        files.insert(path.clone(), body.clone());
+        files.insert(path, body.clone());
         items.push(
             DownloadItem::new([server_url_placeholder()], dir.join(format!("{index}.bin")))
                 .with_size(Some(body.len() as u64))
