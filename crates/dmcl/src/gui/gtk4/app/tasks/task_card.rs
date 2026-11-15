@@ -191,9 +191,10 @@ impl FactoryComponent for TaskCard {
                     },
                 },
 
-                // 叉用 overlay 贴住卡片右上角，不受内容内边距影响。
+                // 右上角按钮用 overlay 贴住卡片，不受内容内边距影响。
                 add_overlay = &gtk::Button {
-                    set_icon_name: "window-close-symbolic",
+                    #[watch]
+                    set_icon_name: self.close_icon(),
                     set_halign: gtk::Align::End,
                     set_valign: gtk::Align::Start,
                     set_margin_top: 4,
@@ -399,6 +400,14 @@ impl TaskCard {
 
     fn progress_info_visible(&self) -> bool {
         self.progress_visible() && !self.state.progress_text().is_empty()
+    }
+
+    fn close_icon(&self) -> &'static str {
+        if self.state.is_finished() {
+            "window-close-symbolic"
+        } else {
+            "process-stop-symbolic"
+        }
     }
 
     fn close_tooltip(&self) -> &'static str {
