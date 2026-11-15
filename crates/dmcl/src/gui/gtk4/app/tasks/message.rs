@@ -3,6 +3,8 @@
 use dmcl_task::{CancelHandle, TaskEvent};
 use relm4::prelude::DynamicIndex;
 
+use super::task_view::TaskOutcome;
+
 /// 任务对话框收到的消息。
 #[derive(Debug)]
 pub(crate) enum TaskMsg {
@@ -16,13 +18,8 @@ pub(crate) enum TaskMsg {
     },
     /// 任务事件流里的一条。
     Event { id: u64, event: TaskEvent },
-    /// 任务结束。`cancelled` 表示是用户取消的；`error` 是失败原因（成功 / 取消时为 `None`）。
-    Finished {
-        id: u64,
-        ok: bool,
-        cancelled: bool,
-        error: Option<String>,
-    },
+    /// 任务结束。
+    Finished { id: u64, outcome: TaskOutcome },
     /// 卡片右上角的叉：运行中 = 取消，已结束 = 清除这条记录。
     CloseCard(DynamicIndex),
     /// 用户关闭了任务对话框（Esc / 标题栏关闭按钮）：只收起，不取消任务。

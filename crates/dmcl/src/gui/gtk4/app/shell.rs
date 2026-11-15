@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use dmcl_task::{Cancelled, TaskGraph};
 
-use super::tasks::TaskMsg;
+use super::tasks::{TaskMsg, TaskOutcome};
 use super::toast::{PageToast, ToastService};
 
 /// 任务结果句柄：`finished().await` 拿到最终节点的 `Arc<O>`。
@@ -72,12 +72,12 @@ impl Shell {
                     .any(|cause| cause.downcast_ref::<Cancelled>().is_some())
             });
             let result = raw.map_err(|err| format!("{err:#}"));
-            let _ = done.send(TaskMsg::Finished {
-                id,
-                ok: result.is_ok(),
-                cancelled,
-                error: result.as_ref().err().cloned(),
-            });
+            let outcome = match &result {
+                Ok(_) => TaskOutcome::Succeeded,
+                Err(error) if cancelled => TaskOutcome::Cancelled(Some(error.clone())),
+                Err(error) => TaskOutcome::Failed(error.clone()),
+            };
+            let _ = done.send(TaskMsg::Finished { id, outcome });
             let _ = tx.send(result);
         });
 

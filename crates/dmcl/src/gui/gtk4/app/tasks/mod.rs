@@ -22,6 +22,8 @@ use dmcl_task::{CancelHandle, TaskEvent};
 pub(crate) use message::TaskMsg;
 /// 任务卡片的全局样式（日志区边框）。
 pub(crate) use task_card::CSS;
+/// 任务图的最终结果。
+pub(crate) use task_view::TaskOutcome;
 
 use super::ToastService;
 use task_card::{CardOut, TaskCard};
@@ -159,32 +161,26 @@ impl SimpleComponent for TaskCenter {
                     }
                 }
             }
-            TaskMsg::Finished {
-                id,
-                ok,
-                cancelled,
-                error,
-            } => {
+            TaskMsg::Finished { id, outcome } => {
                 let index = self.cards.iter().position(|card| card.id == id);
                 let name = index
                     .and_then(|index| self.cards.get(index))
                     .map(|card| card.name().to_string())
                     .unwrap_or_default();
+                let text = match &outcome {
+                    TaskOutcome::Succeeded => format!("任务「{name}」完成"),
+                    TaskOutcome::Cancelled(_) => format!("任务「{name}」已取消"),
+                    TaskOutcome::Failed(_) => format!("任务「{name}」失败"),
+                };
 
                 if let Some(index) = index {
                     let mut guard = self.cards.guard();
                     if let Some(card) = guard.get_mut(index) {
-                        card.finish(ok, cancelled, error);
+                        card.finish(outcome);
                     }
                 }
                 self.cancels.remove(&id);
-                self.toasts.global_toast(&if cancelled {
-                    format!("任务「{name}」已取消")
-                } else if ok {
-                    format!("任务「{name}」完成")
-                } else {
-                    format!("任务「{name}」失败")
-                });
+                self.toasts.global_toast(&text);
             }
             TaskMsg::CloseCard(index) => {
                 let index = index.current_index();

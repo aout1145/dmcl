@@ -17,7 +17,7 @@ use relm4::prelude::*;
 use dmcl_task::TaskEvent;
 
 use super::step_row::{StepRow, StepRowMsg};
-use super::task_view::{StepView, TaskState, TaskStatus};
+use super::task_view::{StepView, TaskOutcome, TaskState, TaskStatus};
 
 /// 任务卡片日志区的样式（全局 CSS）：边框 + 比正文更小的日志字体。
 pub(crate) const CSS: &str = "\
@@ -322,8 +322,8 @@ impl TaskCard {
     }
 
     /// 任务结束。
-    pub fn finish(&mut self, ok: bool, cancelled: bool, error: Option<String>) {
-        self.state.finish(ok, cancelled, error);
+    pub fn finish(&mut self, outcome: TaskOutcome) {
+        self.state.finish(outcome);
     }
 
     /// 请求取消（运行中才生效）。

@@ -16,6 +16,15 @@ pub(crate) enum TaskStatus {
     Failed,
 }
 
+/// 任务图的最终结果。
+#[derive(Debug)]
+pub(crate) enum TaskOutcome {
+    Succeeded,
+    /// 用户取消，附结束原因（通常是「任务已取消」或 FailFast 的首个错误）。
+    Cancelled(Option<String>),
+    Failed(String),
+}
+
 /// 一个 Step 的计数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct StepCounts {
@@ -386,16 +395,18 @@ impl TaskState {
     }
 
     /// 任务结束（`run` 的返回值）。
-    pub fn finish(&mut self, ok: bool, cancelled: bool, error: Option<String>) {
-        self.status = if cancelled {
-            TaskStatus::Cancelled
-        } else if ok {
-            TaskStatus::Done
-        } else {
-            TaskStatus::Failed
-        };
-        // 取消也保留原因（通常是「任务已取消」或导致 FailFast 的首个错误）。
-        self.error = if ok { None } else { error };
+    pub fn finish(&mut self, outcome: TaskOutcome) {
+        match outcome {
+            TaskOutcome::Succeeded => self.status = TaskStatus::Done,
+            TaskOutcome::Cancelled(reason) => {
+                self.status = TaskStatus::Cancelled;
+                self.error = reason;
+            }
+            TaskOutcome::Failed(error) => {
+                self.status = TaskStatus::Failed;
+                self.error = Some(error);
+            }
+        }
     }
 
     pub fn is_finished(&self) -> bool {
@@ -756,7 +767,7 @@ mod tests {
         for event in events.lock().unwrap().iter() {
             state.apply(event);
         }
-        state.finish(false, true, Some("任务已取消".into()));
+        state.finish(TaskOutcome::Cancelled(Some("任务已取消".into())));
 
         let views = state.step_views();
         assert_eq!(views[0].status, StepDisplayStatus::Failed);
@@ -771,12 +782,12 @@ mod tests {
         let mut state = TaskState::new("t");
         state.request_cancel();
         assert_eq!(state.status, TaskStatus::Canceling);
-        state.finish(false, true, Some("任务已取消".into()));
+        state.finish(TaskOutcome::Cancelled(Some("任务已取消".into())));
         assert_eq!(state.status, TaskStatus::Cancelled);
         assert_eq!(state.error.as_deref(), Some("任务已取消"));
         assert!(state.is_finished());
 
-        state.finish(false, false, Some("boom".into()));
+        state.finish(TaskOutcome::Failed("boom".into()));
         assert_eq!(state.status, TaskStatus::Failed);
         assert_eq!(state.error.as_deref(), Some("boom"));
     }
