@@ -60,7 +60,8 @@ jobs:
           name: dmcl-gtk4-linux
           path: dist/dmcl-gtk4-linux.AppImage
 
-  # Windows 上用 MSYS2 的 GTK4，Rust 侧用 rustup 的 GNU target（MSVC 的 GTK 包不好装）。
+  # Windows 上用 MSYS2 CLANG64（UCRT）的 GTK4。Rust 的 windows-gnu 默认链接
+  # MSVCRT，只有 gnullvm target 才真正使用 UCRT。
   gui-windows:
     name: GUI (GTK4, Windows)
     runs-on: windows-latest
@@ -82,22 +83,22 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable-x86_64-pc-windows-gnu
+          toolchain: stable-x86_64-pc-windows-gnullvm
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: gtk4-windows
+          key: gtk4-windows-ucrt
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: CLANG64
           path-type: inherit
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-gtk4
-            mingw-w64-x86_64-libadwaita
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-gtk4
+            mingw-w64-clang-x86_64-libadwaita
 
       - name: Clippy (gtk4)
         run: cargo clippy -p dmcl --features gtk4 --all-targets -- -D warnings

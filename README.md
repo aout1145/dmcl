@@ -94,8 +94,10 @@ cargo build --release --features gtk4
 
 - **Debian / Ubuntu**：`sudo apt install libgtk-4-dev libadwaita-1-dev`
 - **macOS**：`brew install pkgconf gtk4 libadwaita`
-- **Windows**：用 MSYS2 MINGW64 安装 `mingw-w64-x86_64-gtk4` 与
-  `mingw-w64-x86_64-libadwaita` 后，用 `stable-x86_64-pc-windows-gnu` 工具链构建。
+- **Windows**：用 MSYS2 CLANG64 安装 `mingw-w64-clang-x86_64-clang`、
+  `mingw-w64-clang-x86_64-pkgconf`、`mingw-w64-clang-x86_64-gtk4` 与
+  `mingw-w64-clang-x86_64-libadwaita` 后，用 `stable-x86_64-pc-windows-gnullvm`
+  工具链构建。`windows-gnu` 默认链接 MSVCRT，只有 `gnullvm` 使用 UCRT。
 
 只构建命令行：
 
