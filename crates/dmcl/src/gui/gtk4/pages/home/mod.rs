@@ -104,6 +104,8 @@ pub(crate) struct HomePage {
     sections: FactoryVecDeque<CategorySection>,
     /// 当前选中的版本名。重建卡片时按名字恢复。
     selected: Option<String>,
+    /// 正在读取实例列表。列表为空时用它显示载入动画，避免先闪一下空状态。
+    loading: bool,
     /// `versions/` 目录里的版本，保持 `installed_versions` 的顺序。
     installed: Vec<String>,
     /// 已读取的实例分类；活动但暂时不在目录里的实例保留原分类。
@@ -151,9 +153,34 @@ impl SimpleComponent for HomePage {
                     set_description: Some("点击右下角按钮添加新的 Minecraft 实例"),
                 },
 
-                // 放在 add_named 之后：初始化时两个页面已经存在。
+                // 列表为空且正在扫描版本目录时显示，避免空状态抢占首屏。
+                add_named[Some("loading")] = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 8,
+                    set_halign: gtk::Align::Center,
+                    set_valign: gtk::Align::Center,
+                    set_height_request: 48,
+
+                    gtk::Spinner {
+                        set_spinning: true,
+                        set_valign: gtk::Align::Center,
+                    },
+
+                    gtk::Label {
+                        add_css_class: "dim-label",
+                        set_label: "载入实例列表…",
+                    },
+                },
+
+                // 放在 add_named 之后：初始化时三个页面已经存在。
                 #[watch]
-                set_visible_child_name: if model.sections.is_empty() { "empty" } else { "grid" },
+                set_visible_child_name: if model.loading && model.sections.is_empty() {
+                    "loading"
+                } else if model.sections.is_empty() {
+                    "empty"
+                } else {
+                    "grid"
+                },
             },
 
             // 底部胶囊操作栏：浮在网格上，只在选中实例时出现。
@@ -243,6 +270,8 @@ impl SimpleComponent for HomePage {
             page_toast: PageToast::new(&root_widget),
             sections,
             selected: None,
+            // 初始化后立刻 Reload；先置 true，避免首帧闪一下空状态。
+            loading: true,
             installed: Vec::new(),
             categories: HashMap::new(),
             icons: HashMap::new(),
@@ -265,6 +294,7 @@ impl SimpleComponent for HomePage {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             HomeMsg::Reload => {
+                self.loading = true;
                 let root = self.root_path.clone();
                 let sender = sender.clone();
                 relm4::spawn(async move {
@@ -275,6 +305,7 @@ impl SimpleComponent for HomePage {
                 });
             }
             HomeMsg::Loaded(Ok(instances)) => {
+                self.loading = false;
                 self.installed = instances
                     .iter()
                     .map(|instance| instance.name.clone())
@@ -287,6 +318,7 @@ impl SimpleComponent for HomePage {
                 self.sync_sections();
             }
             HomeMsg::Loaded(Err(err)) => {
+                self.loading = false;
                 self.shell
                     .page_toast(&self.page_toast, &format!("读取已安装版本失败：{err}"));
             }

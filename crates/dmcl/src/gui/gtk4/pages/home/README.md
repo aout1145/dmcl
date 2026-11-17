@@ -30,6 +30,8 @@
   NeoForge / Fabric 优先于 OptiFine，OptiFine 优先于原版类型；版本 JSON 读不出来或识别不
   出版本类型时用红石块。`logo.png` 与版本 JSON 的写入都会触发目录 watcher 刷新。图标按原
   比例完整显示，不裁成圆形。
+- 首次扫描版本目录期间显示载入动画，避免空状态先闪一下；已有列表时的后台刷新保持原内容，
+  不切换到载入页。
 - 分类只由实例 `dmcl.json` 的 `instance.category` 决定；缺省或空白归入「未分类」，分组顺序
   按分类首次出现的顺序，未分类固定最后。坏文件按未分类处理，不影响整个列表。
 - 运行状态只有一份：`Idle / Starting / Running / Stopping`，来源是本页启动成功后拿到的
