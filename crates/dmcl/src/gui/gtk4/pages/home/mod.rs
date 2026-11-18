@@ -49,6 +49,8 @@ pub(crate) const CSS: &str = "\
 pub(crate) enum HomeOut {
     /// 打开「新建实例」页；`categories` 是当前主页已有分类的拷贝，用于输入建议。
     CreateCustom { categories: Vec<String> },
+    /// 打开某个实例的设置页。
+    Manage(String),
 }
 
 /// 实例的运行状态。界面文案、按钮动作、磁贴绿点都从它派生。
@@ -395,12 +397,8 @@ impl SimpleComponent for HomePage {
                 self.shell.global_toast(&format!("监听版本目录失败：{err}"));
             }
             HomeMsg::Manage => {
-                let name = self.selected_name();
-                if !name.is_empty() {
-                    self.shell.page_toast(
-                        &self.page_toast,
-                        &format!("打开 {name} 的管理页（尚未实现）"),
-                    );
+                if let Some(name) = self.selected.clone() {
+                    let _ = sender.output(HomeOut::Manage(name));
                 }
             }
             HomeMsg::CreateInstance => {

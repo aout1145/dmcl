@@ -23,8 +23,19 @@ use crate::gui::gtk4::pages::settings::common::{details_arch_text, details_title
 pub(crate) struct GameOptionsUpdate {
     /// 表单里的完整值；只把 `fields` 里列出的字段写回目标。
     pub launch: LaunchConfig,
-    /// 本次真正改过的字段。
+    /// 本次真正改过、需要写入目标的字段。
     pub fields: BTreeSet<GameOptionField>,
+    /// 本次恢复继承全局、需要从目标删除的字段。
+    pub inherit: BTreeSet<GameOptionField>,
+}
+
+/// 目标当前的启动配置和覆盖情况。
+#[derive(Debug, Clone)]
+pub(crate) struct GameOptionsState {
+    /// 已经与全局合并、当前生效的启动配置。
+    pub launch: LaunchConfig,
+    /// 目标里被覆盖的字段；全局配置没有覆盖层，为空。
+    pub overrides: BTreeSet<GameOptionField>,
 }
 
 /// 一个游戏窗口预设。
@@ -76,37 +87,115 @@ pub(crate) enum GameOptionField {
     VersionIsolation,
 }
 
+impl GameOptionField {
+    /// 实例 `dmcl.json` 的 `launch` 里的字段名。
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Java => "java",
+            Self::Account => "account",
+            Self::WindowWidth => "window_width",
+            Self::WindowHeight => "window_height",
+            Self::MinMemory => "min_memory",
+            Self::MaxMemory => "max_memory",
+            Self::CustomInfo => "custom_info",
+            Self::AdditionalJvm => "additional_jvm",
+            Self::AdditionalGame => "additional_game",
+            Self::VersionIsolation => "version_isolation",
+        }
+    }
+
+    /// JSON 字段名 → 字段；不认识的字段返回 `None`。
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "java" => Self::Java,
+            "account" => Self::Account,
+            "window_width" => Self::WindowWidth,
+            "window_height" => Self::WindowHeight,
+            "min_memory" => Self::MinMemory,
+            "max_memory" => Self::MaxMemory,
+            "custom_info" => Self::CustomInfo,
+            "additional_jvm" => Self::AdditionalJvm,
+            "additional_game" => Self::AdditionalGame,
+            "version_isolation" => Self::VersionIsolation,
+            _ => return None,
+        })
+    }
+}
+
+/// 表单里一起切换的一组字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GameOptionGroup {
+    Account,
+    Java,
+    WindowSize,
+    Memory,
+    VersionIsolation,
+    CustomInfo,
+    AdditionalJvm,
+    AdditionalGame,
+}
+
+impl GameOptionGroup {
+    pub(crate) fn fields(self) -> &'static [GameOptionField] {
+        match self {
+            Self::Account => &[GameOptionField::Account],
+            Self::Java => &[GameOptionField::Java],
+            Self::WindowSize => &[GameOptionField::WindowWidth, GameOptionField::WindowHeight],
+            Self::Memory => &[GameOptionField::MinMemory, GameOptionField::MaxMemory],
+            Self::VersionIsolation => &[GameOptionField::VersionIsolation],
+            Self::CustomInfo => &[GameOptionField::CustomInfo],
+            Self::AdditionalJvm => &[GameOptionField::AdditionalJvm],
+            Self::AdditionalGame => &[GameOptionField::AdditionalGame],
+        }
+    }
+}
+
 /// 游戏设置表单的落点：全局配置，或某个实例的覆盖层。
 pub(crate) trait GameOptionsTarget {
-    /// 读取当前生效的启动配置；账户 / Java 表由表单直接读全局配置。
-    fn load(&self) -> LaunchConfig;
+    /// 读取当前生效的启动配置和覆盖字段；账户 / Java 表由表单直接读全局配置。
+    fn load(&self) -> GameOptionsState;
 
     /// 写回一次改动；保存失败由目标自己提示。
     fn save(&self, update: GameOptionsUpdate);
 }
 
-/// 把一次改动里列出的字段写到 `launch` 上。
-pub(crate) fn apply_update(launch: &mut LaunchConfig, update: &GameOptionsUpdate) {
-    for field in &update.fields {
+/// 把 `source` 里列出的字段复制到 `target`。
+pub(crate) fn copy_fields<'a>(
+    target: &mut LaunchConfig,
+    source: &LaunchConfig,
+    fields: impl IntoIterator<Item = &'a GameOptionField>,
+) {
+    for field in fields {
         match field {
-            GameOptionField::Java => launch.java = update.launch.java.clone(),
-            GameOptionField::Account => launch.account = update.launch.account.clone(),
-            GameOptionField::WindowWidth => launch.window_width = update.launch.window_width,
-            GameOptionField::WindowHeight => launch.window_height = update.launch.window_height,
-            GameOptionField::MinMemory => launch.min_memory = update.launch.min_memory,
-            GameOptionField::MaxMemory => launch.max_memory = update.launch.max_memory,
-            GameOptionField::CustomInfo => launch.custom_info = update.launch.custom_info.clone(),
-            GameOptionField::AdditionalJvm => {
-                launch.additional_jvm = update.launch.additional_jvm.clone();
-            }
+            GameOptionField::Java => target.java = source.java.clone(),
+            GameOptionField::Account => target.account = source.account.clone(),
+            GameOptionField::WindowWidth => target.window_width = source.window_width,
+            GameOptionField::WindowHeight => target.window_height = source.window_height,
+            GameOptionField::MinMemory => target.min_memory = source.min_memory,
+            GameOptionField::MaxMemory => target.max_memory = source.max_memory,
+            GameOptionField::CustomInfo => target.custom_info = source.custom_info.clone(),
+            GameOptionField::AdditionalJvm => target.additional_jvm = source.additional_jvm.clone(),
             GameOptionField::AdditionalGame => {
-                launch.additional_game = update.launch.additional_game.clone();
+                target.additional_game = source.additional_game.clone()
             }
             GameOptionField::VersionIsolation => {
-                launch.version_isolation = update.launch.version_isolation;
+                target.version_isolation = source.version_isolation
             }
         }
     }
+}
+
+/// 把一次改动里列出的字段写到 `launch` 上。
+pub(crate) fn apply_update(launch: &mut LaunchConfig, update: &GameOptionsUpdate) {
+    copy_fields(launch, &update.launch, &update.fields);
+}
+
+/// 组里任意字段被覆盖时，整组按覆盖处理。
+pub(crate) fn group_overridden(
+    overrides: &BTreeSet<GameOptionField>,
+    group: GameOptionGroup,
+) -> bool {
+    group.fields().iter().any(|field| overrides.contains(field))
 }
 
 /// 一个可选的 Java：配置项、内部名，以及探测到的完整信息。
@@ -254,6 +343,7 @@ mod tests {
         let update = GameOptionsUpdate {
             launch: changed,
             fields: [GameOptionField::MaxMemory].into_iter().collect(),
+            inherit: BTreeSet::new(),
         };
         apply_update(&mut launch, &update);
 
@@ -267,9 +357,53 @@ mod tests {
                 ..launch.clone()
             },
             fields: [GameOptionField::VersionIsolation].into_iter().collect(),
+            inherit: BTreeSet::new(),
         };
         apply_update(&mut launch, &update);
         assert!(!launch.version_isolation);
+    }
+
+    #[test]
+    fn field_keys_match_the_instance_json_names() {
+        let keys = [
+            GameOptionField::Java,
+            GameOptionField::Account,
+            GameOptionField::WindowWidth,
+            GameOptionField::WindowHeight,
+            GameOptionField::MinMemory,
+            GameOptionField::MaxMemory,
+            GameOptionField::CustomInfo,
+            GameOptionField::AdditionalJvm,
+            GameOptionField::AdditionalGame,
+            GameOptionField::VersionIsolation,
+        ];
+        for field in keys {
+            assert_eq!(GameOptionField::from_key(field.key()), Some(field));
+        }
+        assert_eq!(GameOptionField::from_key("unknown"), None);
+
+        // 字段名必须和 LaunchConfig 的序列化键一致，否则实例覆盖写不对位置。
+        let config = serde_json::to_value(LaunchConfig::default()).unwrap();
+        let mut serialized: Vec<&str> = config
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        serialized.sort_unstable();
+        let mut fields: Vec<&str> = keys.iter().map(|field| field.key()).collect();
+        fields.sort_unstable();
+        assert_eq!(serialized, fields);
+    }
+
+    #[test]
+    fn a_group_is_overridden_when_any_of_its_fields_is() {
+        let mut overrides = BTreeSet::new();
+        assert!(!group_overridden(&overrides, GameOptionGroup::WindowSize));
+
+        overrides.insert(GameOptionField::WindowHeight);
+        assert!(group_overridden(&overrides, GameOptionGroup::WindowSize));
+        assert!(!group_overridden(&overrides, GameOptionGroup::Memory));
     }
 
     #[test]

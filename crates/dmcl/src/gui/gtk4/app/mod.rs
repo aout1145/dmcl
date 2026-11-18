@@ -22,6 +22,8 @@ pub(crate) use config_store::ConfigRef;
 pub(crate) use shell::Shell;
 pub(crate) use toast::{PageToast, ToastService};
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -35,7 +37,9 @@ use crate::config::{Config, ConfigError, LoadedConfig};
 use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
-use crate::gui::gtk4::pages::settings::{PreferencesMsg, PreferencesPage};
+use crate::gui::gtk4::pages::settings::{
+    InstanceMsg, InstancePage, PreferencesMsg, PreferencesPage,
+};
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::{PageHost, PageSlot};
 use setup::{SetupMsg, SetupOut, SetupWizard};
@@ -79,6 +83,8 @@ struct AppModel {
     tasks: Sender<TaskMsg>,
     // 一次性页面的宿主：打开的 CustomPage 由它保活。
     page_host: Rc<PageHost>,
+    /// 已打开的实例设置页，键是 `(root 名字, 实例名)`，用来聚焦同一个实例而不是重复开标签。
+    instance_tabs: RefCell<HashMap<(String, String), adw::TabPage>>,
     /// 所有 root 的主页；关闭标签只清空槽位的标签句柄，组件继续存活。
     homes: Vec<HomeSlot>,
     /// 首选项：常驻页面，最多一个标签。
@@ -249,6 +255,7 @@ impl SimpleComponent for AppModel {
             header,
             tasks: tasks_sender,
             page_host,
+            instance_tabs: RefCell::new(HashMap::new()),
             homes,
             preferences,
             setup,
@@ -280,6 +287,10 @@ impl SimpleComponent for AppModel {
                     .controller
                     .sender()
                     .send(PreferencesMsg::ConfigChanged);
+                for tab in self.instance_tabs.borrow().values() {
+                    self.page_host
+                        .send::<InstancePage>(tab, InstanceMsg::ConfigChanged);
+                }
                 if let Some(setup) = &self.setup {
                     let _ = setup.sender().send(SetupMsg::ConfigChanged);
                 }
@@ -298,6 +309,10 @@ impl SimpleComponent for AppModel {
                 root,
                 out: HomeOut::CreateCustom { categories },
             } => self.open_custom(&root, categories),
+            AppMsg::Home {
+                root,
+                out: HomeOut::Manage(name),
+            } => self.open_instance(&root, name),
             AppMsg::Tasks(TaskCenterOut::RunningCount(count)) => {
                 let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
             }
@@ -305,6 +320,10 @@ impl SimpleComponent for AppModel {
             AppMsg::TabClosed(page) => {
                 // 一次性页面：关闭即销毁。
                 self.page_host.close(&page);
+                // 实例设置页同样关闭即销毁。
+                self.instance_tabs
+                    .borrow_mut()
+                    .retain(|_, tab| tab != &page);
                 // 常驻页面：只清空标签句柄，组件继续存活。
                 for home in &mut self.homes {
                     home.page.close(&page);
@@ -374,6 +393,27 @@ impl AppModel {
         };
         self.page_host
             .open_page::<CustomPage>((self.shell.clone(), root_path, categories));
+    }
+
+    /// 打开或聚焦某个实例的设置页；同一个 `(root, 实例名)` 只保留一个标签。
+    fn open_instance(&mut self, root_name: &str, name: String) {
+        let key = (root_name.to_string(), name.clone());
+        if let Some(tab) = self.instance_tabs.borrow().get(&key) {
+            self.tab_view.set_selected_page(tab);
+            return;
+        }
+        let root_path = match self.config.read().root_path(root_name) {
+            Ok(path) => path,
+            Err(err) => {
+                self.shell
+                    .global_toast(&format!("无法确定安装目录：{err:#}"));
+                return;
+            }
+        };
+        let tab = self
+            .page_host
+            .open_page::<InstancePage>((self.shell.clone(), root_path, name));
+        self.instance_tabs.borrow_mut().insert(key, tab);
     }
 
     /// 配置里的 root 有增减：给新 root 补建主页，再把菜单交给标题栏。

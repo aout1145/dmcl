@@ -52,6 +52,8 @@
 - **状态按组件归属拆分**：不要集中放进一个大结构体。
 - `update` 只改模型；只有一次性的构造、Pango 测量 / 运行时尺寸计算等 `view!` 表达不了的
   东西，才放 `init` / `init_widgets`，且只跑一次。
+- 计时器、异步任务和控件信号可能在组件关闭后才触发。这类回调给组件发消息用
+  `input_sender().send(...)` 并忽略失败；`ComponentSender::input` 会在运行期结束后 panic。
 - 命令式 GTK 仍可用于静态组装或 `view!` 覆盖不到的控件，但不要让它和模型形成两套状态。
 
 ## 共享配置
@@ -90,7 +92,8 @@ gtk4/
 │   └── tasks/                   # 任务对话框
 ├── pages/                       # 页面
 │   ├── home/                    # 主页 / 实例磁贴 / 启动停止
-│   ├── settings/                # 首选项
+│   ├── settings/                # 首选项与实例设置
+│   │   └── instance/            # 单个实例的设置页
 │   └── download/                # 新建实例页与公共组件
 │       └── custom/              # 「自定义」新建实例页
 ├── widgets/                     # 跨页面复用的部件与逻辑
@@ -107,6 +110,7 @@ gtk4/
 | 任务对话框 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 设置页 | `PreferencesPage` 及目录 / 账户 / Java / 游戏选项分类 | [pages/settings/README.md](pages/settings/README.md) |
+| 实例设置页 | `InstancePage` 的「启动」分类与实例字段级覆盖 | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 

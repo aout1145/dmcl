@@ -119,6 +119,22 @@ impl PageHost {
     pub fn close(&self, page: &adw::TabPage) {
         self.opened.borrow_mut().remove(page);
     }
+
+    /// 给一个已打开页面发消息；页面已关闭或类型不匹配时静默忽略。
+    pub fn send<C>(&self, page: &adw::TabPage, message: C::Input)
+    where
+        C: Component + 'static,
+        C::Input: 'static,
+    {
+        let opened = self.opened.borrow();
+        let Some(controller) = opened
+            .get(page)
+            .and_then(|controller| controller.downcast_ref::<Controller<C>>())
+        else {
+            return;
+        };
+        let _ = controller.sender().send(message);
+    }
 }
 
 /// 长期保活页面的句柄：组件控制器 + 当前标签。

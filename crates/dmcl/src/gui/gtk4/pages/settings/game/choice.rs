@@ -72,16 +72,6 @@ impl FactoryComponent for ChoiceRow {
             set_subtitle_selectable: false,
             set_activatable: true,
 
-            add_prefix = &adw::Avatar {
-                set_size: 32,
-                set_show_initials: true,
-                set_valign: gtk::Align::Center,
-                #[watch]
-                set_text: Some(self.avatar_text.as_deref().unwrap_or("")),
-                #[watch]
-                set_visible: self.avatar_text.is_some(),
-            },
-
             add_suffix = &gtk::Label {
                 #[watch]
                 set_label: &self.detail,
@@ -120,10 +110,17 @@ impl FactoryComponent for ChoiceRow {
     fn init_widgets(
         &mut self,
         _index: &Self::Index,
-        _root: Self::Root,
+        root: Self::Root,
         _returned_widget: &<Self::ParentWidget as FactoryView>::ReturnedWidget,
         sender: FactorySender<Self>,
     ) -> Self::Widgets {
+        // 只有账户行有头像。`AdwActionRow` 会给任何前缀留出缩进，空头像也会让整行
+        // 比「使用全局配置」行更靠右，所以没有头像时干脆不挂前缀。
+        if let Some(text) = &self.avatar_text {
+            let avatar = adw::Avatar::new(32, Some(text.as_str()), true);
+            avatar.set_valign(gtk::Align::Center);
+            root.add_prefix(&avatar);
+        }
         let index = self.index;
         let widgets = view_output!();
         widgets

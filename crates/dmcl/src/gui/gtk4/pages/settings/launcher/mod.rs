@@ -182,6 +182,8 @@ impl SimpleComponent for PreferencesPage {
                 target,
                 config,
                 cache,
+                allow_inherit: false,
+                required_java_major: None,
             })
             .detach();
 

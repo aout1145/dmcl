@@ -3,12 +3,12 @@
 //! 表单只发字段级改动，这里负责把改动写进 `Config::launch` 并异步落盘；保存失败用首选项
 //! 页的 toast 提示。实例管理页以后会实现另一个 `GameOptionsTarget`，表单本身不用改。
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use crate::config::LaunchConfig;
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
 
-use super::{apply_update, GameOptionsTarget, GameOptionsUpdate};
+use super::{apply_update, GameOptionsState, GameOptionsTarget, GameOptionsUpdate};
 
 /// 「全局游戏选项」分类的落点。
 pub(crate) struct GlobalGameOptionsTarget {
@@ -28,8 +28,11 @@ impl GlobalGameOptionsTarget {
 }
 
 impl GameOptionsTarget for GlobalGameOptionsTarget {
-    fn load(&self) -> LaunchConfig {
-        self.config.read().launch.clone()
+    fn load(&self) -> GameOptionsState {
+        GameOptionsState {
+            launch: self.config.read().launch.clone(),
+            overrides: BTreeSet::new(),
+        }
     }
 
     fn save(&self, update: GameOptionsUpdate) {

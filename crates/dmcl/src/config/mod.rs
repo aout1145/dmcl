@@ -48,7 +48,9 @@ mod root;
 pub use account::AccountConfig;
 pub(crate) use account::{unique_account_name, KeyringTokenStore};
 pub use download::DownloadConfig;
-pub use instance::{instance_config_path, read_instance_category, write_instance_category};
+pub use instance::{
+    instance_config_path, read_instance_category, write_instance_category, write_instance_launch,
+};
 pub(crate) use java::resolve_from_config;
 pub use java::{
     configs_from_details, merge_javas, same_java_path, unique_java_name, JavaChoice, JavaConfig,
