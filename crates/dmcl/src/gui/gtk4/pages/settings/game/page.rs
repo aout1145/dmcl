@@ -184,6 +184,7 @@ pub(crate) struct GameOptionsPage {
     window_rows: FactoryVecDeque<ChoiceRow>,
     custom_size_row: adw::ActionRow,
     custom_mark: gtk::Image,
+    window_choice: WindowChoice,
     width_spin: gtk::SpinButton,
     height_spin: gtk::SpinButton,
     auto_memory_row: adw::ActionRow,
@@ -199,6 +200,20 @@ pub(crate) struct GameOptionsPage {
     custom_info: TextOption,
     additional_jvm: TextOption,
     additional_game: TextOption,
+}
+
+/// 窗口大小选中的是某个预设，还是手动输入的宽高。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowChoice {
+    Preset(usize),
+    Custom,
+}
+
+impl WindowChoice {
+    /// 配置里只保存宽高，加载时按值反推选中的预设。
+    fn of(launch: &LaunchConfig) -> Self {
+        window_preset(launch.window_width, launch.window_height).map_or(Self::Custom, Self::Preset)
+    }
 }
 
 #[relm4::component(pub(crate))]
@@ -615,6 +630,7 @@ impl SimpleComponent for GameOptionsPage {
             }
         });
 
+        let window_choice = WindowChoice::of(&launch);
         let mut model = GameOptionsPage {
             target,
             config,
@@ -649,6 +665,7 @@ impl SimpleComponent for GameOptionsPage {
             window_rows,
             custom_size_row,
             custom_mark,
+            window_choice,
             width_spin,
             height_spin,
             auto_memory_row,
@@ -723,10 +740,12 @@ impl SimpleComponent for GameOptionsPage {
                     return;
                 };
                 let inherited = self.inherited(GameOptionGroup::WindowSize);
+                self.window_choice = WindowChoice::Preset(index as usize - 1);
                 if !inherited
                     && preset.width == self.launch.window_width
                     && preset.height == self.launch.window_height
                 {
+                    self.sync_ui();
                     self.window_expander.set_expanded(false);
                     return;
                 }
@@ -738,6 +757,7 @@ impl SimpleComponent for GameOptionsPage {
                 self.schedule_flush(&sender);
             }
             GameOptionsMsg::WindowCustomSelected => {
+                self.window_choice = WindowChoice::Custom;
                 if self.inherited(GameOptionGroup::WindowSize) {
                     self.mark_override([
                         GameOptionField::WindowWidth,
@@ -753,6 +773,7 @@ impl SimpleComponent for GameOptionsPage {
                     return;
                 }
                 self.launch.window_width = value;
+                self.window_choice = WindowChoice::Custom;
                 self.mark_override([GameOptionField::WindowWidth]);
                 self.sync_ui();
                 self.schedule_flush(&sender);
@@ -764,6 +785,7 @@ impl SimpleComponent for GameOptionsPage {
                     return;
                 }
                 self.launch.window_height = value;
+                self.window_choice = WindowChoice::Custom;
                 self.mark_override([GameOptionField::WindowHeight]);
                 self.sync_ui();
                 self.schedule_flush(&sender);
@@ -856,8 +878,10 @@ impl SimpleComponent for GameOptionsPage {
             }
             GameOptionsMsg::VersionIsolationSelected(index) => match index {
                 0 => self.inherit_group(GameOptionGroup::VersionIsolation, &sender),
-                1 => notify(&sender, GameOptionsMsg::VersionIsolationChanged(true)),
-                2 => notify(&sender, GameOptionsMsg::VersionIsolationChanged(false)),
+                1 | 2 => {
+                    self.version_isolation_expander.set_expanded(false);
+                    notify(&sender, GameOptionsMsg::VersionIsolationChanged(index == 1));
+                }
                 _ => {}
             },
             GameOptionsMsg::Inherit(group) => self.inherit_group(group, &sender),
@@ -933,6 +957,7 @@ impl GameOptionsPage {
         let (state, accounts, javas) = load_choices(&self.target, &self.config, &self.cache);
         self.launch = state.launch;
         self.overrides = state.overrides;
+        self.window_choice = WindowChoice::of(&self.launch);
         self.global = self.config.read().launch.clone();
         self.accounts = accounts;
         self.javas = javas;
@@ -1050,7 +1075,24 @@ impl GameOptionsPage {
         if overridden {
             self.schedule_flush(sender);
         }
+        self.collapse_group(group);
         self.sync_ui();
+    }
+
+    /// 选定一组后收起对应的展开行，和选中账户、Java、预设后的行为一致。
+    fn collapse_group(&self, group: GameOptionGroup) {
+        match group {
+            GameOptionGroup::Account => self.account_expander.set_expanded(false),
+            GameOptionGroup::Java => self.java_expander.set_expanded(false),
+            GameOptionGroup::WindowSize => self.window_expander.set_expanded(false),
+            GameOptionGroup::Memory => self.memory_expander.set_expanded(false),
+            GameOptionGroup::VersionIsolation => {
+                self.version_isolation_expander.set_expanded(false);
+            }
+            GameOptionGroup::CustomInfo => self.custom_info.expander.set_expanded(false),
+            GameOptionGroup::AdditionalJvm => self.additional_jvm.expander.set_expanded(false),
+            GameOptionGroup::AdditionalGame => self.additional_game.expander.set_expanded(false),
+        }
     }
 
     /// 把模型同步到所有控件；期间屏蔽信号。
@@ -1084,15 +1126,16 @@ impl GameOptionsPage {
         self.java_inherit.set_selected(java_inherited);
 
         let window_inherited = self.inherited(GameOptionGroup::WindowSize);
-        let selected = window_preset(self.launch.window_width, self.launch.window_height);
         for index in 0..self.window_rows.len() {
             self.window_rows.send(
                 index,
-                ChoiceRowMsg::SetSelected(!window_inherited && selected == Some(index)),
+                ChoiceRowMsg::SetSelected(
+                    !window_inherited && self.window_choice == WindowChoice::Preset(index),
+                ),
             );
         }
         self.custom_mark
-            .set_visible(!window_inherited && selected.is_none());
+            .set_visible(!window_inherited && self.window_choice == WindowChoice::Custom);
         self.window_inherit.set_selected(window_inherited);
 
         let version_inherited = self.inherited(GameOptionGroup::VersionIsolation);
