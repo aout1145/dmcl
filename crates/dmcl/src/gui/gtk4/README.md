@@ -110,7 +110,7 @@ gtk4/
 | 任务对话框 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 设置页 | `PreferencesPage` 及目录 / 账户 / Java / 游戏选项分类 | [pages/settings/README.md](pages/settings/README.md) |
-| 实例设置页 | `InstancePage` 的「启动」分类与实例字段级覆盖 | [pages/settings/README.md](pages/settings/README.md) |
+| 实例设置页 | `InstancePage` 的「启动选项」分类与实例字段级覆盖 | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 

@@ -1,7 +1,8 @@
-//! 单个实例的设置页：左侧「启动」分类，右侧复用游戏设置表单。
+//! 单个实例的设置页：左侧分两组分类，右侧复用游戏设置表单。
 //!
-//! 页面是关闭即销毁的一次性标签页；实例文件的变化不走全局配置仓库，表单目标自己写盘。
-//! 同一实例由根组件按 `(root, 实例名)` 去重，这个模块只负责页面本身。
+//! 只有「启动选项」有内容，其余分类是置灰占位。页面是关闭即销毁的一次性标签页；实例文件
+//! 的变化不走全局配置仓库，表单目标自己写盘。同一实例由根组件按 `(root, 实例名)` 去重，
+//! 这个模块只负责页面本身。
 
 mod target;
 
@@ -59,16 +60,66 @@ impl SimpleComponent for InstancePage {
                         set_spacing: 2,
                         set_hexpand: true,
 
-                        #[name(start_list)]
+                        #[name(instance_list)]
                         gtk::ListBox {
                             add_css_class: "navigation-sidebar",
                             set_selection_mode: gtk::SelectionMode::Single,
 
                             append = &adw::ActionRow {
-                                set_title: "启动",
+                                set_title: "实例",
+                                set_subtitle: "尚未实现",
+                                set_activatable: false,
+                                set_sensitive: false,
+                                add_prefix = &gtk::Image {
+                                    set_icon_name: Some("package-x-generic-symbolic"),
+                                },
+                            },
+
+                            append = &adw::ActionRow {
+                                set_title: "启动选项",
                                 set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("media-playback-start-symbolic"),
+                                },
+                            },
+                        },
+
+                        gtk::Separator {
+                            set_margin_start: 12,
+                            set_margin_end: 12,
+                        },
+
+                        gtk::ListBox {
+                            add_css_class: "navigation-sidebar",
+                            set_selection_mode: gtk::SelectionMode::Single,
+
+                            append = &adw::ActionRow {
+                                set_title: "模组管理",
+                                set_subtitle: "尚未实现",
+                                set_activatable: false,
+                                set_sensitive: false,
+                                add_prefix = &gtk::Image {
+                                    set_icon_name: Some("application-x-addon-symbolic"),
+                                },
+                            },
+
+                            append = &adw::ActionRow {
+                                set_title: "资源包管理",
+                                set_subtitle: "尚未实现",
+                                set_activatable: false,
+                                set_sensitive: false,
+                                add_prefix = &gtk::Image {
+                                    set_icon_name: Some("image-x-generic-symbolic"),
+                                },
+                            },
+
+                            append = &adw::ActionRow {
+                                set_title: "存档管理",
+                                set_subtitle: "尚未实现",
+                                set_activatable: false,
+                                set_sensitive: false,
+                                add_prefix = &gtk::Image {
+                                    set_icon_name: Some("document-save-symbolic"),
                                 },
                             },
                         },
@@ -78,7 +129,7 @@ impl SimpleComponent for InstancePage {
 
             #[wrap(Some)]
             set_content = &adw::NavigationPage {
-                set_title: "启动",
+                set_title: "启动选项",
 
                 #[wrap(Some)]
                 set_child = &gtk::Box {
@@ -141,8 +192,9 @@ impl SimpleComponent for InstancePage {
         });
 
         let widgets = view_output!();
-        if let Some(row) = widgets.start_list.row_at_index(0) {
-            widgets.start_list.select_row(Some(&row));
+        // 默认停在「启动选项」；它是唯一有内容的分类。
+        if let Some(row) = widgets.instance_list.row_at_index(1) {
+            widgets.instance_list.select_row(Some(&row));
         }
 
         let model = Self { game };
