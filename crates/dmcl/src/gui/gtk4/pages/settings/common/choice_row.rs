@@ -1,6 +1,6 @@
 //! 展开式选择行里的一项。
 //!
-//! 账户和 Java 都用 `AdwExpanderRow` 作为选择器：收起时显示当前值，展开后列出全部
+//! 账户、Java 和窗口大小等选择器都用 `AdwExpanderRow`：收起时显示当前值，展开后列出全部
 //! 选项。每一项是一行 `AdwActionRow`：主标题、下方小字和右侧信息都由调用方给出，
 //! 最右侧用对勾表示当前选择。账户项可以在行首带一个占位头像。
 
@@ -11,7 +11,7 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 /// 一行可选项。
-pub(super) struct ChoiceRow {
+pub(crate) struct ChoiceRow {
     index: u32,
     title: String,
     subtitle: String,
@@ -22,7 +22,7 @@ pub(super) struct ChoiceRow {
 }
 
 /// 新建一行可选项。
-pub(super) struct ChoiceRowInit {
+pub(crate) struct ChoiceRowInit {
     pub index: u32,
     pub title: String,
     pub subtitle: String,
@@ -35,7 +35,7 @@ pub(super) struct ChoiceRowInit {
 
 /// 选择行的内部消息。
 #[derive(Debug)]
-pub(super) enum ChoiceRowMsg {
+pub(crate) enum ChoiceRowMsg {
     /// 当前项是否是选中项。
     SetSelected(bool),
     /// 探测结果更新后改写文字。
@@ -48,12 +48,12 @@ pub(super) enum ChoiceRowMsg {
 
 /// 选择行发出的动作。
 #[derive(Debug)]
-pub(super) enum ChoiceRowOut {
+pub(crate) enum ChoiceRowOut {
     /// 用户选中了下标为 `index` 的项。
     Selected(u32),
 }
 
-#[relm4::factory(pub(super))]
+#[relm4::factory(pub(crate))]
 impl FactoryComponent for ChoiceRow {
     type ParentWidget = adw::ExpanderRow;
     type Init = ChoiceRowInit;

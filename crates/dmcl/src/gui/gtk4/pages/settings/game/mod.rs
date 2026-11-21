@@ -4,7 +4,6 @@
 //! 绑定到共享配置；实例管理页以后实现自己的 target，把改动的字段写进实例 `dmcl.json`
 //! 的覆盖层。账户表和 Java 表是全局资源，表单直接从只读的 `ConfigRef` 读取。
 
-mod choice;
 mod global;
 mod page;
 

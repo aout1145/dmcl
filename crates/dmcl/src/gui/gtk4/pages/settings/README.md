@@ -3,7 +3,7 @@
 `pages/settings` —— 主菜单里的「首选项」与主页每个实例的「实例设置」。两者都是仿 GNOME
 设置的左右分栏：左侧分类列表，右侧显示当前分类的内容。
 
-首选项包含「Minecraft 目录」「账号」「Java 管理」「全局游戏选项」；「下载」仍是占位。
+首选项包含「Minecraft 目录」「账号」「Java 管理」「全局游戏选项」和「下载」。
 实例设置的侧栏分两组：「实例」「启动选项」与「模组管理」「资源包管理」「存档管理」，目前
 只有「启动选项」有内容，复用全局游戏选项的表单，每个字段既可以继承全局值，也可以单独覆盖。
 
@@ -15,16 +15,17 @@
 
 ```text
 common/account_display.rs  账户的 ID、类型文案与占位头像文字
+common/choice_row.rs       展开式选择行里的一项
 common/drag_list.rs        通用拖动排序
 common/java_cache.rs       Java 探测结果缓存
 common/java_display.rs     Java 标题 / 供应商 / 架构的展示文案
 launcher/mod.rs            分栏、分组侧栏、右栏切换
 launcher/account.rs        账号分类
 launcher/directory.rs      Minecraft 目录分类
+launcher/download.rs       下载分类
 launcher/java.rs           Java 分类
 game/mod.rs                游戏设置的目标抽象与字段级改动
 game/page.rs               可复用的 GameOptionsPage 表单
-game/choice.rs             展开选择项行
 game/global.rs             全局落点：把改动写进共享配置
 instance/mod.rs            实例设置页：两组侧栏、解析版本 Java 要求
 instance/target.rs         实例落点：字段级覆盖写进实例 dmcl.json
@@ -42,6 +43,9 @@ instance/target.rs         实例落点：字段级覆盖写进实例 dmcl.json
   没有默认账户时新账户自动成为默认；删除默认账户后回到未选择。
 - **Java**：页面只管理可用 Java，默认 Java 在「全局游戏选项」里选。搜索本机后按路径去重
   合并进配置；首次显示时才在后台探测，结果进入共享缓存，不写回配置。
+- **下载**：镜像策略、并发、分块、重试和安装器 Java 都直接对应 `download` 段；改动先留在
+  页面内，防抖后整段写回共享配置。安装器 Java 与游戏设置共用展开式选择行，只影响安装流程的
+  processor，不影响启动。
 - **全局游戏选项**：`GameOptionsPage` 是可复用表单，只通过 `GameOptionsTarget` 读取当前
   生效的启动配置、提交字段级改动；全局 target 写入共享配置。控件改动立即更新模型，防抖后
   只提交本次改动的字段。

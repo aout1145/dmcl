@@ -1,11 +1,12 @@
 //! 首选项：GNOME 设置式的左右分栏。
 //!
 //! 左侧是分类列表，右侧显示当前分类；页面嵌在标签页里，没有自己的窗口标题栏，所以
-//! 分栏保持常驻、不做折叠。「Minecraft 目录」「账号」「全局游戏选项」「Java 管理」可用，
-//! 下载分类仍是置灰占位。
+//! 分栏保持常驻、不做折叠。「Minecraft 目录」「账号」「全局游戏选项」「Java 管理」和
+//! 「下载」各自对应一个分类页。
 
 mod account;
 mod directory;
+mod download;
 mod java;
 
 use std::rc::Rc;
@@ -23,6 +24,7 @@ use account::AccountMsg;
 pub(crate) use account::AccountPage;
 use directory::DirectoryMsg;
 pub(crate) use directory::DirectoryPage;
+use download::{DownloadMsg, DownloadPage};
 use java::{JavaMsg, JavaPage, JavaPageInit};
 
 /// 首选项页收到的消息。
@@ -41,6 +43,8 @@ pub(crate) struct PreferencesPage {
     java: Controller<JavaPage>,
     /// 「全局游戏选项」分类。
     game: Controller<GameOptionsPage>,
+    /// 「下载」分类。
+    download: Controller<DownloadPage>,
 }
 
 #[relm4::component(pub(crate))]
@@ -129,9 +133,7 @@ impl SimpleComponent for PreferencesPage {
 
                             append = &adw::ActionRow {
                                 set_title: "下载",
-                                set_subtitle: "尚未实现",
-                                set_activatable: false,
-                                set_sensitive: false,
+                                set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("folder-download-symbolic"),
                                 },
@@ -173,7 +175,7 @@ impl SimpleComponent for PreferencesPage {
             })
             .detach();
         let target = Rc::new(GlobalGameOptionsTarget::new(
-            shell,
+            shell.clone(),
             PageToast::new(&root_widget),
             config.clone(),
         ));
@@ -186,6 +188,7 @@ impl SimpleComponent for PreferencesPage {
                 required_java_major: None,
             })
             .detach();
+        let download = DownloadPage::builder().launch(shell).detach();
 
         // 右栏按左侧分类切换；各分类页都保活，切换只影响显示。
         let content_stack = gtk::Stack::new();
@@ -194,6 +197,7 @@ impl SimpleComponent for PreferencesPage {
         content_stack.add_named(account.widget(), Some("account"));
         content_stack.add_named(java.widget(), Some("java"));
         content_stack.add_named(game.widget(), Some("game"));
+        content_stack.add_named(download.widget(), Some("download"));
 
         let widgets = view_output!();
 
@@ -227,7 +231,10 @@ impl SimpleComponent for PreferencesPage {
         wire_sidebar(
             &widgets.download_list,
             2,
-            |_| None,
+            |index| match index {
+                0 => Some("download"),
+                _ => None,
+            },
             Rc::clone(&lists),
             content_stack,
         );
@@ -242,6 +249,7 @@ impl SimpleComponent for PreferencesPage {
             account,
             java,
             game,
+            download,
         };
         ComponentParts { model, widgets }
     }
@@ -253,6 +261,7 @@ impl SimpleComponent for PreferencesPage {
                 let _ = self.account.sender().send(AccountMsg::ConfigChanged);
                 let _ = self.java.sender().send(JavaMsg::ConfigChanged);
                 let _ = self.game.sender().send(GameOptionsMsg::Reload);
+                let _ = self.download.sender().send(DownloadMsg::ConfigChanged);
             }
         }
     }

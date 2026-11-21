@@ -27,10 +27,10 @@ use crate::config::{
 };
 use crate::gui::gtk4::app::ConfigRef;
 use crate::gui::gtk4::pages::settings::common::{
-    account_avatar_text, account_type_label, account_username, JavaProbeCache,
+    account_avatar_text, account_type_label, account_username, ChoiceRow, ChoiceRowInit,
+    ChoiceRowMsg, ChoiceRowOut, JavaProbeCache,
 };
 
-use super::choice::{ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut};
 use super::{
     account_for_index, account_index_for, account_label, copy_fields, group_overridden,
     java_choice_for_index, java_detail, java_index_for_choice, java_label, java_title,

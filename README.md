@@ -15,10 +15,11 @@ Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下�
   绝对形式。
 - **Java** —— 搜索本机 Java，或手动维护 Java 列表，显示版本、供应商、架构和路径。
 - **全局启动配置** —— 设置默认账户、默认 Java、窗口尺寸、内存、版本隔离和附加启动参数。
+- **下载设置** —— 设置镜像策略、并发与分块、失败重试，以及安装器使用的 Java。
 - **任务** —— 安装与启动任务的进度、步骤、日志和取消；退出时若有未完成任务会先确认。
 - **外观** —— 跟随系统、浅色和深色三种主题。
 
-尚未实现：实例管理页、删除实例、下载设置、游戏异常退出报告、Forge 版本筛选。
+尚未实现：实例管理页、删除实例、游戏异常退出报告、Forge 版本筛选。
 
 ## 图形界面
 
@@ -48,8 +49,8 @@ Forge 与 OptiFine 可以组合，Fabric、NeoForge 与二者互斥。实例名�
 安装和启动都以任务形式运行。任务列表同时展示全部步骤的计数、整体进度和日志，并支持取消；
 关闭任务列表不会中断任务。退出 DMCL 时若有未完成任务，会先要求确认。
 
-首选项集中管理账户、Minecraft 目录、Java 和全局启动选项。修改会自动保存，并在下次启动
-实例时生效。`Ctrl+,` 可打开首选项；外观支持跟随系统、浅色和深色三种主题。
+首选项集中管理账户、Minecraft 目录、Java、全局启动选项和下载设置。修改会自动保存，并在下次
+启动实例时生效。`Ctrl+,` 可打开首选项；外观支持跟随系统、浅色和深色三种主题。
 
 ## 命令行
 
@@ -127,7 +128,8 @@ Windows `%APPDATA%`；macOS `~/Library/Application Support`）。图形界面的
 
 `download` 段可调整下载策略：`max_connections`、`max_active_files`、`max_workers`、
 `chunk_threshold_mib`、`chunk_size_mib`、`max_retries`、`retry_base_delay_ms`、
-`retry_max_delay_ms`、`mirror`、`skip_music`、`java`。
+`retry_max_delay_ms`、`mirror`、`skip_music`、`java`。图形界面的「下载」分类与这些字段
+一一对应，修改在下次安装或启动实例时生效。
 
 ## 开发与测试
 
