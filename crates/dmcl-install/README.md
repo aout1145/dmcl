@@ -14,6 +14,7 @@
 vanilla.rs    原版元数据落盘、launcher_profiles.json
 loader/       fabric / forge / neoforge / optifine / xforge（Forge 与 NeoForge 共用工具）
 spec.rs       顶层任务图 install_task、InstallSpec / InstallOutcome / LoaderKind
+update.rs     调整已安装实例的加载器：update_loaders_task / LoaderUpdate
 options.rs    InstallOptions
 archive.rs    读安装器 jar / zip 内的条目
 io.rs         安全写盘（先建父目录）
@@ -46,6 +47,14 @@ processor 时，由安装图按需选择 Java，JRE 下载复用同一份下载�
 OptiFine 是叠加在原版或 Forge 上的 tweaker，拆成「下载」与「安装」两个节点：下载只依赖
 版本列表，可以和其它下载并行；安装生成 patch，负责 tweaker、launchwrapper 与主类调整。
 是否兼容由调用方决定，`dmcl-install` 不检查组合，只按调用方给的加载器顺序生成并应用 patch。
+
+### 调整已安装实例的加载器
+
+`update_loaders_task` 只支持由 DMCL 安装的实例：版本 JSON 的 `dmcl-patches[0]` 是原版快照，
+其后是加载器 patch。任务以该快照为基底重建整组加载器：未变化的加载器复用已存 patch，
+新增或换版本的重新安装；自定义（非加载器）patch 原样保留，先于加载器应用。加载器统一按
+Forge、Fabric、NeoForge、OptiFine 的顺序重排，OptiFine 在 Forge 是否存在变化时也会重新生成。
+只写版本 JSON，库文件继续作为共享缓存保留。
 
 ### 安装参数
 

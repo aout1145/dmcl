@@ -92,6 +92,8 @@
 //! * [`install_task`] 是**版本级原子**的：版本目录已存在就直接报错；只有占用成功后才走到
 //!   `on_rollback` 登记中止回滚，失败或被取消时删掉本次新建的 `versions/<名称>`，共享的
 //!   `libraries/` / `assets/` 作为校验缓存保留；
+//! * [`update_loaders_task`] 调整已安装实例的加载器：以 `dmcl-patches[0]` 的原版快照为基底，
+//!   复用未变化的加载器 patch，只重新安装新增 / 换版本的加载器，最后重写版本 JSON；
 //! * Forge / NeoForge 的 processor 用 [`dmcl_task::CommandTask`] 跑，
 //!   因此安装器的输出会作为日志事件流出来。
 
@@ -100,6 +102,7 @@ pub mod io;
 mod loader;
 pub mod options;
 pub mod spec;
+mod update;
 pub mod vanilla;
 
 pub use io::{write_json_safe, write_safe};
@@ -109,4 +112,5 @@ pub use spec::{
     default_version_name, install_task, validate_version_name, InstallOutcome, InstallSpec,
     LoaderKind, LoaderRequest,
 };
+pub use update::{update_loaders_task, LoaderUpdate};
 pub use vanilla::{download_vanilla, generate_launcher_profiles, LAUNCHER_PROFILES_JSON};

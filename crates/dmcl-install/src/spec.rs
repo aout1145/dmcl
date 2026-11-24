@@ -51,6 +51,17 @@ impl LoaderKind {
             LoaderKind::OptiFine => "OptiFine",
         }
     }
+
+    /// patch 的 `name` 字段 → 加载器；不是已知加载器时返回 `None`。
+    pub fn from_patch_name(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "fabric" => LoaderKind::Fabric,
+            "forge" => LoaderKind::Forge,
+            "neoforge" => LoaderKind::NeoForge,
+            "optifine" => LoaderKind::OptiFine,
+            _ => return None,
+        })
+    }
 }
 
 impl std::fmt::Display for LoaderKind {
@@ -232,7 +243,7 @@ fn vanilla_metadata_step(
 }
 
 /// 下载客户端 jar（加载器 processor 之前需要）。
-fn download_client_jar_step(
+pub(crate) fn download_client_jar_step(
     options: Arc<InstallOptions>,
     downloads: Arc<DownloadContext>,
 ) -> impl Task<Arc<ResolvedVersion>, ()> + 'static {
@@ -247,7 +258,7 @@ fn download_client_jar_step(
 }
 
 /// 下载原版依赖库（加载器自己的库由各自的「安装 X」步骤负责）。
-fn download_libraries_step(
+pub(crate) fn download_libraries_step(
     options: Arc<InstallOptions>,
     downloads: Arc<DownloadContext>,
 ) -> impl Task<Arc<ResolvedVersion>, ()> + 'static {
@@ -311,7 +322,7 @@ fn finish_step(version_name: String) -> impl Task<FinishInput, InstallOutcome> +
 }
 
 /// 写盘前把 URL 模板解析回官方地址，并让主 jar 指向自己的版本目录。
-fn finish_version_json(json: &mut VersionJson, version_name: &str) {
+pub(crate) fn finish_version_json(json: &mut VersionJson, version_name: &str) {
     json.resolve_official_urls();
     json.inherits_from = None;
     json.id = Some(version_name.to_string());
