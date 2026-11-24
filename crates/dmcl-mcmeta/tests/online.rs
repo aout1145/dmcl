@@ -99,6 +99,16 @@ async fn fabric_loader_list_can_be_queried() {
 
 #[tokio::test]
 #[ignore = "requires network access"]
+async fn fabric_loader_list_is_empty_for_unsupported_game_versions() {
+    let source = DownloadSource::official();
+    // 1.0.0 早于 Fabric 支持的版本，loader 接口对它返回 400；
+    // 取数应当当成「没有可用版本」而不是失败。
+    let loaders = source.fetch_fabric_loaders("1.0.0").await.expect("fabric");
+    assert!(loaders.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires network access"]
 async fn optifine_list_and_latest_can_be_queried() {
     // 列表与下载都固定走 bmclapi，与构造 DownloadSource 时选的镜像无关。
     let source = DownloadSource::official();

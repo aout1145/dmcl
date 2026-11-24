@@ -1,4 +1,4 @@
-//! Fabric 的元数据、地址与取数（loader 版本列表、版本 JSON）。
+//! Fabric 的元数据、地址与取数（支持的游戏版本、loader 版本列表、版本 JSON）。
 
 use std::cmp::Ordering;
 
@@ -9,6 +9,12 @@ use version_compare::{compare, Cmp};
 use crate::json::JsonMap;
 use crate::source::{templatize_urls, DownloadSource, Root, UrlFields};
 use crate::vanilla::version::{Library, VersionJson};
+
+/// `meta.fabricmc.net/v2/versions/game` 的一项；只关心 Fabric 是否支持该版本。
+#[derive(Debug, Deserialize)]
+struct FabricGameVersion {
+    version: String,
+}
 
 /// `meta.fabricmc.net/v2/versions/loader/<mcver>` 的一项。
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -149,6 +155,11 @@ pub struct FabricSidedMainClass {
     pub extra: JsonMap,
 }
 
+/// Fabric 支持的游戏版本列表：`${FABRIC_META}/v2/versions/game`。
+fn fabric_game_list_url() -> String {
+    format!("{}/v2/versions/game", Root::FabricMeta.placeholder())
+}
+
 /// Fabric 的 loader 版本列表：`${FABRIC_META}/v2/versions/loader/<mc>`。
 fn fabric_loader_list_url(mc_version: &str) -> String {
     format!(
@@ -167,7 +178,14 @@ fn fabric_profile_url(mc_version: &str, loader_version: &str) -> String {
 
 impl DownloadSource {
     /// 取 Fabric 的 loader 版本列表，按 loader 版本号从新到旧排序。
+    ///
+    /// 该游戏版本没有 Fabric 支持时返回空列表；loader 列表接口对这种情况返回
+    /// 400，不能靠它的错误判断。
     pub async fn fetch_fabric_loaders(&self, mc_version: &str) -> Result<Vec<FabricLoaderEntry>> {
+        let games: Vec<FabricGameVersion> = self.fetch_json(&fabric_game_list_url()).await?;
+        if !games.iter().any(|game| game.version == mc_version) {
+            return Ok(Vec::new());
+        }
         let mut list: Vec<FabricLoaderEntry> =
             self.fetch_json(&fabric_loader_list_url(mc_version)).await?;
         for entry in &mut list {
