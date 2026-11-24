@@ -12,17 +12,17 @@ use crate::gui::gtk4::pages::download::common::version_select::{
 use super::versions::{fabric_items, forge_items, neoforge_items, optifine_items};
 
 /// 一个加载器下拉的静态定义。
-pub(super) struct LoaderDef {
-    pub(super) kind: LoaderKind,
+pub(crate) struct LoaderDef {
+    pub(crate) kind: LoaderKind,
     /// 冲突组：只要两个选中的行共享任意一个组就冲突；空切片 = 不参与冲突。
     ///
     /// Forge / Fabric / NeoForge 同属 `"loader"`；Fabric / NeoForge / OptiFine 同属
     /// `"optifine"`。因此 Forge 可以与 OptiFine 叠加，而 Fabric / NeoForge 与两者都冲突。
-    pub(super) mutex_groups: &'static [&'static str],
+    pub(crate) mutex_groups: &'static [&'static str],
 }
 
 /// 加载器下拉表（也是页面上的显示顺序）。
-pub(super) const LOADER_DEFS: &[LoaderDef] = &[
+pub(crate) const LOADER_DEFS: &[LoaderDef] = &[
     LoaderDef {
         kind: LoaderKind::Forge,
         mutex_groups: &["loader"],
@@ -42,15 +42,15 @@ pub(super) const LOADER_DEFS: &[LoaderDef] = &[
 ];
 
 /// 一个加载器下拉 + 它当前的选择。
-pub(super) struct LoaderSlot {
-    pub(super) kind: LoaderKind,
-    pub(super) mutex_groups: &'static [&'static str],
-    pub(super) select: Controller<VersionSelect>,
-    pub(super) selection: Option<VersionItem>,
+pub(crate) struct LoaderSlot {
+    pub(crate) kind: LoaderKind,
+    pub(crate) mutex_groups: &'static [&'static str],
+    pub(crate) select: Controller<VersionSelect>,
+    pub(crate) selection: Option<VersionItem>,
 }
 
 /// 加载器下拉的 Init（取数器捕获下载源，按上下文取列表）。
-pub(super) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSelectInit {
+pub(crate) fn loader_init(kind: LoaderKind, source: DownloadSource) -> VersionSelectInit {
     match kind {
         // Forge：列表新→旧；推荐版本来自 `branch == "recommended"`。
         // 类别 chips 留给后续（TODO）。

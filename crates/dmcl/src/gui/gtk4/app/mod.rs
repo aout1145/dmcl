@@ -38,7 +38,7 @@ use crate::gui::gtk4::pages::download::common;
 use crate::gui::gtk4::pages::download::custom::CustomPage;
 use crate::gui::gtk4::pages::home::{HomeMsg, HomeOut, HomePage};
 use crate::gui::gtk4::pages::settings::{
-    InstanceMsg, InstancePage, PreferencesMsg, PreferencesPage,
+    InstanceMsg, InstanceOut, InstancePage, PreferencesMsg, PreferencesPage,
 };
 use header::{Header, HeaderMsg, HeaderOut};
 use page_host::{PageHost, PageSlot};
@@ -54,6 +54,11 @@ enum AppMsg {
     Home {
         root: String,
         out: HomeOut,
+    },
+    /// 某个实例设置页的动作；`root` 是创建该页面时捕获的 root 名字。
+    Instance {
+        root: String,
+        out: InstanceOut,
     },
     /// 共享配置改过了：补建新增 root 的主页，并刷新标题栏菜单。
     ConfigChanged,
@@ -311,8 +316,9 @@ impl SimpleComponent for AppModel {
             } => self.open_custom(&root, categories),
             AppMsg::Home {
                 root,
-                out: HomeOut::Manage(name),
-            } => self.open_instance(&root, name),
+                out: HomeOut::Manage { name, categories },
+            } => self.open_instance(&root, name, categories, &sender),
+            AppMsg::Instance { root, out } => self.on_instance_out(&root, out),
             AppMsg::Tasks(TaskCenterOut::RunningCount(count)) => {
                 let _ = self.header.sender().send(HeaderMsg::SetRunningCount(count));
             }
@@ -396,7 +402,13 @@ impl AppModel {
     }
 
     /// 打开或聚焦某个实例的设置页；同一个 `(root, 实例名)` 只保留一个标签。
-    fn open_instance(&mut self, root_name: &str, name: String) {
+    fn open_instance(
+        &mut self,
+        root_name: &str,
+        name: String,
+        categories: Vec<String>,
+        sender: &ComponentSender<Self>,
+    ) {
         let key = (root_name.to_string(), name.clone());
         if let Some(tab) = self.instance_tabs.borrow().get(&key) {
             self.tab_view.set_selected_page(tab);
@@ -410,10 +422,46 @@ impl AppModel {
                 return;
             }
         };
-        let tab = self
-            .page_host
-            .open_page::<InstancePage>((self.shell.clone(), root_path, name));
+        let root = root_name.to_string();
+        let tab = self.page_host.open_page_with_output::<InstancePage, _>(
+            (self.shell.clone(), root_path, name, categories),
+            sender.input_sender(),
+            move |out| AppMsg::Instance {
+                root: root.clone(),
+                out,
+            },
+        );
         self.instance_tabs.borrow_mut().insert(key, tab);
+    }
+
+    /// 处理实例设置页的改名 / 删除，同步标签索引。
+    fn on_instance_out(&mut self, root: &str, out: InstanceOut) {
+        match out {
+            InstanceOut::Renamed { old, new } => {
+                let old_key = (root.to_string(), old);
+                let new_key = (root.to_string(), new);
+                let mut tabs = self.instance_tabs.borrow_mut();
+                let Some(tab) = tabs.remove(&old_key) else {
+                    return;
+                };
+                if let Some(previous) = tabs.insert(new_key, tab.clone()) {
+                    drop(tabs);
+                    if previous != tab {
+                        self.tab_view.close_page(&previous);
+                    }
+                }
+            }
+            InstanceOut::Deleted { name } => {
+                let key = (root.to_string(), name);
+                let tab = self.instance_tabs.borrow_mut().remove(&key);
+                if let Some(tab) = tab {
+                    self.tab_view.close_page(&tab);
+                }
+            }
+        }
+        if let Some(home) = self.homes.iter().find(|home| home.name == root) {
+            let _ = home.page.controller.sender().send(HomeMsg::Reload);
+        }
     }
 
     /// 配置里的 root 有增减：给新 root 补建主页，再把菜单交给标题栏。

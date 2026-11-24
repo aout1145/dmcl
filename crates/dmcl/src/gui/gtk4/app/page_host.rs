@@ -115,6 +115,33 @@ impl PageHost {
         page
     }
 
+    /// 打开一个页面，并把组件输出转发给 `sender`。
+    pub fn open_page_with_output<C, M>(
+        &self,
+        args: C::Args,
+        sender: &relm4::Sender<M>,
+        map: impl Fn(C::Output) -> M + 'static,
+    ) -> adw::TabPage
+    where
+        C: Page + Component<Init = PageInit<C::Args>>,
+        M: 'static,
+    {
+        let tab_title = TabTitle::default();
+        let connector = C::builder()
+            .launch(PageInit {
+                tab: tab_title.clone(),
+                args,
+            })
+            .forward(sender, map);
+        let page = self.tab_view.append(connector.widget());
+        tab_title.bind(&page, &self.tab_view);
+        self.tab_view.set_selected_page(&page);
+        self.opened
+            .borrow_mut()
+            .insert(page.clone(), Box::new(connector));
+        page
+    }
+
     /// 标签页被移除时丢掉页面的保活（由 `page-detached` 调用）。
     pub fn close(&self, page: &adw::TabPage) {
         self.opened.borrow_mut().remove(page);

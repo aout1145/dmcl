@@ -16,13 +16,15 @@ use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;
 use relm4::gtk::gdk;
-use relm4::gtk::gio;
 use relm4::prelude::*;
 
 use dmcl_install::validate_version_name;
 use dmcl_mcmeta::layout::version_dir;
 
-use crate::gui::gtk4::widgets::instance_icon::{IconKind, InstanceIcon};
+use crate::gui::gtk4::widgets::category_picker::{
+    CategoryPicker, CategoryPickerInit, CategoryPickerOut,
+};
+use crate::gui::gtk4::widgets::instance_icon::{choose_icon_file, IconKind, InstanceIcon};
 
 /// 组件输入。
 #[derive(Debug)]
@@ -41,12 +43,8 @@ pub(crate) enum SummaryIn {
     EditIconFile,
     /// 名称输入框的文本变化。
     NameEdited(String),
-    /// 分类输入框的文本变化。
-    CategoryEdited(String),
-    /// 用户从已有分类里选了一项。
-    SelectCategory(String),
-    /// 取消当前分类，回到「未分类」。
-    ClearCategory,
+    /// 分类选择器报告了新的分类（选择或编辑）。
+    CategoryChanged(String),
     /// 用户点了安装按钮。
     InstallClicked,
 }
@@ -87,16 +85,10 @@ pub(crate) struct InstanceSummary {
     root_path: PathBuf,
     /// 名称之外的安装条件是否满足（由页面推）。
     ready: bool,
-    /// 分类选择器：收起时显示当前分类，展开后是已有分类 + 自定义输入。
-    category_expander: adw::ExpanderRow,
-    /// 展开区最下面的自定义分类输入框。
-    category_entry: adw::EntryRow,
-    /// 分类非空时出现的「取消选择」按钮。
-    category_clear: gtk::Button,
+    /// 分类选择器。
+    category_picker: Controller<CategoryPicker>,
     /// 当前分类（原始文本；写入时空值表示未分类）。
     category: String,
-    /// 已有分类选项。
-    category_choices: FactoryVecDeque<CategoryChoice>,
     /// 当前图标 / 自动图标（用户点了「自动」时恢复成它）。
     icon: InstanceIcon,
     /// 用户选过自定义图片后，自动图标永不再应用。
@@ -105,69 +97,6 @@ pub(crate) struct InstanceSummary {
     /// 当前图标装载出来的纹理。
     custom_image: Option<gdk::Texture>,
     install_enabled: bool,
-}
-
-const UNCATEGORIZED: &str = "未分类";
-
-/// 分类选择器展开后的一项。
-struct CategoryChoice {
-    category: String,
-    selected: bool,
-}
-
-#[relm4::factory]
-impl FactoryComponent for CategoryChoice {
-    type Init = (String, bool);
-    type Input = bool;
-    type Output = String;
-    type CommandOutput = ();
-    type ParentWidget = adw::ExpanderRow;
-    type Index = DynamicIndex;
-
-    view! {
-        adw::ActionRow {
-            add_css_class: "dmcl-category-choice",
-            #[watch]
-            set_title: &self.category,
-            set_activatable: true,
-
-            add_suffix = &gtk::Image {
-                set_icon_name: Some("object-select-symbolic"),
-                #[watch]
-                set_visible: self.selected,
-                add_css_class: "accent",
-                set_valign: gtk::Align::Center,
-            },
-
-            connect_activated[sender] => move |_| {
-                let _ = sender.output(category.clone());
-            },
-        }
-    }
-
-    fn init_model(
-        (category, selected): Self::Init,
-        _index: &DynamicIndex,
-        _sender: FactorySender<Self>,
-    ) -> Self {
-        Self { category, selected }
-    }
-
-    fn init_widgets(
-        &mut self,
-        _index: &DynamicIndex,
-        _root: Self::Root,
-        _returned_widget: &gtk::Widget,
-        sender: FactorySender<Self>,
-    ) -> Self::Widgets {
-        let category = self.category.clone();
-        let widgets = view_output!();
-        widgets
-    }
-
-    fn update(&mut self, selected: Self::Input, _sender: FactorySender<Self>) {
-        self.selected = selected;
-    }
 }
 
 impl InstanceSummary {
@@ -193,41 +122,6 @@ impl InstanceSummary {
             None
         };
         self.install_enabled = self.ready && !empty && !invalid && !exists;
-    }
-
-    /// 分类文字变化后同步收起状态的副标题、取消按钮和对勾。
-    fn sync_category_view(&mut self) {
-        let selected = self.category.trim();
-        self.category_expander.set_subtitle(if selected.is_empty() {
-            UNCATEGORIZED
-        } else {
-            selected
-        });
-        self.category_clear.set_visible(!selected.is_empty());
-
-        let mut guard = self.category_choices.guard();
-        for choice in guard.iter_mut() {
-            choice.selected = choice.category.as_str() == selected;
-        }
-    }
-
-    /// 选中已有分类，写回输入框并收起展开区。
-    fn select_category(&mut self, category: String) {
-        if self.category_entry.text() != category {
-            self.category_entry.set_text(&category);
-        }
-        self.category = category;
-        self.sync_category_view();
-        self.category_expander.set_expanded(false);
-    }
-
-    /// 取消当前分类，回到「未分类」。
-    fn clear_category(&mut self) {
-        if !self.category_entry.text().is_empty() {
-            self.category_entry.set_text("");
-        }
-        self.category = String::new();
-        self.sync_category_view();
     }
 }
 
@@ -302,6 +196,7 @@ impl SimpleComponent for InstanceSummary {
                     set_spacing: 4,
                     set_hexpand: true,
 
+                    #[name(detail_rows)]
                     gtk::ListBox {
                         add_css_class: "boxed-list",
                         set_hexpand: true,
@@ -309,9 +204,6 @@ impl SimpleComponent for InstanceSummary {
 
                         #[local_ref]
                         name_row_widget -> adw::EntryRow {},
-
-                        #[local_ref]
-                        category_expander_widget -> adw::ExpanderRow {},
                     },
 
                     gtk::Box {
@@ -359,42 +251,16 @@ impl SimpleComponent for InstanceSummary {
             });
         }
 
-        let category_expander = adw::ExpanderRow::builder()
-            .title("分类")
-            .subtitle(UNCATEGORIZED)
-            .show_enable_switch(false)
-            .build();
-        let category_clear = gtk::Button::from_icon_name("window-close-symbolic");
-        category_clear.add_css_class("flat");
-        category_clear.set_valign(gtk::Align::Center);
-        category_clear.set_tooltip_text(Some("取消选择（未分类）"));
-        category_clear.set_visible(false);
-        category_clear.connect_clicked({
-            let sender = sender.clone();
-            move |_| sender.input(SummaryIn::ClearCategory)
-        });
-        category_expander.add_suffix(&category_clear);
-
-        let category_entry = adw::EntryRow::builder().title("自定义分类").build();
-        category_entry.set_tooltip_text(Some("留空表示未分类"));
-        {
-            let sender = sender.clone();
-            category_entry.connect_changed(move |row| {
-                sender.input(SummaryIn::CategoryEdited(row.text().into()));
+        let category_picker = CategoryPicker::builder()
+            .launch(CategoryPickerInit {
+                categories,
+                category: String::new(),
+            })
+            .forward(sender.input_sender(), |out| match out {
+                CategoryPickerOut::Selected(category) | CategoryPickerOut::Edited(category) => {
+                    SummaryIn::CategoryChanged(category)
+                }
             });
-        }
-
-        let mut category_choices = FactoryVecDeque::builder()
-            .launch(category_expander.clone())
-            .forward(sender.input_sender(), SummaryIn::SelectCategory);
-        {
-            let mut guard = category_choices.guard();
-            for category in categories {
-                guard.push_back((category, false));
-            }
-        }
-        // 自定义输入放最下面：已有分类先排，最后才是自由输入。
-        category_expander.add_row(&category_entry);
 
         let model = InstanceSummary {
             name_row,
@@ -403,11 +269,8 @@ impl SimpleComponent for InstanceSummary {
             name_error: None,
             root_path,
             ready: false,
-            category_expander,
-            category_entry,
-            category_clear,
+            category_picker,
             category: String::new(),
-            category_choices,
             icon: InstanceIcon::Asset(IconKind::Release),
             icon_user_modified: false,
             auto_icon: InstanceIcon::Asset(IconKind::Release),
@@ -415,8 +278,9 @@ impl SimpleComponent for InstanceSummary {
             install_enabled: false,
         };
         let name_row_widget = model.name_row.clone();
-        let category_expander_widget = model.category_expander.clone();
+        let category_widget = model.category_picker.widget().clone();
         let widgets = view_output!();
+        widgets.detail_rows.append(&category_widget);
         ComponentParts { model, widgets }
     }
 
@@ -452,7 +316,7 @@ impl SimpleComponent for InstanceSummary {
                 self.apply_icon(self.auto_icon.clone());
             }
             SummaryIn::EditIconFile => {
-                pick_icon_file(sender);
+                choose_icon_file(move |path| sender.input(SummaryIn::PickCustomIcon(path)));
             }
             SummaryIn::NameEdited(text) => {
                 // 用户输入只在「事件文本 == 输入框当前文本」时成立：程序 `set_text` 时
@@ -470,15 +334,9 @@ impl SimpleComponent for InstanceSummary {
                 self.refresh_name_state();
                 let _ = sender.output(SummaryOut::NameChanged(self.name.clone()));
             }
-            SummaryIn::CategoryEdited(text) => {
-                // 和名称一样，忽略程序 `set_text` 可能产生的中间态；只接受输入框当前文本。
-                if text == self.category_entry.text() {
-                    self.category = text;
-                    self.sync_category_view();
-                }
+            SummaryIn::CategoryChanged(category) => {
+                self.category = category;
             }
-            SummaryIn::SelectCategory(category) => self.select_category(category),
-            SummaryIn::ClearCategory => self.clear_category(),
             SummaryIn::InstallClicked => {
                 // 只有用户选过自定义图片才写 `logo.png`；自动图标不落盘。
                 let icon = match &self.icon {
@@ -493,21 +351,4 @@ impl SimpleComponent for InstanceSummary {
             }
         }
     }
-}
-
-/// 弹出「选择图片」对话框（挂在应用当前的活动窗口上）。
-fn pick_icon_file(sender: ComponentSender<InstanceSummary>) {
-    let Some(parent) = relm4::main_adw_application().active_window() else {
-        return;
-    };
-    let dialog = gtk::FileDialog::builder()
-        .title("选择实例图标")
-        .accept_label("选择")
-        .build();
-    dialog.open(Some(&parent), None::<&gio::Cancellable>, move |result| {
-        if let Some(path) = result.ok().and_then(|file| file.path()) {
-            // 文件对话框可能比页面活得久：页面关了就当用户放弃选择。
-            let _ = sender.input_sender().send(SummaryIn::PickCustomIcon(path));
-        }
-    });
 }

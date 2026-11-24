@@ -93,10 +93,11 @@ gtk4/
 ├── pages/                       # 页面
 │   ├── home/                    # 主页 / 实例磁贴 / 启动停止
 │   ├── settings/                # 首选项与实例设置
-│   │   └── instance/            # 单个实例的设置页
+│   │   └── instance/            # 单个实例的设置页（实例信息 / 启动选项）
 │   └── download/                # 新建实例页与公共组件
 │       └── custom/              # 「自定义」新建实例页
 ├── widgets/                     # 跨页面复用的部件与逻辑
+│   ├── category_picker.rs       # 分类选择器（新建实例 / 实例设置）
 │   └── instance_icon.rs         # 实例图标来源、自动规则与 PNG 编码
 └── assets/icons/                # 实例图标内置素材
 ```
@@ -110,7 +111,7 @@ gtk4/
 | 任务对话框 | `TaskCenter`、任务卡片、警告确认 | [app/tasks/README.md](app/tasks/README.md) |
 | 主页 | `HomePage`、`InstanceCard`、启动 / 停止 | [pages/home/README.md](pages/home/README.md) |
 | 设置页 | `PreferencesPage` 及目录 / 账户 / Java / 游戏选项 / 下载分类 | [pages/settings/README.md](pages/settings/README.md) |
-| 实例设置页 | `InstancePage` 的「启动选项」分类与实例字段级覆盖 | [pages/settings/README.md](pages/settings/README.md) |
+| 实例设置页 | `InstancePage` 的「实例」分类与实例字段级覆盖 | [pages/settings/README.md](pages/settings/README.md) |
 | 下载域与公共组件 | 数据流、`InstanceSummary`、`VersionSelect` | [pages/download/README.md](pages/download/README.md) |
 | 新建实例页 | `CustomPage` 的装配、联动与安装 | [pages/download/custom/README.md](pages/download/custom/README.md) |
 

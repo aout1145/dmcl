@@ -23,7 +23,7 @@ pub(crate) struct InstanceGameOptionsTarget {
     shell: Rc<Shell>,
     page_toast: PageToast,
     root: PathBuf,
-    name: String,
+    name: RefCell<String>,
     /// 写入还没落盘时的乐观状态；`pending > 0` 时优先返回它。
     optimistic: Rc<RefCell<Option<GameOptionsState>>>,
     /// 还没结束的写入数量。
@@ -45,7 +45,7 @@ impl InstanceGameOptionsTarget {
             shell,
             page_toast,
             root,
-            name,
+            name: RefCell::new(name),
             optimistic: Rc::new(RefCell::new(None)),
             pending: Rc::new(Cell::new(0)),
             write_lock: Rc::new(tokio::sync::Mutex::new(())),
@@ -56,12 +56,17 @@ impl InstanceGameOptionsTarget {
         let launch = self
             .config
             .read()
-            .load_instance_sync(&self.root, &self.name)
+            .load_instance_sync(&self.root, self.name.borrow().as_str())
             .launch;
         GameOptionsState {
             launch,
-            overrides: read_overrides(&self.root, &self.name),
+            overrides: read_overrides(&self.root, self.name.borrow().as_str()),
         }
+    }
+
+    /// 实例改名后把后续读写指向新目录。
+    pub(crate) fn rename(&self, name: &str) {
+        *self.name.borrow_mut() = name.to_string();
     }
 
     fn submit(&self, update: GameOptionsUpdate) {
@@ -79,7 +84,7 @@ impl InstanceGameOptionsTarget {
 
         self.pending.set(self.pending.get() + 1);
         let root = self.root.clone();
-        let name = self.name.clone();
+        let name = self.name.borrow().clone();
         let shell = Rc::clone(&self.shell);
         let page_toast = self.page_toast.clone();
         let optimistic = Rc::clone(&self.optimistic);

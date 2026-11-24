@@ -133,6 +133,11 @@ pub(crate) enum SelectIn {
     SetContext(Option<String>),
     /// 同组已有别的加载器被选中：`Some("Forge")` → 副标题显示「与 Forge 冲突」并禁用本行。
     SetConflict(Option<String>),
+    /// 外部给定的当前选择（实例设置页展示已安装的加载器）。
+    ///
+    /// 与用户选择不同，取数结果里没有这个条目时也保留它——旧加载器版本可能已经不在
+    /// 远程列表里。
+    SetInitialSelection(Option<VersionItem>),
     /// 重新取数（Failed 状态的行尾刷新按钮）。
     Reload,
     /// 用户点了行上的 ×，清除选择（发输出）。
@@ -196,6 +201,8 @@ pub(crate) struct VersionSelect {
     context: Option<String>,
     state: LoadState,
     selected: Option<VersionItem>,
+    /// 当前选择来自外部（实例已安装的加载器），列表里没有时不要清掉。
+    keep_selection_on_load: bool,
     /// 取数代际：发起一次取数 +1，过期响应丢弃。
     gen: u64,
     /// 搜索词（小写比较在过滤函数里做）。
@@ -222,23 +229,31 @@ impl VersionSelect {
         if let Some(conflict) = &self.conflict {
             return format!("与 {conflict} 冲突");
         }
-        match &self.state {
+        if matches!(self.state, LoadState::Loading) {
+            return "载入中…".to_string();
+        }
+        if matches!(self.state, LoadState::Failed(_)) {
+            return "获取失败".to_string();
+        }
+        if let Some(selected) = &self.selected {
+            return selected.label.clone();
+        }
+        match self.state {
             LoadState::Idle => "先选择 Minecraft 版本".to_string(),
-            LoadState::Loading => "载入中…".to_string(),
-            LoadState::Ready(_) => match &self.selected {
-                Some(selected) => selected.label.clone(),
-                None if self.allow_none => "不安装".to_string(),
-                None => "请选择版本…".to_string(),
-            },
             LoadState::Empty => "无可用版本".to_string(),
-            LoadState::Failed(_) => "获取失败".to_string(),
+            LoadState::Ready(_) if self.allow_none => "不安装".to_string(),
+            LoadState::Ready(_) => "请选择版本…".to_string(),
+            LoadState::Loading | LoadState::Failed(_) => unreachable!("前面已经处理"),
         }
     }
 
     /// 这一行是否可用（可展开、可选择）：Idle（未选 MC 版本）/ Empty（该上下文下没有
-    /// 可用版本）/ 冲突时整行禁用；Loading / Failed 仍可展开看进度与错误。
+    /// 可用版本）/ 冲突时整行禁用；Loading / Failed 仍可展开看进度与错误。已经选中过
+    /// 条目时仍保持可用，否则用户无法清掉一个远程列表里已经消失的旧版本。
     fn is_enabled(&self) -> bool {
-        self.conflict.is_none() && !matches!(self.state, LoadState::Idle | LoadState::Empty)
+        self.conflict.is_none()
+            && (self.selected.is_some()
+                || !matches!(self.state, LoadState::Idle | LoadState::Empty))
     }
 
     /// 置顶区是否有内容（决定「全部版本」小节标题是否显示）。
@@ -256,6 +271,7 @@ impl VersionSelect {
     /// 选中某个条目（发输出），并立即收起展开区。
     fn select(&mut self, item: VersionItem, sender: &ComponentSender<VersionSelect>) {
         self.selected = Some(item);
+        self.keep_selection_on_load = false;
         self.refresh_selection_flags();
         self.expander.set_expanded(false);
         let _ = sender.output(SelectOut::Changed(self.selected.clone()));
@@ -551,16 +567,14 @@ impl SimpleComponent for VersionSelect {
             set_subtitle: &model.display_text(),
 
             // 已选时出现在展开箭头左侧的 ×（只有可"不安装"的加载器行才有）。
-            // Failed 时让位给刷新按钮，同一位置只显示一个。
+            // Failed 时刷新按钮同时出现，让用户仍能清掉当前选择。
             add_suffix = &gtk::Button {
                 set_icon_name: "window-close-symbolic",
                 add_css_class: "flat",
                 set_valign: gtk::Align::Center,
                 set_tooltip_text: Some("取消选择（不安装）"),
                 #[watch]
-                set_visible: model.allow_none
-                    && model.selected.is_some()
-                    && !matches!(model.state, LoadState::Failed(_)),
+                set_visible: model.allow_none && model.selected.is_some(),
                 connect_clicked[sender] => move |_| sender.input(SelectIn::Deselect),
             },
 
@@ -730,6 +744,7 @@ impl SimpleComponent for VersionSelect {
             context: None,
             state: LoadState::Idle,
             selected: None,
+            keep_selection_on_load: false,
             gen: 0,
             search: String::new(),
             kinds_on,
@@ -761,6 +776,7 @@ impl SimpleComponent for VersionSelect {
                 if self.allow_none && self.selected.is_some() {
                     // 换上下文 = 旧选择失效（比如 MC 版本换了，Forge 选的构建没了）。
                     self.selected = None;
+                    self.keep_selection_on_load = false;
                     let _ = sender.output(SelectOut::Changed(None));
                 }
                 match context {
@@ -776,10 +792,16 @@ impl SimpleComponent for VersionSelect {
                 self.conflict = conflict;
                 self.sync_view();
             }
+            SelectIn::SetInitialSelection(item) => {
+                self.selected = item;
+                self.keep_selection_on_load = true;
+                self.refresh_selection_flags();
+            }
             SelectIn::Reload => self.start_fetch(sender.clone()),
             SelectIn::Deselect => {
                 if self.selected.is_some() {
                     self.selected = None;
+                    self.keep_selection_on_load = false;
                     self.refresh_selection_flags();
                     let _ = sender.output(SelectOut::Changed(None));
                 }
@@ -813,9 +835,12 @@ impl SimpleComponent for VersionSelect {
                 match result {
                     Ok(items) if !items.is_empty() => {
                         // 旧选择不在新列表里：清掉并输出（页面据此调整装配态）。
-                        if self.selected.as_ref().is_some_and(|selected| {
-                            !items.iter().any(|item| item.id == selected.id)
-                        }) {
+                        // 外部给的当前选择例外：旧加载器版本可能已不在远程列表里。
+                        if !self.keep_selection_on_load
+                            && self.selected.as_ref().is_some_and(|selected| {
+                                !items.iter().any(|item| item.id == selected.id)
+                            })
+                        {
                             self.selected = None;
                             let _ = sender.output(SelectOut::Changed(None));
                         }
@@ -825,7 +850,7 @@ impl SimpleComponent for VersionSelect {
                     }
                     Ok(_) => {
                         // 列表为空：这个上下文下没有可用版本。
-                        if self.selected.is_some() {
+                        if self.selected.is_some() && !self.keep_selection_on_load {
                             self.selected = None;
                             let _ = sender.output(SelectOut::Changed(None));
                         }

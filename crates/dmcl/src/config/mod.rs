@@ -49,7 +49,8 @@ pub use account::AccountConfig;
 pub(crate) use account::{unique_account_name, KeyringTokenStore};
 pub use download::DownloadConfig;
 pub use instance::{
-    instance_config_path, read_instance_category, write_instance_category, write_instance_launch,
+    clear_instance_category, instance_config_path, read_instance_category,
+    read_instance_category_sync, write_instance_category, write_instance_launch,
 };
 pub(crate) use java::resolve_from_config;
 pub use java::{

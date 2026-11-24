@@ -1,7 +1,8 @@
 //! 实例 `dmcl.json` 的路径、`instance` 段与分类。
 //!
 //! 实例配置除了启动覆盖 `launch`，还可以有独立的 `instance` 段。分类只由
-//! `instance.category` 决定：值就是分类名，缺省 / 空白表示未分类。
+//! `instance.category` 决定：值就是分类名，缺省 / 空白表示未分类。清空分类用
+//! [`clear_instance_category`]，它只删这个键，不影响 `instance` 段的其它字段。
 //!
 //! ```json
 //! {
@@ -35,6 +36,13 @@ pub async fn read_instance_category(root: &Path, version_name: &str) -> Option<S
     }
 }
 
+/// [`read_instance_category`] 的同步版本，给 GTK 初始化这类不能等待 future 的地方用。
+pub fn read_instance_category_sync(root: &Path, version_name: &str) -> Option<String> {
+    std::fs::read_to_string(instance_config_path(root, version_name))
+        .ok()
+        .and_then(|text| category_from_text(&text))
+}
+
 /// 从整份实例配置文本里取 `instance.category`。
 ///
 /// 只读取分类，不校验 `launch`：启动配置的问题由启动流程统一报告，主页列表不因为
@@ -63,6 +71,45 @@ pub async fn write_instance_category(
             bail!("实例配置的「instance」不是 JSON 对象：{}", path.display());
         };
         instance.insert("category".to_string(), Value::String(category));
+        Ok(())
+    })
+    .await
+}
+
+/// 清除实例分类：删掉 `instance.category`，`instance` 段空了就整段删除。
+///
+/// 文件不存在或本来没有分类时不写盘。
+pub async fn clear_instance_category(root: &Path, version_name: &str) -> Result<()> {
+    let path = instance_config_path(root, version_name);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => {
+            let document: Value = serde_json::from_str(&text)
+                .with_context(|| format!("无法解析实例配置 {}", path.display()))?;
+            let has_category = document
+                .get("instance")
+                .and_then(Value::as_object)
+                .is_some_and(|instance| instance.contains_key("category"));
+            if !has_category {
+                return Ok(());
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("无法读取实例配置 {}", path.display()))
+        }
+    }
+
+    edit_instance_document(root, version_name, move |path, document| {
+        let Some(instance) = document.get_mut("instance") else {
+            return Ok(());
+        };
+        let Some(instance) = instance.as_object_mut() else {
+            bail!("实例配置的「instance」不是 JSON 对象：{}", path.display());
+        };
+        instance.remove("category");
+        if instance.is_empty() {
+            document.remove("instance");
+        }
         Ok(())
     })
     .await
@@ -131,9 +178,12 @@ async fn edit_instance_document(
     edit(&path, &mut document)?;
 
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+        if !tokio::fs::metadata(parent)
             .await
-            .with_context(|| format!("无法创建版本目录 {}", parent.display()))?;
+            .is_ok_and(|metadata| metadata.is_dir())
+        {
+            bail!("实例目录不存在：{}", parent.display());
+        }
     }
     let text = format!("{}\n", serde_json::to_string_pretty(&document)?);
     let temp = path.with_file_name(format!(".dmcl-{}.json.tmp", std::process::id()));
@@ -224,6 +274,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn clear_removes_only_the_category_and_keeps_other_sections() {
+        let root = temp_root("clear");
+        let path = instance_config_path(&root, "1.20.1");
+        std::fs::write(
+            &path,
+            r#"{"instance":{"category":"整合包"},"launch":{"max_memory":4096}}"#,
+        )
+        .unwrap();
+
+        clear_instance_category(&root, "1.20.1").await.unwrap();
+        let document: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(document.get("instance").is_none());
+        assert_eq!(document["launch"]["max_memory"], 4096);
+
+        // 再清一次不碰文件。
+        let before = std::fs::read_to_string(&path).unwrap();
+        clear_instance_category(&root, "1.20.1").await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn clear_does_not_create_a_missing_config() {
+        let root = temp_root("clear-missing");
+        let path = instance_config_path(&root, "1.20.1");
+        clear_instance_category(&root, "1.20.1").await.unwrap();
+        assert!(!path.exists());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_refuses_to_recreate_a_missing_instance_directory() {
+        let root = temp_root("write-missing");
+        let name = "gone";
+        assert!(write_instance_category(&root, name, "整合包")
+            .await
+            .is_err());
+        assert!(!dmcl_mcmeta::layout::version_dir(&root, name).exists());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

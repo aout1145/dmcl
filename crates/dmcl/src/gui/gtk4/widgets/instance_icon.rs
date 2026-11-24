@@ -7,7 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use relm4::gtk::gdk::prelude::*;
-use relm4::gtk::{gdk, glib};
+use relm4::gtk::prelude::*;
+use relm4::gtk::{self, gdk, gio, glib};
 
 use dmcl_game::{DetectedLoaderKind, DetectedVersion, DetectedVersionKind};
 use dmcl_install::LoaderKind;
@@ -137,6 +138,22 @@ pub(crate) fn save_png(source: &Path, destination: &Path) -> Result<(), String> 
     texture
         .save_to_png(destination)
         .map_err(|err| format!("无法写入图标 PNG：{err}"))
+}
+
+/// 弹出「选择实例图标」对话框，选中后交给回调。
+pub(crate) fn choose_icon_file(on_pick: impl Fn(PathBuf) + 'static) {
+    let Some(parent) = relm4::main_adw_application().active_window() else {
+        return;
+    };
+    let dialog = gtk::FileDialog::builder()
+        .title("选择实例图标")
+        .accept_label("选择")
+        .build();
+    dialog.open(Some(&parent), None::<&gio::Cancellable>, move |result| {
+        if let Some(path) = result.ok().and_then(|file| file.path()) {
+            on_pick(path);
+        }
+    });
 }
 
 #[cfg(test)]

@@ -1,9 +1,12 @@
-//! 单个实例的设置页：左侧分两组分类，右侧复用游戏设置表单。
+//! 单个实例的设置页：左侧分两组分类，右侧按分类显示实例信息或游戏设置。
 //!
-//! 只有「启动选项」有内容，其余分类是置灰占位。页面是关闭即销毁的一次性标签页；实例文件
-//! 的变化不走全局配置仓库，表单目标自己写盘。同一实例由根组件按 `(root, 实例名)` 去重，
-//! 这个模块只负责页面本身。
+//! 「实例」分类编辑图标、名称、分类、加载器并删除实例；「启动选项」复用全局游戏设置
+//! 表单。页面是关闭即销毁的一次性标签页；实例文件的变化不走全局配置仓库，各子页面自己
+//! 写盘。同一实例由根组件按 `(root, 实例名)` 去重，这个模块只负责页面本身。
 
+mod files;
+mod general;
+mod loaders;
 mod target;
 
 use std::path::PathBuf;
@@ -16,30 +19,45 @@ use relm4::prelude::*;
 
 use dmcl_game::{resolve_version, VersionRef};
 
-use crate::gui::gtk4::app::page_host::{Page, PageInit};
+use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
 use crate::gui::gtk4::app::{config_store, PageToast, Shell};
 use crate::gui::gtk4::pages::settings::{
     GameOptionsInit, GameOptionsMsg, GameOptionsPage, JavaProbeCache,
 };
 
+use general::{GeneralInit, GeneralOut, GeneralPage};
 use target::InstanceGameOptionsTarget;
+
+/// 实例设置页发给根组件的动作。
+#[derive(Debug)]
+pub(crate) enum InstanceOut {
+    /// 实例目录已经改名，根组件要同步标签索引。
+    Renamed { old: String, new: String },
+    /// 实例目录已经删除，根组件要关掉这个标签。
+    Deleted { name: String },
+}
 
 /// 实例设置页收到的消息。
 #[derive(Debug)]
 pub(crate) enum InstanceMsg {
     /// 全局配置改过了：让表单重新读取实例覆盖。
     ConfigChanged,
+    /// 「实例」分类的动作。
+    General(GeneralOut),
 }
 
 pub(crate) struct InstancePage {
+    tab: TabTitle,
+    target: Rc<InstanceGameOptionsTarget>,
+    general: Controller<GeneralPage>,
     game: Controller<GameOptionsPage>,
 }
 
 #[relm4::component(pub(crate))]
 impl SimpleComponent for InstancePage {
-    type Init = PageInit<(Rc<Shell>, PathBuf, String)>;
+    type Init = PageInit<(Rc<Shell>, PathBuf, String, Vec<String>)>;
     type Input = InstanceMsg;
-    type Output = ();
+    type Output = InstanceOut;
 
     view! {
         adw::NavigationSplitView {
@@ -67,9 +85,7 @@ impl SimpleComponent for InstancePage {
 
                             append = &adw::ActionRow {
                                 set_title: "实例",
-                                set_subtitle: "尚未实现",
-                                set_activatable: false,
-                                set_sensitive: false,
+                                set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("package-x-generic-symbolic"),
                                 },
@@ -129,15 +145,17 @@ impl SimpleComponent for InstancePage {
 
             #[wrap(Some)]
             set_content = &adw::NavigationPage {
-                set_title: "启动选项",
+                set_title: "实例设置",
 
                 #[wrap(Some)]
                 set_child = &gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
                     set_vexpand: true,
 
-                    #[local_ref]
-                    game_widget -> adw::PreferencesPage {},
+                    #[name(content_stack)]
+                    gtk::Stack {
+                        set_vexpand: true,
+                    },
                 },
             },
         }
@@ -146,24 +164,25 @@ impl SimpleComponent for InstancePage {
     fn init(
         init: Self::Init,
         root_widget: Self::Root,
-        _sender: ComponentSender<Self>,
+        sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let PageInit {
             tab,
-            args: (shell, root_path, name),
+            args: (shell, root_path, name, categories),
         } = init;
         let config = config_store::store().config();
         let cache = Rc::new(JavaProbeCache::new());
+        let page_toast = PageToast::new(&root_widget);
         let target = Rc::new(InstanceGameOptionsTarget::new(
             config.clone(),
             Rc::clone(&shell),
-            PageToast::new(&root_widget),
+            page_toast.clone(),
             root_path.clone(),
             name.clone(),
         ));
         let game = GameOptionsPage::builder()
             .launch(GameOptionsInit {
-                target,
+                target: target.clone(),
                 config,
                 cache,
                 allow_inherit: true,
@@ -172,6 +191,19 @@ impl SimpleComponent for InstancePage {
             .detach();
         let game_widget = game.widget().clone();
         game_widget.set_vexpand(true);
+
+        let general = GeneralPage::builder()
+            .launch(GeneralInit {
+                shell: Rc::clone(&shell),
+                page_toast,
+                root_path: root_path.clone(),
+                name: name.clone(),
+                categories,
+            })
+            .forward(sender.input_sender(), InstanceMsg::General);
+        let general_widget = general.widget().clone();
+        general_widget.set_vexpand(true);
+
         tab.set_title(&instance_tab_title(&name));
 
         // 版本 JSON 可能带 `inheritsFrom`，用和启动流程相同的解析结果取 Java 要求。
@@ -191,27 +223,62 @@ impl SimpleComponent for InstancePage {
             }
         });
 
+        let model = Self {
+            tab,
+            target,
+            general,
+            game,
+        };
+
         let widgets = view_output!();
-        // 默认停在「启动选项」；它是唯一有内容的分类。
-        if let Some(row) = widgets.instance_list.row_at_index(1) {
+        widgets
+            .content_stack
+            .add_named(model.general.widget(), Some("general"));
+        widgets
+            .content_stack
+            .add_named(model.game.widget(), Some("game"));
+        {
+            let stack = widgets.content_stack.clone();
+            widgets.instance_list.connect_row_selected(move |_, row| {
+                let Some(row) = row else {
+                    return;
+                };
+                let page = match row.index() {
+                    0 => "general",
+                    1 => "game",
+                    _ => return,
+                };
+                stack.set_visible_child_name(page);
+            });
+        }
+        // 默认停在「实例」。
+        if let Some(row) = widgets.instance_list.row_at_index(0) {
             widgets.instance_list.select_row(Some(&row));
         }
+        widgets.content_stack.set_visible_child_name("general");
 
-        let model = Self { game };
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             InstanceMsg::ConfigChanged => {
                 let _ = self.game.sender().send(GameOptionsMsg::Reload);
+            }
+            InstanceMsg::General(GeneralOut::Renamed { old, new }) => {
+                self.target.rename(&new);
+                self.tab.set_title(&instance_tab_title(&new));
+                let _ = sender.output(InstanceOut::Renamed { old, new });
+            }
+            InstanceMsg::General(GeneralOut::Deleted { name }) => {
+                let _ = sender.output(InstanceOut::Deleted { name });
             }
         }
     }
 }
 
 impl Page for InstancePage {
-    type Args = (Rc<Shell>, PathBuf, String);
+    type Args = (Rc<Shell>, PathBuf, String, Vec<String>);
 }
 
 fn instance_tab_title(name: &str) -> String {

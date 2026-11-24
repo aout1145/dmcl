@@ -15,7 +15,7 @@
 //! 用户点安装后主动打开任务列表并立即关闭本页（[`Shell::open_tasks`]）；任务结果由
 //! 任务对话框展示。标签的移除由 `AdwTabView` 的 `page-detached` 清理。
 
-mod loaders;
+pub(crate) mod loaders;
 mod message;
 mod versions;
 

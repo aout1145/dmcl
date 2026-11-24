@@ -20,7 +20,8 @@ CustomPage
 ```
 
 页面拥有联动与安装流程，见 [custom/README.md](custom/README.md)。`InstanceSummary` 与
-`VersionSelect` 位于 `common/`，是 download 域公共组件，不是全 app 通用小部件。
+`VersionSelect` 位于 `common/`；前者只用于下载页，`VersionSelect` 也被实例设置页用来选择
+加载器版本。分类选择器在 `widgets/category_picker.rs`，两个页面共用。
 
 ## InstanceSummary
 
@@ -31,7 +32,7 @@ CustomPage
 用户改过就永不覆盖；名称清空视为从未编辑，自动命名重新接管。
 
 名称的格式校验、`versions/<名称>` 冲突检查与安装按钮可用性都在组件内完成；页面只告诉它
-「名称之外的条件是否满足」。分类可沿用已有分类，也可输入新名字。
+「名称之外的条件是否满足」。
 
 ## VersionSelect
 
@@ -42,6 +43,7 @@ CustomPage
 - 列表按数据源顺序展示，带徽标的条目进入置顶区，同时仍保留在完整列表中；搜索对 id 与
   展示文案做大小写不敏感匹配。
 - 取数带代际计数，上下文变化后旧响应直接丢弃；换上下文或旧选择不在新列表中时清空选择。
+  实例设置页可先用初始选择指定已安装版本，这类选择即使不在远程列表里也保留。
 - 过滤是纯函数并保持数据源顺序；选中标记只更新真正变化的两行，避免大列表整表重绘。
 - 用 `AdwExpanderRow` 承载展开内容，而不是 `AdwComboRow`：后者放不下分节标题与 chips。
 - 展开时机由页面控制；自动展开只消费一次，用户手动收起后不会被后续状态同步重新展开。
