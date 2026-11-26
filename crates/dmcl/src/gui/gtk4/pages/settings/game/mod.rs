@@ -129,9 +129,6 @@ pub(crate) enum GameOptionGroup {
     WindowSize,
     Memory,
     VersionIsolation,
-    CustomInfo,
-    AdditionalJvm,
-    AdditionalGame,
 }
 
 impl GameOptionGroup {
@@ -142,9 +139,6 @@ impl GameOptionGroup {
             Self::WindowSize => &[GameOptionField::WindowWidth, GameOptionField::WindowHeight],
             Self::Memory => &[GameOptionField::MinMemory, GameOptionField::MaxMemory],
             Self::VersionIsolation => &[GameOptionField::VersionIsolation],
-            Self::CustomInfo => &[GameOptionField::CustomInfo],
-            Self::AdditionalJvm => &[GameOptionField::AdditionalJvm],
-            Self::AdditionalGame => &[GameOptionField::AdditionalGame],
         }
     }
 }

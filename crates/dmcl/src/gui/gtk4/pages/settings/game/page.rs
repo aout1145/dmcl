@@ -79,16 +79,10 @@ pub(crate) enum GameOptionsMsg {
         min: u32,
         max: u32,
     },
-    CustomInfoChanged(String),
-    AdditionalJvmChanged(String),
-    AdditionalGameChanged(String),
-    VersionIsolationChanged(bool),
-    /// 实例页的版本隔离展开行：0 使用全局、1 开启、2 关闭。
+    /// 版本隔离展开行：0 使用全局、1 开启、2 关闭。
     VersionIsolationSelected(u32),
     /// 恢复某一组字段的全局值。
     Inherit(GameOptionGroup),
-    /// 把文本项切换成自定义，但还不改动内容。
-    Custom(GameOptionGroup),
     /// 实例版本需要的 Java 大版本；`None` 表示读不出来。
     RequiredJavaMajor(Option<u32>),
     /// 某个 Java 探测结束。
@@ -128,14 +122,6 @@ impl FixedRow {
     fn set_subtitle(&self, subtitle: &str) {
         self.row.set_subtitle(subtitle);
     }
-}
-
-/// 一个可以继承全局的文本项。
-struct TextOption {
-    expander: adw::ExpanderRow,
-    inherit: FixedRow,
-    custom: FixedRow,
-    entry: adw::EntryRow,
 }
 
 pub(crate) struct GameOptionsPage {
@@ -192,14 +178,10 @@ pub(crate) struct GameOptionsPage {
     manual_memory_mark: gtk::Image,
     min_memory_spin: gtk::SpinButton,
     max_memory_spin: gtk::SpinButton,
-    version_isolation_row: adw::SwitchRow,
     version_isolation_expander: adw::ExpanderRow,
     version_inherit: FixedRow,
     version_on: FixedRow,
     version_off: FixedRow,
-    custom_info: TextOption,
-    additional_jvm: TextOption,
-    additional_game: TextOption,
 }
 
 /// 窗口大小选中的是某个预设，还是手动输入的宽高。
@@ -225,22 +207,18 @@ impl SimpleComponent for GameOptionsPage {
     view! {
         adw::PreferencesPage {
             add = &adw::PreferencesGroup {
-                set_title: "游戏",
-                set_description: Some("设置启动游戏时使用的账户、Java、窗口大小与内存等选项。"),
+                set_title: "通用",
+                set_description: Some("设置启动游戏时使用的账户、Java、窗口大小与内存。"),
                 #[local_ref]
                 account_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 java_expander -> adw::ExpanderRow {},
                 #[local_ref]
+                version_isolation_expander -> adw::ExpanderRow {},
+                #[local_ref]
                 window_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 memory_expander -> adw::ExpanderRow {},
-                #[local_ref]
-                version_isolation_row -> adw::SwitchRow {},
-                #[local_ref]
-                version_isolation_expander -> adw::ExpanderRow {},
-                #[local_ref]
-                advanced_expander -> adw::ExpanderRow {},
             },
         }
     }
@@ -266,7 +244,7 @@ impl SimpleComponent for GameOptionsPage {
         let syncing = Rc::new(Cell::new(false));
 
         let account_expander = adw::ExpanderRow::builder()
-            .title("游戏账户")
+            .title("账户")
             .show_enable_switch(false)
             .build();
         let account_inherit = FixedRow::new("使用全局配置");
@@ -284,7 +262,7 @@ impl SimpleComponent for GameOptionsPage {
             });
 
         let java_expander = adw::ExpanderRow::builder()
-            .title("游戏 Java")
+            .title("Java")
             .show_enable_switch(false)
             .build();
         let java_inherit = FixedRow::new("使用全局配置");
@@ -302,7 +280,7 @@ impl SimpleComponent for GameOptionsPage {
             });
 
         let window_expander = adw::ExpanderRow::builder()
-            .title("游戏窗口大小")
+            .title("窗口大小")
             .show_enable_switch(false)
             .build();
         let window_inherit = FixedRow::new("使用全局配置");
@@ -384,7 +362,7 @@ impl SimpleComponent for GameOptionsPage {
         window_expander.add_row(&custom_size_row);
 
         let memory_expander = adw::ExpanderRow::builder()
-            .title("游戏内存")
+            .title("内存")
             .show_enable_switch(false)
             .build();
         let memory_inherit = FixedRow::new("使用全局配置");
@@ -484,25 +462,6 @@ impl SimpleComponent for GameOptionsPage {
         memory_expander.add_row(&auto_memory_row);
         memory_expander.add_row(&manual_memory_row);
 
-        let version_isolation_row = adw::SwitchRow::builder()
-            .title("版本隔离")
-            .subtitle("每个版本使用独立的游戏目录；关闭后共用 Minecraft 根目录")
-            .active(launch.version_isolation)
-            .build();
-        version_isolation_row.connect_active_notify({
-            let sender = sender.clone();
-            let syncing = Rc::clone(&syncing);
-            move |row| {
-                if syncing.get() {
-                    return;
-                }
-                notify(
-                    &sender,
-                    GameOptionsMsg::VersionIsolationChanged(row.is_active()),
-                );
-            }
-        });
-
         let version_isolation_expander = adw::ExpanderRow::builder()
             .title("版本隔离")
             .show_enable_switch(false)
@@ -517,102 +476,23 @@ impl SimpleComponent for GameOptionsPage {
                 )
             }
         });
+        if allow_inherit {
+            version_isolation_expander.add_row(&version_inherit.row);
+        }
         let version_on = FixedRow::new("开启");
+        version_on.set_subtitle("每个版本使用独立的游戏目录");
         version_on.row.connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::VersionIsolationSelected(1))
         });
         let version_off = FixedRow::new("关闭");
+        version_off.set_subtitle("共用 Minecraft 根目录");
         version_off.row.connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::VersionIsolationSelected(2))
         });
-        version_isolation_expander.add_row(&version_inherit.row);
         version_isolation_expander.add_row(&version_on.row);
         version_isolation_expander.add_row(&version_off.row);
-        version_isolation_row.set_visible(!allow_inherit);
-        version_isolation_expander.set_visible(allow_inherit);
-
-        let advanced_expander = adw::ExpanderRow::builder()
-            .title("高级")
-            .subtitle("启动器信息、JVM 参数与游戏参数")
-            .build();
-
-        let custom_info_entry = adw::EntryRow::builder()
-            .title(if allow_inherit {
-                "自定义内容"
-            } else {
-                "启动器信息"
-            })
-            .text(&launch.custom_info)
-            .build();
-        connect_entry(
-            &custom_info_entry,
-            &syncing,
-            &sender,
-            GameOptionsMsg::CustomInfoChanged,
-        );
-        let custom_info = text_option(
-            "启动器信息",
-            custom_info_entry,
-            GameOptionGroup::CustomInfo,
-            &sender,
-            allow_inherit,
-        );
-
-        let additional_jvm_entry = adw::EntryRow::builder()
-            .title(if allow_inherit {
-                "自定义内容"
-            } else {
-                "额外 JVM 参数"
-            })
-            .text(&launch.additional_jvm)
-            .build();
-        connect_entry(
-            &additional_jvm_entry,
-            &syncing,
-            &sender,
-            GameOptionsMsg::AdditionalJvmChanged,
-        );
-        let additional_jvm = text_option(
-            "额外 JVM 参数",
-            additional_jvm_entry,
-            GameOptionGroup::AdditionalJvm,
-            &sender,
-            allow_inherit,
-        );
-
-        let additional_game_entry = adw::EntryRow::builder()
-            .title(if allow_inherit {
-                "自定义内容"
-            } else {
-                "额外游戏参数"
-            })
-            .text(&launch.additional_game)
-            .build();
-        connect_entry(
-            &additional_game_entry,
-            &syncing,
-            &sender,
-            GameOptionsMsg::AdditionalGameChanged,
-        );
-        let additional_game = text_option(
-            "额外游戏参数",
-            additional_game_entry,
-            GameOptionGroup::AdditionalGame,
-            &sender,
-            allow_inherit,
-        );
-
-        if allow_inherit {
-            advanced_expander.add_row(&custom_info.expander);
-            advanced_expander.add_row(&additional_jvm.expander);
-            advanced_expander.add_row(&additional_game.expander);
-        } else {
-            advanced_expander.add_row(&custom_info.entry);
-            advanced_expander.add_row(&additional_jvm.entry);
-            advanced_expander.add_row(&additional_game.entry);
-        }
 
         root_widget.connect_map({
             let sender = sender.clone();
@@ -674,14 +554,10 @@ impl SimpleComponent for GameOptionsPage {
             manual_memory_mark,
             min_memory_spin,
             max_memory_spin,
-            version_isolation_row: version_isolation_row.clone(),
             version_isolation_expander: version_isolation_expander.clone(),
             version_inherit,
             version_on,
             version_off,
-            custom_info,
-            additional_jvm,
-            additional_game,
         };
         let widgets = view_output!();
         model.rebuild_choices();
@@ -835,76 +711,24 @@ impl SimpleComponent for GameOptionsPage {
                 self.sync_ui();
                 self.schedule_flush(&sender);
             }
-            GameOptionsMsg::CustomInfoChanged(text) => {
-                if text == self.launch.custom_info && !self.inherited(GameOptionGroup::CustomInfo) {
-                    return;
-                }
-                self.launch.custom_info = text;
-                self.mark_override([GameOptionField::CustomInfo]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
-            GameOptionsMsg::AdditionalJvmChanged(text) => {
-                if text == self.launch.additional_jvm
-                    && !self.inherited(GameOptionGroup::AdditionalJvm)
-                {
-                    return;
-                }
-                self.launch.additional_jvm = text;
-                self.mark_override([GameOptionField::AdditionalJvm]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
-            GameOptionsMsg::AdditionalGameChanged(text) => {
-                if text == self.launch.additional_game
-                    && !self.inherited(GameOptionGroup::AdditionalGame)
-                {
-                    return;
-                }
-                self.launch.additional_game = text;
-                self.mark_override([GameOptionField::AdditionalGame]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
-            GameOptionsMsg::VersionIsolationChanged(value) => {
-                if value == self.launch.version_isolation
-                    && !self.inherited(GameOptionGroup::VersionIsolation)
-                {
-                    return;
-                }
-                self.launch.version_isolation = value;
-                self.mark_override([GameOptionField::VersionIsolation]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
             GameOptionsMsg::VersionIsolationSelected(index) => match index {
                 0 => self.inherit_group(GameOptionGroup::VersionIsolation, &sender),
                 1 | 2 => {
                     self.version_isolation_expander.set_expanded(false);
-                    notify(&sender, GameOptionsMsg::VersionIsolationChanged(index == 1));
+                    let value = index == 1;
+                    if value == self.launch.version_isolation
+                        && !self.inherited(GameOptionGroup::VersionIsolation)
+                    {
+                        return;
+                    }
+                    self.launch.version_isolation = value;
+                    self.mark_override([GameOptionField::VersionIsolation]);
+                    self.sync_ui();
+                    self.schedule_flush(&sender);
                 }
                 _ => {}
             },
             GameOptionsMsg::Inherit(group) => self.inherit_group(group, &sender),
-            GameOptionsMsg::Custom(group) => {
-                if self.inherited(group) {
-                    self.mark_override(group.fields().iter().copied());
-                    self.schedule_flush(&sender);
-                }
-                self.sync_ui();
-                match group {
-                    GameOptionGroup::CustomInfo => {
-                        self.custom_info.entry.grab_focus();
-                    }
-                    GameOptionGroup::AdditionalJvm => {
-                        self.additional_jvm.entry.grab_focus();
-                    }
-                    GameOptionGroup::AdditionalGame => {
-                        self.additional_game.entry.grab_focus();
-                    }
-                    _ => {}
-                }
-            }
             GameOptionsMsg::RequiredJavaMajor(required) => {
                 self.required_java_major = required;
                 self.java_major_resolved = true;
@@ -1090,9 +914,6 @@ impl GameOptionsPage {
             GameOptionGroup::VersionIsolation => {
                 self.version_isolation_expander.set_expanded(false);
             }
-            GameOptionGroup::CustomInfo => self.custom_info.expander.set_expanded(false),
-            GameOptionGroup::AdditionalJvm => self.additional_jvm.expander.set_expanded(false),
-            GameOptionGroup::AdditionalGame => self.additional_game.expander.set_expanded(false),
         }
     }
 
@@ -1145,20 +966,9 @@ impl GameOptionsPage {
             .set_selected(!version_inherited && self.launch.version_isolation);
         self.version_off
             .set_selected(!version_inherited && !self.launch.version_isolation);
-
-        self.sync_text_marks(&self.custom_info, GameOptionGroup::CustomInfo);
-        self.sync_text_marks(&self.additional_jvm, GameOptionGroup::AdditionalJvm);
-        self.sync_text_marks(&self.additional_game, GameOptionGroup::AdditionalGame);
     }
 
-    fn sync_text_marks(&self, option: &TextOption, group: GameOptionGroup) {
-        let inherited = self.inherited(group);
-        option.inherit.set_selected(inherited);
-        option.custom.set_selected(!inherited);
-        option.entry.set_sensitive(!inherited);
-    }
-
-    /// 把模型同步到数字、文本和开关控件；期间屏蔽信号。
+    /// 把模型同步到数字和文本控件；期间屏蔽信号。
     fn sync_values(&self) {
         self.syncing.set(true);
         self.set_spin_button_value(&self.width_spin, self.launch.window_width);
@@ -1166,13 +976,6 @@ impl GameOptionsPage {
         let window_inherited = self.inherited(GameOptionGroup::WindowSize);
         self.width_spin.set_sensitive(!window_inherited);
         self.height_spin.set_sensitive(!window_inherited);
-        set_entry_text(&self.custom_info.entry, &self.launch.custom_info);
-        set_entry_text(&self.additional_jvm.entry, &self.launch.additional_jvm);
-        set_entry_text(&self.additional_game.entry, &self.launch.additional_game);
-        if self.version_isolation_row.is_active() != self.launch.version_isolation {
-            self.version_isolation_row
-                .set_active(self.launch.version_isolation);
-        }
         self.syncing.set(false);
     }
 
@@ -1202,42 +1005,15 @@ impl GameOptionsPage {
             &self.inherited_subtitle(GameOptionGroup::WindowSize, size_label(&self.launch)),
         );
         self.window_inherit.set_subtitle(&size_label(&self.global));
+        self.version_isolation_expander
+            .set_subtitle(&self.inherited_subtitle(
+                GameOptionGroup::VersionIsolation,
+                isolation_label(self.launch.version_isolation),
+            ));
         if self.allow_inherit {
-            self.version_isolation_expander
-                .set_subtitle(&self.inherited_subtitle(
-                    GameOptionGroup::VersionIsolation,
-                    isolation_label(self.launch.version_isolation),
-                ));
             self.version_inherit
                 .set_subtitle(&isolation_label(self.global.version_isolation));
         }
-        self.custom_info
-            .expander
-            .set_subtitle(&self.inherited_subtitle(
-                GameOptionGroup::CustomInfo,
-                text_label(&self.launch.custom_info),
-            ));
-        self.custom_info
-            .inherit
-            .set_subtitle(&text_label(&self.global.custom_info));
-        self.additional_jvm
-            .expander
-            .set_subtitle(&self.inherited_subtitle(
-                GameOptionGroup::AdditionalJvm,
-                text_label(&self.launch.additional_jvm),
-            ));
-        self.additional_jvm
-            .inherit
-            .set_subtitle(&text_label(&self.global.additional_jvm));
-        self.additional_game
-            .expander
-            .set_subtitle(&self.inherited_subtitle(
-                GameOptionGroup::AdditionalGame,
-                text_label(&self.launch.additional_game),
-            ));
-        self.additional_game
-            .inherit
-            .set_subtitle(&text_label(&self.global.additional_game));
     }
 
     /// 展开行收起时显示的小字：继承全局时明确写出来，否则显示当前值。
@@ -1416,43 +1192,6 @@ fn notify(sender: &ComponentSender<GameOptionsPage>, message: GameOptionsMsg) {
     let _ = sender.input_sender().send(message);
 }
 
-/// 一个带继承选择的文本项：继承行、自定义行和输入行。
-///
-/// 全局页没有继承，输入行由调用方直接放进「高级」，这里只保留控件本身。
-fn text_option(
-    title: &str,
-    entry: adw::EntryRow,
-    group: GameOptionGroup,
-    sender: &ComponentSender<GameOptionsPage>,
-    allow_inherit: bool,
-) -> TextOption {
-    let expander = adw::ExpanderRow::builder()
-        .title(title)
-        .show_enable_switch(false)
-        .build();
-    let inherit = FixedRow::new("使用全局配置");
-    inherit.row.connect_activated({
-        let sender = sender.clone();
-        move |_| notify(&sender, GameOptionsMsg::Inherit(group))
-    });
-    let custom = FixedRow::new("自定义");
-    custom.row.connect_activated({
-        let sender = sender.clone();
-        move |_| notify(&sender, GameOptionsMsg::Custom(group))
-    });
-    if allow_inherit {
-        expander.add_row(&inherit.row);
-        expander.add_row(&custom.row);
-        expander.add_row(&entry);
-    }
-    TextOption {
-        expander,
-        inherit,
-        custom,
-        entry,
-    }
-}
-
 fn spin_button(value: u32) -> gtk::SpinButton {
     let adjustment =
         gtk::Adjustment::new(f64::from(value), 0.0, f64::from(u32::MAX), 1.0, 100.0, 0.0);
@@ -1564,38 +1303,7 @@ fn isolation_label(enabled: bool) -> String {
     }
 }
 
-fn text_label(text: &str) -> String {
-    if text.trim().is_empty() {
-        "空".to_string()
-    } else {
-        text.to_string()
-    }
-}
-
 /// Java 可执行文件的绝对路径，显示在选择项下方。
 fn java_path(entry: &JavaEntry) -> String {
     absolute(&entry.java.path).display().to_string()
-}
-
-fn connect_entry(
-    row: &adw::EntryRow,
-    syncing: &Rc<Cell<bool>>,
-    sender: &ComponentSender<GameOptionsPage>,
-    message: impl Fn(String) -> GameOptionsMsg + 'static,
-) {
-    let sender = sender.clone();
-    let syncing = Rc::clone(syncing);
-    row.connect_changed(move |row| {
-        if syncing.get() {
-            return;
-        }
-        notify(&sender, message(row.text().into()));
-    });
-}
-
-/// 只在文本确实变化时改写输入框，避免同步时把光标移到末尾。
-fn set_entry_text(row: &adw::EntryRow, text: &str) {
-    if row.text() != text {
-        row.set_text(text);
-    }
 }
