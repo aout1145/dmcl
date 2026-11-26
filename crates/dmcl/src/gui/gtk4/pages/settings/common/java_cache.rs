@@ -1,6 +1,6 @@
 //! Java 探测结果的进程内缓存。
 //!
-//! Java 管理页和游戏设置页共享同一份 [`JavaProbeCache`]：切换分类时不会为同一个
+//! Java 管理页、游戏设置和下载设置共享同一份 [`JavaProbeCache`]：切换分类时不会为同一个
 //! 可执行文件反复执行 `java -version`。缓存只在主线程访问，不写回配置。
 
 use std::cell::RefCell;

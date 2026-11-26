@@ -12,9 +12,9 @@ use relm4::gtk::glib;
 use relm4::prelude::*;
 
 use crate::config::{JavaChoice, LaunchConfig};
-use crate::gui::gtk4::pages::settings::common::FixedRow;
+use crate::gui::gtk4::pages::settings::common::{FixedRow, JavaEntry};
 
-use super::super::{GameOptionField, GameOptionGroup, JavaEntry};
+use super::super::{GameOptionField, GameOptionGroup};
 use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct MemoryGroup {
@@ -221,7 +221,7 @@ pub(super) fn mode_selected(
         1 => {
             let inherited = page.inherited(GameOptionGroup::Memory);
             if inherited || page.launch.min_memory.is_none() || page.launch.max_memory.is_none() {
-                let (min, max) = manual_memory_values(&page.launch, &page.java.javas);
+                let (min, max) = manual_memory_values(&page.launch, page.java.javas());
                 page.launch.min_memory = Some(min);
                 page.launch.max_memory = Some(max);
                 page.mark_override([GameOptionField::MinMemory, GameOptionField::MaxMemory]);

@@ -24,7 +24,7 @@ use account::AccountMsg;
 pub(crate) use account::AccountPage;
 use directory::DirectoryMsg;
 pub(crate) use directory::DirectoryPage;
-use download::{DownloadMsg, DownloadPage};
+use download::{DownloadMsg, DownloadPage, DownloadPageInit};
 use java::{JavaMsg, JavaPage, JavaPageInit};
 
 /// 首选项页收到的消息。
@@ -183,12 +183,14 @@ impl SimpleComponent for PreferencesPage {
             .launch(GameOptionsInit {
                 target,
                 config,
-                cache,
+                cache: Rc::clone(&cache),
                 allow_inherit: false,
                 required_java_major: None,
             })
             .detach();
-        let download = DownloadPage::builder().launch(shell).detach();
+        let download = DownloadPage::builder()
+            .launch(DownloadPageInit { shell, cache })
+            .detach();
 
         // 右栏按左侧分类切换；各分类页都保活，切换只影响显示。
         let content_stack = gtk::Stack::new();

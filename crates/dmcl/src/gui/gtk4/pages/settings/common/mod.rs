@@ -10,6 +10,7 @@ pub(crate) mod drag_list;
 pub(crate) mod fixed_row;
 pub(crate) mod java_cache;
 pub(crate) mod java_display;
+pub(crate) mod java_list;
 
 pub(crate) use account_display::{account_avatar_text, account_type_label, account_username};
 pub(crate) use choice_row::{ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut};
@@ -17,6 +18,7 @@ pub(crate) use drag_list::CSS;
 pub(crate) use fixed_row::FixedRow;
 pub(crate) use java_cache::JavaProbeCache;
 pub(crate) use java_display::{details_arch_text, details_title, java_summary};
+pub(crate) use java_list::{java_label, JavaChoices, JavaEntry};
 
 /// 收起控件所在的展开行；控件不在展开行里时什么也不做。
 pub(crate) fn collapse_expander(widget: &impl IsA<gtk::Widget>) {

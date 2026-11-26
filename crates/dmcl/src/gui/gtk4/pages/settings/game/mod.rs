@@ -15,10 +15,7 @@ pub(crate) use target::InstanceGameOptionsTarget;
 
 use std::collections::BTreeSet;
 
-use dmcl_java::JavaDetails;
-
-use crate::config::{AccountConfig, JavaChoice, JavaConfig, LaunchConfig};
-use crate::gui::gtk4::pages::settings::common::{details_arch_text, details_title, java_summary};
+use crate::config::{AccountConfig, LaunchConfig};
 
 /// 表单一次提交的改动。
 #[derive(Debug, Clone)]
@@ -239,42 +236,8 @@ pub(crate) fn group_overridden(
     group.fields().iter().any(|field| overrides.contains(field))
 }
 
-/// 一个可选的 Java：配置项、内部名，以及探测到的完整信息。
-#[derive(Debug, Clone)]
-pub(crate) struct JavaEntry {
-    pub name: String,
-    pub java: JavaConfig,
-    pub details: Option<JavaDetails>,
-}
-
-/// 「自动选择」在下拉里的下标。
-pub(crate) const JAVA_AUTO_INDEX: u32 = 0;
-
 /// 没有选中账户时的下标；下拉里没有对应的行。
 pub(crate) const ACCOUNT_NONE_INDEX: u32 = 0;
-
-/// 下拉下标 → `launch.java`。
-pub(crate) fn java_choice_for_index(javas: &[JavaEntry], index: u32) -> JavaChoice {
-    match index
-        .checked_sub(1)
-        .and_then(|index| javas.get(index as usize))
-    {
-        Some(entry) => JavaChoice::Named(entry.name.clone()),
-        None => JavaChoice::Auto,
-    }
-}
-
-/// `launch.java` → 下拉下标；指向不存在的 Java 时回退到「自动选择」。
-pub(crate) fn java_index_for_choice(javas: &[JavaEntry], choice: &JavaChoice) -> u32 {
-    match choice {
-        JavaChoice::Auto => JAVA_AUTO_INDEX,
-        JavaChoice::Named(name) => javas
-            .iter()
-            .position(|entry| &entry.name == name)
-            .map(|index| index as u32 + 1)
-            .unwrap_or(JAVA_AUTO_INDEX),
-    }
-}
 
 /// 下拉下标 → `launch.account`。
 pub(crate) fn account_for_index(
@@ -316,50 +279,9 @@ pub(crate) fn account_label(name: &str, account: &AccountConfig) -> String {
     }
 }
 
-/// Java 选择项的主标题：优先用探测结果，没探测到时退回配置里的大版本。
-pub(crate) fn java_title(entry: &JavaEntry) -> String {
-    match &entry.details {
-        Some(details) => details_title(details),
-        None => format!("Java {}", entry.java.major),
-    }
-}
-
-/// Java 选择项右侧的小字：供应商与架构；没探测到时只显示架构。
-pub(crate) fn java_detail(entry: &JavaEntry) -> String {
-    match &entry.details {
-        Some(details) => details_arch_text(details),
-        None => entry.java.arch.name().to_string(),
-    }
-}
-
-/// Java 选择器的当前值摘要，用在收起状态的副标题里。
-pub(crate) fn java_label(entry: &JavaEntry) -> String {
-    match &entry.details {
-        Some(details) => java_summary(details),
-        None => format!("Java {}（{}）", entry.java.major, entry.java.arch.name()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use dmcl_java::{JavaDetails, JavaOption};
-    use dmcl_mcmeta::os::Arch;
-
     use super::*;
-
-    fn java(name: &str, major: u32) -> JavaEntry {
-        JavaEntry {
-            name: name.to_string(),
-            java: JavaConfig {
-                path: PathBuf::from(format!("/jvm/{name}/bin/java")),
-                major,
-                arch: Arch::X86_64,
-            },
-            details: None,
-        }
-    }
 
     fn account(name: &str) -> (String, AccountConfig) {
         (
@@ -460,27 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn java_combo_round_trips_and_falls_back_to_auto() {
-        let javas = vec![java("a", 17), java("b", 21)];
-
-        assert_eq!(java_index_for_choice(&javas, &JavaChoice::Auto), 0);
-        assert_eq!(
-            java_index_for_choice(&javas, &JavaChoice::Named("b".to_string())),
-            2
-        );
-        assert_eq!(
-            java_choice_for_index(&javas, 1),
-            JavaChoice::Named("a".into())
-        );
-        assert_eq!(java_choice_for_index(&javas, 99), JavaChoice::Auto);
-
-        assert_eq!(
-            java_index_for_choice(&javas, &JavaChoice::Named("missing".to_string())),
-            0
-        );
-    }
-
-    #[test]
     fn account_combo_round_trips_and_handles_no_selection() {
         let accounts = vec![account("player"), account("steve")];
 
@@ -516,28 +417,5 @@ mod tests {
             ),
             "steve（工作）"
         );
-    }
-
-    #[test]
-    fn java_labels_use_probe_details_and_fall_back_otherwise() {
-        let mut entry = java("a", 17);
-        assert_eq!(java_title(&entry), "Java 17");
-        assert_eq!(java_detail(&entry), "x86_64");
-        assert_eq!(java_label(&entry), "Java 17（x86_64）");
-
-        entry.details = Some(JavaDetails {
-            option: JavaOption {
-                path: entry.java.path.clone(),
-                major: 17,
-                arch: Arch::X86_64,
-            },
-            type_: "openjdk".to_string(),
-            version_str: "17.0.2".to_string(),
-            vendor: "Microsoft".to_string(),
-            is_jdk: true,
-        });
-        assert_eq!(java_title(&entry), "JDK 17.0.2");
-        assert_eq!(java_detail(&entry), "Microsoft, x86_64");
-        assert_eq!(java_label(&entry), "JDK 17.0.2, Microsoft, x86_64");
     }
 }

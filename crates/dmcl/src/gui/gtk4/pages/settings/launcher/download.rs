@@ -4,10 +4,11 @@
 //! 安装或启动起生效。
 
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use dmcl_mcmeta::layout::absolute;
+use dmcl_java::JavaDetails;
 use dmcl_mcmeta::source::MirrorPolicy;
 use relm4::adw;
 use relm4::adw::prelude::*;
@@ -15,14 +16,9 @@ use relm4::gtk;
 use relm4::gtk::glib;
 use relm4::prelude::*;
 
-use crate::config::{DownloadConfig, JavaChoice};
+use crate::config::DownloadConfig;
 use crate::gui::gtk4::app::{config_store, ConfigRef, PageToast, Shell};
-use crate::gui::gtk4::pages::settings::common::{
-    ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut,
-};
-
-/// 「自动选择」在下拉 / 展开列表里的下标。
-const JAVA_AUTO_INDEX: u32 = 0;
+use crate::gui::gtk4::pages::settings::common::{ChoiceRowOut, JavaChoices, JavaProbeCache};
 
 /// 连续改动合并成一次写回的间隔。
 const FLUSH_DELAY: Duration = Duration::from_millis(400);
@@ -33,6 +29,10 @@ const MIRROR_LABELS: [&str; 3] = ["仅官方源", "官方优先", "镜像优先"
 /// 「下载」分类收到的消息。
 #[derive(Debug)]
 pub(super) enum DownloadMsg {
+    /// 页面显示出来了：开始探测还没缓存的 Java。
+    Shown,
+    /// 页面隐藏了：停止发起新的探测。
+    Hidden,
     /// 共享配置变了：没有待写改动时重新读取。
     ConfigChanged,
     MirrorSelected(u32),
@@ -46,22 +46,20 @@ pub(super) enum DownloadMsg {
     RetryBaseDelayChanged(u32),
     RetryMaxDelayChanged(u32),
     JavaSelected(u32),
+    /// 某个 Java 探测结束。
+    Probed {
+        path: PathBuf,
+        result: Result<JavaDetails, String>,
+    },
     /// 防抖到点，写回改动。
     Flush,
 }
 
-/// 安装器 Java 展开列表里的一项。
-#[derive(Debug, Clone)]
-struct JavaEntry {
-    name: String,
-    /// 行标题：`Java 17`。
-    title: String,
-    /// 行小字：Java 可执行文件路径。
-    subtitle: String,
-    /// 右侧小字：架构。
-    detail: String,
-    /// 收起时显示的一行摘要。
-    label: String,
+/// 「下载」分类的初始化参数。
+pub(super) struct DownloadPageInit {
+    pub shell: Rc<Shell>,
+    /// 与 Java 管理页、游戏设置页共享的探测结果缓存。
+    pub cache: Rc<JavaProbeCache>,
 }
 
 pub(super) struct DownloadPage {
@@ -73,8 +71,8 @@ pub(super) struct DownloadPage {
     syncing: Rc<Cell<bool>>,
     /// 页面正在编辑的下载配置。
     download: DownloadConfig,
-    /// 安装器 Java 展开列表的候选项；第 0 项固定是「自动选择」。
-    javas: Vec<JavaEntry>,
+    /// 安装器 Java 的展开列表。
+    java_list: JavaChoices,
     /// 是否有还没写回共享配置的改动。
     dirty: bool,
     /// 防抖计时器。
@@ -91,12 +89,11 @@ pub(super) struct DownloadPage {
     retry_base_delay_row: adw::SpinRow,
     retry_max_delay_row: adw::SpinRow,
     java_expander: adw::ExpanderRow,
-    java_rows: FactoryVecDeque<ChoiceRow>,
 }
 
 #[relm4::component(pub(super))]
 impl SimpleComponent for DownloadPage {
-    type Init = Rc<Shell>;
+    type Init = DownloadPageInit;
     type Input = DownloadMsg;
     type Output = ();
 
@@ -157,13 +154,28 @@ impl SimpleComponent for DownloadPage {
     }
 
     fn init(
-        shell: Self::Init,
+        init: Self::Init,
         root_widget: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let DownloadPageInit { shell, cache } = init;
         let config = config_store::store().config();
-        let (download, javas) = read_config(&config);
+        let download = config.read().download.clone();
         let syncing = Rc::new(Cell::new(false));
+
+        // 页面常驻，但只有真正显示时才去执行 Java，避免启动时探测。
+        root_widget.connect_map({
+            let sender = sender.clone();
+            move |_| {
+                let _ = sender.input_sender().send(DownloadMsg::Shown);
+            }
+        });
+        root_widget.connect_unmap({
+            let sender = sender.clone();
+            move |_| {
+                let _ = sender.input_sender().send(DownloadMsg::Hidden);
+            }
+        });
 
         let mirror_row = adw::ComboRow::builder()
             .title("镜像策略")
@@ -293,19 +305,27 @@ impl SimpleComponent for DownloadPage {
             .title("安装器 Java")
             .show_enable_switch(false)
             .build();
-        let java_rows = FactoryVecDeque::builder()
-            .launch(java_expander.clone())
-            .forward(sender.input_sender(), |out| match out {
-                ChoiceRowOut::Selected(index) => DownloadMsg::JavaSelected(index),
-            });
+        let mut java_list =
+            JavaChoices::new(
+                &java_expander,
+                cache,
+                sender.input_sender(),
+                |out| match out {
+                    ChoiceRowOut::Selected(index) => DownloadMsg::JavaSelected(index),
+                },
+            );
+        {
+            let config = config.read();
+            java_list.reload(&config, "");
+        }
 
-        let mut model = Self {
+        let model = Self {
             config,
             shell,
             page_toast: PageToast::new(&root_widget),
             syncing,
             download,
-            javas,
+            java_list,
             dirty: false,
             flush: None,
             mirror_row: mirror_row.clone(),
@@ -319,21 +339,26 @@ impl SimpleComponent for DownloadPage {
             retry_base_delay_row: retry_base_delay_row.clone(),
             retry_max_delay_row: retry_max_delay_row.clone(),
             java_expander: java_expander.clone(),
-            java_rows,
         };
 
         let widgets = view_output!();
-        model.rebuild_java_rows();
         model.sync_ui();
         ComponentParts { model, widgets }
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
+            DownloadMsg::Shown => {
+                self.reload();
+                self.java_list.set_visible(true);
+                self.probe_missing(&sender);
+            }
+            DownloadMsg::Hidden => self.java_list.set_visible(false),
             DownloadMsg::ConfigChanged => {
                 // 正在编辑时不覆盖用户还没写回的值；写回后根组件会再发一次。
                 if !self.dirty {
                     self.reload();
+                    self.probe_missing(&sender);
                 }
             }
             DownloadMsg::MirrorSelected(index) => {
@@ -377,14 +402,18 @@ impl SimpleComponent for DownloadPage {
                 self.mark_dirty(&sender);
             }
             DownloadMsg::JavaSelected(index) => {
-                if index as usize > self.javas.len() {
+                if index as usize > self.java_list.javas().len() {
                     return;
                 }
-                let current = java_index_for_choice(&self.javas, &self.download.java);
+                let current = self.java_list.index_for_choice(&self.download.java);
                 if index != current {
-                    self.download.java = java_choice_for_index(&self.javas, index);
+                    self.download.java = self.java_list.choice_for_index(index);
                     self.mark_dirty(&sender);
                 }
+                self.sync_ui();
+            }
+            DownloadMsg::Probed { path, result } => {
+                self.java_list.apply_probe(&path, result);
                 self.sync_ui();
             }
             DownloadMsg::Flush => {
@@ -396,37 +425,25 @@ impl SimpleComponent for DownloadPage {
 }
 
 impl DownloadPage {
-    /// 从共享配置重新读取下载设置和 Java 表。
+    /// 从共享配置重新读取下载设置和 Java 表；有未写回的改动时保留本地设置。
     fn reload(&mut self) {
-        let (download, javas) = read_config(&self.config);
-        self.download = download;
-        self.javas = javas;
-        self.rebuild_java_rows();
+        {
+            let config = self.config.read();
+            if !self.dirty {
+                self.download = config.download.clone();
+            }
+            self.java_list.reload(&config, "");
+        }
         self.sync_ui();
     }
 
-    /// 按当前 Java 表重建安装器 Java 的展开列表。
-    fn rebuild_java_rows(&mut self) {
-        let mut guard = self.java_rows.guard();
-        guard.clear();
-        guard.push_back(ChoiceRowInit {
-            index: JAVA_AUTO_INDEX,
-            title: "自动选择".to_string(),
-            subtitle: String::new(),
-            detail: String::new(),
-            avatar_text: None,
-            selected: false,
-        });
-        for (offset, entry) in self.javas.iter().enumerate() {
-            guard.push_back(ChoiceRowInit {
-                index: offset as u32 + 1,
-                title: entry.title.clone(),
-                subtitle: entry.subtitle.clone(),
-                detail: entry.detail.clone(),
-                avatar_text: None,
-                selected: false,
+    /// 探测还没缓存的安装器 Java；页面不可见时什么也不做。
+    fn probe_missing(&mut self, sender: &ComponentSender<Self>) {
+        self.java_list
+            .probe_missing(sender.input_sender(), |path, result| DownloadMsg::Probed {
+                path,
+                result,
             });
-        }
     }
 
     /// 把当前值写回控件；信号回调被 `syncing` 屏蔽。
@@ -453,15 +470,10 @@ impl DownloadPage {
         );
         set_spin(&self.retry_max_delay_row, self.download.retry_max_delay_ms);
 
-        let index = java_index_for_choice(&self.javas, &self.download.java);
-        for position in 0..self.java_rows.len() {
-            self.java_rows.send(
-                position,
-                ChoiceRowMsg::SetSelected(position as u32 == index),
-            );
-        }
+        let index = self.java_list.index_for_choice(&self.download.java);
+        self.java_list.sync(index, true);
         self.java_expander
-            .set_subtitle(&java_label_of(&self.javas, &self.download.java));
+            .set_subtitle(&self.java_list.label_of(&self.download.java));
         self.syncing.set(false);
     }
 
@@ -496,23 +508,6 @@ impl DownloadPage {
             move |err| shell.page_toast(&page_toast, &format!("保存配置失败：{err:#}")),
         );
     }
-}
-
-/// 读取下载配置和安装器 Java 的候选项。
-fn read_config(config: &ConfigRef) -> (DownloadConfig, Vec<JavaEntry>) {
-    let config = config.read();
-    let javas = config
-        .javas
-        .iter()
-        .map(|(name, java)| JavaEntry {
-            name: name.clone(),
-            title: format!("Java {}", java.major),
-            subtitle: absolute(&java.path).display().to_string(),
-            detail: java.arch.name().to_string(),
-            label: format!("Java {}（{}）", java.major, java.arch.name()),
-        })
-        .collect();
-    (config.download.clone(), javas)
 }
 
 fn spin_row(title: &str, subtitle: &str, value: u64, min: u32) -> adw::SpinRow {
@@ -607,47 +602,9 @@ fn mirror_from_index(index: u32) -> MirrorPolicy {
         .unwrap_or_default()
 }
 
-fn java_index_for_choice(javas: &[JavaEntry], choice: &JavaChoice) -> u32 {
-    match choice {
-        JavaChoice::Auto => JAVA_AUTO_INDEX,
-        JavaChoice::Named(name) => javas
-            .iter()
-            .position(|entry| &entry.name == name)
-            .map(|index| index as u32 + 1)
-            .unwrap_or(JAVA_AUTO_INDEX),
-    }
-}
-
-fn java_choice_for_index(javas: &[JavaEntry], index: u32) -> JavaChoice {
-    index
-        .checked_sub(1)
-        .and_then(|index| javas.get(index as usize))
-        .map(|entry| JavaChoice::Named(entry.name.clone()))
-        .unwrap_or(JavaChoice::Auto)
-}
-
-/// 收起展开行时显示的一行摘要。
-fn java_label_of(javas: &[JavaEntry], choice: &JavaChoice) -> String {
-    java_index_for_choice(javas, choice)
-        .checked_sub(1)
-        .and_then(|index| javas.get(index as usize))
-        .map(|entry| entry.label.clone())
-        .unwrap_or_else(|| "自动选择".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn java(name: &str) -> JavaEntry {
-        JavaEntry {
-            name: name.to_string(),
-            title: format!("Java 17（{name}）"),
-            subtitle: format!("/jvm/{name}/bin/java"),
-            detail: "x86_64".to_string(),
-            label: format!("Java 17（x86_64，{name}）"),
-        }
-    }
 
     #[test]
     fn mirror_selection_follows_the_policy_order() {
@@ -657,35 +614,6 @@ mod tests {
         }
         // 配置里的非法下标回退到默认策略，而不是停在一个没有对应的选项上。
         assert_eq!(mirror_from_index(u32::MAX), MirrorPolicy::default());
-    }
-
-    #[test]
-    fn java_selection_round_trips_through_the_expander_list() {
-        let javas = vec![java("a"), java("b")];
-
-        assert_eq!(java_index_for_choice(&javas, &JavaChoice::Auto), 0);
-        assert_eq!(
-            java_index_for_choice(&javas, &JavaChoice::Named("b".to_string())),
-            2
-        );
-        // 配置里指向已删除的 Java 时回退到「自动选择」。
-        assert_eq!(
-            java_index_for_choice(&javas, &JavaChoice::Named("missing".to_string())),
-            0
-        );
-
-        assert_eq!(java_choice_for_index(&javas, 0), JavaChoice::Auto);
-        assert_eq!(
-            java_choice_for_index(&javas, 2),
-            JavaChoice::Named("b".to_string())
-        );
-        assert_eq!(java_choice_for_index(&javas, 99), JavaChoice::Auto);
-
-        assert_eq!(java_label_of(&javas, &JavaChoice::Auto), "自动选择");
-        assert_eq!(
-            java_label_of(&javas, &JavaChoice::Named("b".to_string())),
-            javas[1].label
-        );
     }
 
     #[test]

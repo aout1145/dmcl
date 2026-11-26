@@ -246,7 +246,7 @@ impl SimpleComponent for GameOptionsPage {
         let game_integrity = GameIntegrityGroup::new(allow_inherit, &sender);
         let game_args = GameArgsGroup::new(allow_inherit, &sender);
         let priority = PriorityGroup::new(allow_inherit, &sender);
-        let memory = MemoryGroup::new(&launch, &java.javas, allow_inherit, &sender);
+        let memory = MemoryGroup::new(&launch, java.javas(), allow_inherit, &sender);
         let jvm_args = JvmArgsGroup::new(allow_inherit, &sender);
         let jvm_compatibility = JvmCompatibilityGroup::new(allow_inherit, &sender);
         let version_isolation = VersionIsolationGroup::new(allow_inherit, &sender);
@@ -356,7 +356,7 @@ impl SimpleComponent for GameOptionsPage {
             GameOptionsMsg::RefreshAutoMemory => {
                 memory::refresh(
                     &self.memory,
-                    &self.java.javas,
+                    self.java.javas(),
                     self.view(GameOptionGroup::Memory),
                 );
             }
@@ -441,7 +441,7 @@ impl GameOptionsPage {
         priority::sync(&self.priority, self.view(GameOptionGroup::ProcessPriority));
         memory::sync(
             &self.memory,
-            &self.java.javas,
+            self.java.javas(),
             self.view(GameOptionGroup::Memory),
         );
         jvm_args::sync(&self.jvm_args, self.view(GameOptionGroup::JvmArgs));
