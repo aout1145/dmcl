@@ -10,7 +10,7 @@
 //!    由 [`resolve_memory`] 按系统可用内存与所选 Java 的架构自动决定。
 //!
 //! 一站式启动把「检查游戏完整性 → 登录 → 启动」组成一张任务图（见 [`crate::prepare`]）：
-//! 检查游戏完整性里依次是读取版本、检查并补全文件 / 选择 Java、解压 natives；启动里是
+//! 检查游戏完整性里依次是读取版本、按配置检查 / 补全文件、选择 Java、解压 natives；启动里是
 //! 生成参数与起子进程。[`launch_chain`] 返回 `TaskGraph<GameMonitor>`，由调用者运行、
 //! 订阅事件，并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
 //!
@@ -64,8 +64,8 @@ pub use microsoft::{
 };
 pub use monitor::GameMonitor;
 pub use option::{
-    JvmCompatibility, LaunchOption, ProcessPriority, QuickPlay, WindowMode, LAUNCHER_NAME,
-    LAUNCHER_VERSION,
+    GameIntegrity, JvmCompatibility, LaunchOption, ProcessPriority, QuickPlay, WindowMode,
+    LAUNCHER_NAME, LAUNCHER_VERSION,
 };
 pub use prepare::{
     launch_chain, GenerateArgsTask, LaunchTask, LoginTask, PrepareLaunchFilesTask,

@@ -96,6 +96,7 @@ pub(crate) enum GameOptionField {
     CustomInfo,
     AdditionalJvm,
     JvmCompatibility,
+    GameIntegrity,
     AdditionalGame,
     VersionIsolation,
 }
@@ -116,6 +117,7 @@ impl GameOptionField {
             Self::CustomInfo => "custom_info",
             Self::AdditionalJvm => "additional_jvm",
             Self::JvmCompatibility => "jvm_compatibility",
+            Self::GameIntegrity => "game_integrity",
             Self::AdditionalGame => "additional_game",
             Self::VersionIsolation => "version_isolation",
         }
@@ -136,6 +138,7 @@ impl GameOptionField {
             "custom_info" => Self::CustomInfo,
             "additional_jvm" => Self::AdditionalJvm,
             "jvm_compatibility" => Self::JvmCompatibility,
+            "game_integrity" => Self::GameIntegrity,
             "additional_game" => Self::AdditionalGame,
             "version_isolation" => Self::VersionIsolation,
             _ => return None,
@@ -155,6 +158,7 @@ pub(crate) enum GameOptionGroup {
     Memory,
     JvmArgs,
     JvmCompatibility,
+    GameIntegrity,
     VersionIsolation,
 }
 
@@ -174,6 +178,7 @@ impl GameOptionGroup {
             Self::Memory => &[GameOptionField::MinMemory, GameOptionField::MaxMemory],
             Self::JvmArgs => &[GameOptionField::AdditionalJvm],
             Self::JvmCompatibility => &[GameOptionField::JvmCompatibility],
+            Self::GameIntegrity => &[GameOptionField::GameIntegrity],
             Self::VersionIsolation => &[GameOptionField::VersionIsolation],
         }
     }
@@ -210,6 +215,7 @@ pub(crate) fn copy_fields<'a>(
             GameOptionField::JvmCompatibility => {
                 target.jvm_compatibility = source.jvm_compatibility
             }
+            GameOptionField::GameIntegrity => target.game_integrity = source.game_integrity,
             GameOptionField::AdditionalGame => {
                 target.additional_game = source.additional_game.clone()
             }
@@ -406,10 +412,14 @@ mod tests {
             GameOptionField::Fullscreen,
             GameOptionField::WindowWidth,
             GameOptionField::WindowHeight,
+            GameOptionField::QuickPlay,
+            GameOptionField::ProcessPriority,
             GameOptionField::MinMemory,
             GameOptionField::MaxMemory,
             GameOptionField::CustomInfo,
             GameOptionField::AdditionalJvm,
+            GameOptionField::JvmCompatibility,
+            GameOptionField::GameIntegrity,
             GameOptionField::AdditionalGame,
             GameOptionField::VersionIsolation,
         ];

@@ -60,8 +60,8 @@ pub use java::{
 #[cfg(feature = "gtk4")]
 pub(crate) use java::{configured_java, scan_configs};
 pub use launch::{
-    JvmCompatibility, LaunchConfig, LoadedInstanceConfig, ProcessPriority, QuickPlayConfig,
-    QuickPlayTarget,
+    GameIntegrity, JvmCompatibility, LaunchConfig, LoadedInstanceConfig, ProcessPriority,
+    QuickPlayConfig, QuickPlayTarget,
 };
 
 use std::path::{Path, PathBuf};

@@ -10,6 +10,7 @@
 
 mod account;
 mod game_args;
+mod game_integrity;
 mod java;
 mod jvm_args;
 mod jvm_compatibility;
@@ -41,6 +42,7 @@ use super::{
 
 use account::AccountGroup;
 use game_args::GameArgsGroup;
+use game_integrity::GameIntegrityGroup;
 use java::JavaGroup;
 use jvm_args::JvmArgsGroup;
 use jvm_compatibility::JvmCompatibilityGroup;
@@ -88,6 +90,8 @@ pub(crate) enum GameOptionsMsg {
     QuickPlaySelected(u32),
     /// 某个快速游玩目标的值变了（目标下标，文本）。
     QuickPlayValueChanged(u32, String),
+    /// 游戏完整性：0 使用全局、1 忽略、2 仅检查、3 检查并补全。
+    GameIntegritySelected(u32),
     /// 游戏参数文本变了。
     GameArgsChanged(String),
     /// 进程优先级：0 使用全局、1 低、2 正常、3 高。
@@ -161,6 +165,7 @@ pub(crate) struct GameOptionsPage {
     java: JavaGroup,
     window: WindowGroup,
     quick_play: QuickPlayGroup,
+    game_integrity: GameIntegrityGroup,
     game_args: GameArgsGroup,
     priority: PriorityGroup,
     memory: MemoryGroup,
@@ -193,9 +198,11 @@ impl SimpleComponent for GameOptionsPage {
             },
             add = &adw::PreferencesGroup {
                 set_title: "游戏",
-                set_description: Some("设置快速游玩、游戏参数和进程优先级。"),
+                set_description: Some("设置快速游玩、游戏完整性、游戏参数和进程优先级。"),
                 #[local_ref]
                 quick_play_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                game_integrity_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 game_args_expander -> adw::ExpanderRow {},
                 #[local_ref]
@@ -236,6 +243,7 @@ impl SimpleComponent for GameOptionsPage {
         }
         let window = WindowGroup::new(allow_inherit, &sender);
         let quick_play = QuickPlayGroup::new(allow_inherit, &sender);
+        let game_integrity = GameIntegrityGroup::new(allow_inherit, &sender);
         let game_args = GameArgsGroup::new(allow_inherit, &sender);
         let priority = PriorityGroup::new(allow_inherit, &sender);
         let memory = MemoryGroup::new(&launch, &java.javas, allow_inherit, &sender);
@@ -250,6 +258,7 @@ impl SimpleComponent for GameOptionsPage {
         let jvm_args_expander = jvm_args.expander.clone();
         let jvm_compatibility_expander = jvm_compatibility.expander.clone();
         let quick_play_expander = quick_play.expander.clone();
+        let game_integrity_expander = game_integrity.expander.clone();
         let game_args_expander = game_args.expander.clone();
         let priority_expander = priority.expander.clone();
         let version_isolation_expander = version_isolation.expander.clone();
@@ -274,6 +283,7 @@ impl SimpleComponent for GameOptionsPage {
             java,
             window,
             quick_play,
+            game_integrity,
             game_args,
             priority,
             memory,
@@ -314,6 +324,9 @@ impl SimpleComponent for GameOptionsPage {
             GameOptionsMsg::QuickPlaySelected(index) => quick_play::selected(self, index, &sender),
             GameOptionsMsg::QuickPlayValueChanged(index, value) => {
                 quick_play::value_changed(self, index, value, &sender)
+            }
+            GameOptionsMsg::GameIntegritySelected(index) => {
+                game_integrity::selected(self, index, &sender)
             }
             GameOptionsMsg::GameArgsChanged(value) => game_args::changed(self, value, &sender),
             GameOptionsMsg::ProcessPrioritySelected(index) => {
@@ -420,6 +433,10 @@ impl GameOptionsPage {
         java::sync(&self.java, self.view(GameOptionGroup::Java));
         window::sync(&self.window, self.view(GameOptionGroup::Window));
         quick_play::sync(&self.quick_play, self.view(GameOptionGroup::QuickPlay));
+        game_integrity::sync(
+            &self.game_integrity,
+            self.view(GameOptionGroup::GameIntegrity),
+        );
         game_args::sync(&self.game_args, self.view(GameOptionGroup::GameArgs));
         priority::sync(&self.priority, self.view(GameOptionGroup::ProcessPriority));
         memory::sync(

@@ -34,6 +34,7 @@ game/page/account.rs       账户分组
 game/page/java.rs          Java 分组与后台探测
 game/page/window.rs        窗口类型分组
 game/page/quick_play.rs    快速游玩分组
+game/page/game_integrity.rs 游戏完整性分组
 game/page/game_args.rs     游戏参数分组
 game/page/priority.rs      进程优先级分组
 game/page/memory.rs        内存分组
@@ -70,6 +71,9 @@ instance/loaders.rs        从 dmcl-patches 读取当前加载器
 - **JVM 参数与兼容性**：`additional_jvm` 为 `null` 表示使用默认参数，空串表示自定义但未填写；
   「JVM 兼容性」决定启动时是否校验所选 Java 的版本与架构，以及「自动选择」找不到合适 Java 时
   是否下载 JRE；已指定具体 Java 时只检查、不替换（选「忽略」则跳过检查）。
+- **游戏完整性**：决定启动时是否检查 / 补全版本文件。「仅检查」在不完整时提示并由用户决定
+  是否继续；只有「检查并补全」会下载缺失文件与 natives jar。安装流程已按当前平台下载
+  natives jar。
 - **实例设置**：同一个 root + 实例名只保留一个标签，再次「管理」时聚焦已有标签；页面关闭
   即销毁。实例覆盖是字段级的：只写本次改动过的 `launch` 字段到实例 `dmcl.json`，未覆盖的
   字段继续继承全局；选「使用全局配置」就删掉对应键。是否覆盖以实例文件里出现的键为准，

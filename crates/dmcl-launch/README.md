@@ -14,8 +14,8 @@ account.rs   Account（登录快照）与 AccountSource（登录 / 刷新）
 microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
-option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / JVM 兼容性选项
-prepare.rs   启动链：读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动
+option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / JVM 兼容性 / 游戏完整性选项
+prepare.rs   启动链：读取版本 → 检查 / 补全文件、选择 Java → 解压 natives → 登录 → 生成参数 → 启动
 monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```
 
@@ -61,6 +61,10 @@ Unix 上负 nice 需要权限，没有权限时保持当前优先级启动。
 用 `launch_chain`：它按「检查游戏完整性 → 登录 → 启动」组织任务图，文件检查与 Java 选择
 可以并行，natives 同时依赖二者；登录等到文件与 natives 都完成后再进行，避免在线会话在
 长时间下载中过期。整张图共享一个 `DownloadContext`。
+
+`LaunchOption::game_integrity` 决定这条链对文件缺失的处理：忽略直接跳过检查；仅检查列出
+缺失项、等用户确认后继续，不补全；检查并补全在缺失时下载修复。只有检查并补全会下载缺失的
+natives jar，其余模式只解压本地已有的 jar；安装流程已按当前平台下载好 natives。
 
 ## 相关文档
 

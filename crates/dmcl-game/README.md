@@ -16,7 +16,7 @@ options.rs    GameFilesOptions、download_planned
 plan.rs       纯函数规划：这个版本需要哪些文件
 integrity.rs  完整性检查：完整吗？缺什么？
 ensure.rs     ensure_files / ensure_client_jar / ensure_libraries / ensure_assets / ensure_asset_index
-natives.rs    按 os / arch 下载并解压 natives
+natives.rs    按 os / arch 下载并解压 natives；extract_natives 只解压本地已有的 jar
 extract.rs    薄 extract_zip（zip 9 的安全解压）
 ```
 
@@ -44,8 +44,8 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 ### natives
 
 `ensure_natives` 按给定 os / arch 下载分类器 jar 并解压到 `dmcl_mcmeta::layout::natives_dir`
-约定的目录。缺失的 jar 跳过并记日志，不把「库还没下」当成失败；解压使用安全实现，不创建
-符号链接。
+约定的目录；`extract_natives` 跳过下载，只解压本地已有的 jar。缺失的 jar 跳过并记日志，
+不把「库还没下」当成失败；解压使用安全实现，不创建符号链接。
 
 ### 版本与加载器识别
 

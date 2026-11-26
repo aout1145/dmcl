@@ -31,7 +31,7 @@ pub use ensure::{
     ensure_asset_index, ensure_assets, ensure_client_jar, ensure_files, ensure_libraries,
 };
 pub use integrity::{check_integrity, IntegrityStatus, MissingFile, MissingReason};
-pub use natives::ensure_natives;
+pub use natives::{ensure_natives, extract_natives};
 pub use options::{download_planned, GameFilesOptions};
 pub use plan::{
     base_name, native_artifact, plan_asset_objects, plan_assets_index, plan_client_jar, plan_files,

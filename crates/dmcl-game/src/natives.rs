@@ -27,7 +27,18 @@ pub async fn ensure_natives(
 ) -> Result<()> {
     let planned = plan_native_jars(&version.reference, &version.json.libraries, os, arch);
     download_planned(options, downloads, "natives", planned, ctx).await?;
+    extract_natives(version, os, arch, ctx).await
+}
 
+/// 把本地已有的 natives jar 解压到 [`natives_dir`]，不下载任何文件。
+///
+/// 缺失的 jar 跳过并记一条日志，由调用方决定是否把它当成失败。
+pub async fn extract_natives(
+    version: &ResolvedVersion,
+    os: Os,
+    arch: Arch,
+    ctx: &TaskContext,
+) -> Result<()> {
     let target = natives_dir(version.reference.name.as_str(), os, arch);
     for (jar, name) in plan_natives(&version.reference, &version.json.libraries, os, arch) {
         if !jar.is_file() {

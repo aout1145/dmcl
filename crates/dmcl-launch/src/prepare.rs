@@ -2,8 +2,8 @@
 //!
 //! * [`ReadVersionTask`]（`Task<(), ResolvedVersion>`）——读取版本 JSON 并解析
 //!   `inheritsFrom`；
-//! * [`PrepareLaunchFilesTask`]（`Task<Arc<ResolvedVersion>, ResolvedVersion>`）——检查文件
-//!   完整性，缺件时补全；
+//! * [`PrepareLaunchFilesTask`]（`Task<Arc<ResolvedVersion>, ResolvedVersion>`）——按配置
+//!   检查文件完整性，缺件时补全；
 //! * [`SelectJavaTask`]（`Task<Arc<ResolvedVersion>, JavaOption>`）——读取版本要求的 Java
 //!   大版本，通过解析器选好 java；允许自动安装时下载 JRE；版本 / 架构不匹配时先等用户确认；
 //! * [`PrepareNativesTask`]（`Task<(Arc<ResolvedVersion>, Arc<JavaOption>), JavaOption>`）——
@@ -26,8 +26,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use dmcl_download::DownloadContext;
 use dmcl_game::{
-    check_integrity, ensure_files, ensure_natives, resolve_version, GameFilesOptions,
-    ResolvedVersion, VersionRef,
+    check_integrity, ensure_files, ensure_natives, extract_natives, resolve_version,
+    GameFilesOptions, ResolvedVersion, VersionRef,
 };
 use dmcl_java::{
     install_jre, JavaDetails, JavaOption, JavaRuntimeOptions, JreAutoInstall, JreInstallRequest,
@@ -38,7 +38,7 @@ use dmcl_task::{Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use crate::account::{Account, AccountSource};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
-use crate::option::{JvmCompatibility, LaunchOption, ProcessPriority};
+use crate::option::{GameIntegrity, JvmCompatibility, LaunchOption, ProcessPriority};
 
 /// 生成启动参数之后的产出。
 #[derive(Debug, Clone)]
@@ -101,15 +101,24 @@ impl Task<(), ResolvedVersion> for ReadVersionTask {
     }
 }
 
-/// 检查文件完整性；缺件时补全。
+/// 按配置处理文件完整性：忽略、只检查，或检查并补全。
 pub struct PrepareLaunchFilesTask {
     game: Arc<GameFilesOptions>,
     downloads: Arc<DownloadContext>,
+    integrity: GameIntegrity,
 }
 
 impl PrepareLaunchFilesTask {
-    pub fn new(game: Arc<GameFilesOptions>, downloads: Arc<DownloadContext>) -> Self {
-        Self { game, downloads }
+    pub fn new(
+        game: Arc<GameFilesOptions>,
+        downloads: Arc<DownloadContext>,
+        integrity: GameIntegrity,
+    ) -> Self {
+        Self {
+            game,
+            downloads,
+            integrity,
+        }
     }
 }
 
@@ -120,10 +129,23 @@ impl Task<Arc<ResolvedVersion>, ResolvedVersion> for PrepareLaunchFilesTask {
         resolved: Arc<ResolvedVersion>,
         ctx: TaskContext,
     ) -> Result<ResolvedVersion> {
+        if self.integrity == GameIntegrity::Ignore {
+            ctx.log("跳过游戏完整性检查");
+            return Ok((*resolved).clone());
+        }
+
         let integrity = check_integrity(&resolved, &self.game).await?;
         ctx.log(integrity.summary());
-        if !integrity.is_complete() {
+        if integrity.is_complete() {
+            return Ok((*resolved).clone());
+        }
+
+        if self.integrity == GameIntegrity::Complete {
             ensure_files(&resolved, &self.game, &self.downloads, &ctx).await?;
+        } else {
+            ctx.log(integrity.detail(10));
+            ctx.confirm(format!("{}；继续启动可能失败", integrity.summary()))
+                .await?;
         }
         Ok((*resolved).clone())
     }
@@ -279,18 +301,28 @@ impl Task<Arc<ResolvedVersion>, JavaOption> for SelectJavaTask {
     }
 }
 
-/// 按当前平台的 os 与已选 java 的 arch 下载 + 解压 natives。
+/// 按当前平台的 os 与已选 java 的 arch 解压 natives；只有「检查并补全」才下载缺失的 jar。
 ///
 /// natives 的分类器（`natives-linux-64` 之类）取决于运行游戏的 JVM 架构，所以必须用
-/// 上一步选好的 java；这里不再选择 Java。
+/// 上一步选好的 java；这里不再选择 Java。安装流程已按当前平台下载好 natives jar，
+/// 其余模式只解压本地已有的文件，不联网补全。
 pub struct PrepareNativesTask {
     game: Arc<GameFilesOptions>,
     downloads: Arc<DownloadContext>,
+    integrity: GameIntegrity,
 }
 
 impl PrepareNativesTask {
-    pub fn new(game: Arc<GameFilesOptions>, downloads: Arc<DownloadContext>) -> Self {
-        Self { game, downloads }
+    pub fn new(
+        game: Arc<GameFilesOptions>,
+        downloads: Arc<DownloadContext>,
+        integrity: GameIntegrity,
+    ) -> Self {
+        Self {
+            game,
+            downloads,
+            integrity,
+        }
     }
 }
 
@@ -301,15 +333,12 @@ impl Task<(Arc<ResolvedVersion>, Arc<JavaOption>), JavaOption> for PrepareNative
         (version, java): (Arc<ResolvedVersion>, Arc<JavaOption>),
         ctx: TaskContext,
     ) -> Result<JavaOption> {
-        ensure_natives(
-            &version,
-            Os::current(),
-            java.arch,
-            &self.game,
-            &self.downloads,
-            &ctx,
-        )
-        .await?;
+        let os = Os::current();
+        if self.integrity == GameIntegrity::Complete {
+            ensure_natives(&version, os, java.arch, &self.game, &self.downloads, &ctx).await?;
+        } else {
+            extract_natives(&version, os, java.arch, &ctx).await?;
+        }
         Ok((*java).clone())
     }
 }
@@ -374,29 +403,40 @@ pub fn launch_chain(
 ) -> TaskGraph<GameMonitor> {
     let version = option.version.clone();
     let account_source = option.account_source.clone();
+    let integrity = option.game_integrity;
 
     let mut builder = TaskGraphBuilder::new("启动");
     let downloads = game.download_context(builder.progress());
-    let integrity = builder.step("检查游戏完整性");
+    let integrity_step = builder.step("检查游戏完整性");
 
-    let read = builder.add(integrity, "读取版本", (), ReadVersionTask::new(version));
+    let read = builder.add(
+        integrity_step,
+        "读取版本",
+        (),
+        ReadVersionTask::new(version),
+    );
+    let files_name = match integrity {
+        GameIntegrity::Ignore => "跳过文件检查",
+        GameIntegrity::Check => "检查文件",
+        GameIntegrity::Complete => "检查并补全文件",
+    };
     let files = builder.add(
-        integrity,
-        "检查并补全文件",
+        integrity_step,
+        files_name,
         read.clone(),
-        PrepareLaunchFilesTask::new(game.clone(), downloads.clone()),
+        PrepareLaunchFilesTask::new(game.clone(), downloads.clone(), integrity),
     );
     let java = builder.add(
-        integrity,
+        integrity_step,
         "选择 Java",
         read.clone(),
         SelectJavaTask::new(option.clone(), game.clone(), downloads.clone(), jre),
     );
     let natives = builder.add(
-        integrity,
+        integrity_step,
         "解压 natives",
         (read, java.clone()),
-        PrepareNativesTask::new(game, downloads),
+        PrepareNativesTask::new(game, downloads, integrity),
     );
 
     let login_step = builder.step("登录");
@@ -508,8 +548,11 @@ mod tests {
         let (game_for_task, downloads_for_task) = (game.clone(), downloads.clone());
         let resolved_for_task = resolved.clone();
         let files = run_node(move |ctx| {
-            let task =
-                PrepareLaunchFilesTask::new(game_for_task.clone(), downloads_for_task.clone());
+            let task = PrepareLaunchFilesTask::new(
+                game_for_task.clone(),
+                downloads_for_task.clone(),
+                GameIntegrity::Complete,
+            );
             let resolved = resolved_for_task.clone();
             async move { task.run(resolved, ctx).await }
         })
@@ -538,7 +581,11 @@ mod tests {
         let resolved_for_task = resolved.clone();
         let java_for_task = java.clone();
         let java = run_node(move |ctx| {
-            let task = PrepareNativesTask::new(game_for_task.clone(), downloads_for_task.clone());
+            let task = PrepareNativesTask::new(
+                game_for_task.clone(),
+                downloads_for_task.clone(),
+                GameIntegrity::Complete,
+            );
             let input = (resolved_for_task.clone(), java_for_task.clone());
             async move { task.run(input, ctx).await }
         })
@@ -652,6 +699,113 @@ mod tests {
             }
         }
         let err = waiting.await.unwrap().unwrap_err();
+        assert!(
+            err.chain()
+                .any(|cause| cause.downcast_ref::<dmcl_task::Cancelled>().is_some()),
+            "{err:#}"
+        );
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    /// 一个缺少一个库、且该库没有下载地址的版本：完整性检查必然不完整，
+    /// 补全也无从下载。
+    async fn write_incomplete_version(root: &std::path::Path) {
+        let json = serde_json::json!({
+            "id": "1.0",
+            "mainClass": "a.Main",
+            "libraries": [{
+                "name": "a:a:1",
+                "downloads": {"artifact": {"path": "a/a/1/a-1.jar", "url": ""}}
+            }]
+        });
+        let path = dmcl_mcmeta::layout::version_json_path(root, "1.0");
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, serde_json::to_string(&json).unwrap())
+            .await
+            .unwrap();
+    }
+
+    fn files_graph(
+        resolved: ResolvedVersion,
+        game: Arc<GameFilesOptions>,
+        integrity: GameIntegrity,
+    ) -> TaskGraph<ResolvedVersion> {
+        let mut builder = TaskGraphBuilder::new("检查文件");
+        let step = builder.step("步骤");
+        let source = builder.add(
+            step,
+            "版本",
+            (),
+            task_fn(move |_: (), _ctx| {
+                let resolved = resolved.clone();
+                async move { Ok(resolved) }
+            }),
+        );
+        let downloads = game.download_context(builder.progress());
+        let sink = builder.add(
+            step,
+            "检查文件",
+            source,
+            PrepareLaunchFilesTask::new(game, downloads, integrity),
+        );
+        builder.build(sink).unwrap()
+    }
+
+    #[tokio::test]
+    async fn ignoring_integrity_skips_the_check() {
+        let root =
+            std::env::temp_dir().join(format!("dmcl-integrity-ignore-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        write_incomplete_version(&root).await;
+        let resolved = resolve_version(&VersionRef::new(&root, "1.0"))
+            .await
+            .unwrap();
+
+        let graph = files_graph(resolved, game_options(), GameIntegrity::Ignore);
+        let mut events = graph.subscribe();
+        let running = tokio::spawn(async move { graph.run(|_| {}).await });
+        let mut skipped = false;
+        while let Some(event) = events.recv().await {
+            if let TaskEvent::Log { message, .. } = event {
+                skipped |= message.contains("跳过游戏完整性检查");
+            }
+        }
+        running.await.unwrap().unwrap();
+        assert!(skipped);
+
+        tokio::fs::remove_dir_all(&root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checking_integrity_waits_for_confirmation_when_incomplete() {
+        let root =
+            std::env::temp_dir().join(format!("dmcl-integrity-check-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&root).await;
+        write_incomplete_version(&root).await;
+        let resolved = resolve_version(&VersionRef::new(&root, "1.0"))
+            .await
+            .unwrap();
+
+        let graph = files_graph(resolved, game_options(), GameIntegrity::Check);
+        let mut events = graph.subscribe();
+        let running = tokio::spawn(async move { graph.run(|_| {}).await });
+        loop {
+            match events.recv().await.unwrap() {
+                TaskEvent::Warning {
+                    message, decision, ..
+                } => {
+                    assert!(message.contains("版本不完整"), "{message}");
+                    assert!(message.contains("继续启动可能失败"), "{message}");
+                    decision.abort();
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        let err = running.await.unwrap().unwrap_err();
         assert!(
             err.chain()
                 .any(|cause| cause.downcast_ref::<dmcl_task::Cancelled>().is_some()),

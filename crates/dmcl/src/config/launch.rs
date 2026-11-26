@@ -7,8 +7,9 @@ use anyhow::{anyhow, Result};
 use dmcl_game::VersionRef;
 use dmcl_java::{JavaInstalledHook, JavaResolver};
 use dmcl_launch::{
-    JvmCompatibility as LaunchJvmCompatibility, LaunchOption, ProcessPriority as LaunchPriority,
-    QuickPlay as LaunchQuickPlay, WindowMode as LaunchWindowMode, LAUNCHER_NAME,
+    GameIntegrity as LaunchGameIntegrity, JvmCompatibility as LaunchJvmCompatibility, LaunchOption,
+    ProcessPriority as LaunchPriority, QuickPlay as LaunchQuickPlay,
+    WindowMode as LaunchWindowMode, LAUNCHER_NAME,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -64,6 +65,19 @@ pub enum JvmCompatibility {
     Complete,
 }
 
+/// 启动时对游戏文件完整性的处理方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameIntegrity {
+    /// 不检查，也不补全缺失的文件。
+    Ignore,
+    /// 检查文件；不完整时等用户确认后继续，不补全。
+    Check,
+    /// 检查并补全缺失或损坏的文件。
+    #[default]
+    Complete,
+}
+
 /// 全局 `launch.*` 段，也是实例覆盖后的结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -91,6 +105,8 @@ pub struct LaunchConfig {
     pub additional_jvm: Option<String>,
     /// 启动时对所选 Java 的兼容性检查。
     pub jvm_compatibility: JvmCompatibility,
+    /// 启动时对游戏文件完整性的处理方式。
+    pub game_integrity: GameIntegrity,
     pub additional_game: String,
 }
 
@@ -110,6 +126,7 @@ impl Default for LaunchConfig {
             custom_info: LAUNCHER_NAME.to_string(),
             additional_jvm: None,
             jvm_compatibility: JvmCompatibility::Complete,
+            game_integrity: GameIntegrity::Complete,
             additional_game: String::new(),
         }
     }
@@ -292,6 +309,11 @@ impl Config {
             JvmCompatibility::Check => LaunchJvmCompatibility::Check,
             JvmCompatibility::Complete => LaunchJvmCompatibility::Complete,
         };
+        option.game_integrity = match launch.game_integrity {
+            GameIntegrity::Ignore => LaunchGameIntegrity::Ignore,
+            GameIntegrity::Check => LaunchGameIntegrity::Check,
+            GameIntegrity::Complete => LaunchGameIntegrity::Complete,
+        };
         option.additional_jvm = launch
             .additional_jvm
             .as_deref()
@@ -335,6 +357,7 @@ mod tests {
         let value = serde_json::to_value(LaunchConfig::default()).unwrap();
         assert!(value["additional_jvm"].is_null());
         assert_eq!(value["jvm_compatibility"], "complete");
+        assert_eq!(value["game_integrity"], "complete");
     }
 
     #[tokio::test]
@@ -540,6 +563,7 @@ mod tests {
         });
         config.launch.process_priority = ProcessPriority::High;
         config.launch.jvm_compatibility = JvmCompatibility::Ignore;
+        config.launch.game_integrity = GameIntegrity::Check;
         config.launch.version_isolation = false;
         config.javas.insert(
             "jdk".to_string(),
@@ -584,6 +608,7 @@ mod tests {
         );
         assert_eq!(option.process_priority, LaunchPriority::High);
         assert_eq!(option.jvm_compatibility, LaunchJvmCompatibility::Ignore);
+        assert_eq!(option.game_integrity, LaunchGameIntegrity::Check);
         assert!(!option.version_isolation);
         assert_eq!(option.account_source.name(), "Steve");
 

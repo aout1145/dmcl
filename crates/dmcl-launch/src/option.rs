@@ -76,6 +76,18 @@ pub enum JvmCompatibility {
     Complete,
 }
 
+/// 启动时对游戏文件完整性的处理方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameIntegrity {
+    /// 不检查，也不补全缺失的文件。
+    Ignore,
+    /// 检查文件；不完整时等用户确认后继续，不补全。
+    Check,
+    /// 检查并补全缺失或损坏的文件。
+    #[default]
+    Complete,
+}
+
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户来源与 Java 解析都由调用者通过 `Arc<dyn …>` 传入，结构体因此仍是
@@ -105,6 +117,8 @@ pub struct LaunchOption {
     pub additional_jvm: Vec<String>,
     /// 启动时对所选 Java 的兼容性检查。
     pub jvm_compatibility: JvmCompatibility,
+    /// 启动时对游戏文件完整性的处理方式。
+    pub game_integrity: GameIntegrity,
     pub additional_game: Vec<String>,
     /// 怎么找 java：由调用者提供的解析器决定。
     pub java: Arc<dyn JavaResolver>,
@@ -148,6 +162,7 @@ impl LaunchOption {
             custom_info: LAUNCHER_NAME.to_string(),
             additional_jvm: Vec::new(),
             jvm_compatibility: JvmCompatibility::Complete,
+            game_integrity: GameIntegrity::Complete,
             additional_game: Vec::new(),
             java,
             java_installed_hook,
