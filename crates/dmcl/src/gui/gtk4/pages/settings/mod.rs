@@ -11,9 +11,5 @@ mod instance;
 mod launcher;
 
 pub(crate) use common::{JavaProbeCache, CSS};
-pub(crate) use game::{
-    copy_fields, GameOptionField, GameOptionsInit, GameOptionsMsg, GameOptionsPage,
-    GameOptionsState, GameOptionsTarget, GameOptionsUpdate,
-};
 pub(crate) use instance::{InstanceMsg, InstanceOut, InstancePage};
 pub(crate) use launcher::{AccountPage, DirectoryPage, PreferencesMsg, PreferencesPage};

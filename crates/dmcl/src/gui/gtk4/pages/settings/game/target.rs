@@ -11,11 +11,9 @@ use std::rc::Rc;
 
 use serde_json::{Map, Value};
 
+use super::{copy_fields, GameOptionField, GameOptionsState, GameOptionsTarget, GameOptionsUpdate};
 use crate::config::{instance_config_path, write_instance_launch};
 use crate::gui::gtk4::app::{ConfigRef, PageToast, Shell};
-use crate::gui::gtk4::pages::settings::{
-    copy_fields, GameOptionField, GameOptionsState, GameOptionsTarget, GameOptionsUpdate,
-};
 
 /// 实例启动设置的落点。
 pub(crate) struct InstanceGameOptionsTarget {

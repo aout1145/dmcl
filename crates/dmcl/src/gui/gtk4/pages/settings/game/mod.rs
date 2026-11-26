@@ -1,14 +1,17 @@
 //! 首选项里的「全局游戏选项」分类，以及可复用到实例设置的游戏设置表单。
 //!
 //! 表单通过 [`GameOptionsTarget`] 读写启动配置：全局分类由 [`GlobalGameOptionsTarget`]
-//! 绑定到共享配置；实例管理页以后实现自己的 target，把改动的字段写进实例 `dmcl.json`
-//! 的覆盖层。账户表和 Java 表是全局资源，表单直接从只读的 `ConfigRef` 读取。
+//! 绑定到共享配置，实例管理页用 [`InstanceGameOptionsTarget`] 把改动的字段写进实例
+//! `dmcl.json` 的覆盖层。账户表和 Java 表是全局资源，表单直接从只读的 `ConfigRef` 读取。
+//! 表单本身按 [`GameOptionGroup`] 拆在 `page/` 下。
 
 mod global;
 mod page;
+mod target;
 
 pub(crate) use global::GlobalGameOptionsTarget;
 pub(crate) use page::{GameOptionsInit, GameOptionsMsg, GameOptionsPage};
+pub(crate) use target::InstanceGameOptionsTarget;
 
 use std::collections::BTreeSet;
 

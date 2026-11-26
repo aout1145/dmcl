@@ -26,13 +26,21 @@ launcher/directory.rs      Minecraft 目录分类
 launcher/download.rs       下载分类
 launcher/java.rs           Java 分类
 game/mod.rs                游戏设置的目标抽象与字段级改动
-game/page.rs               可复用的 GameOptionsPage 表单
 game/global.rs             全局落点：把改动写进共享配置
+game/target.rs             实例落点：字段级覆盖写进实例 dmcl.json
+game/page/mod.rs           可复用的 GameOptionsPage 表单：骨架、继承与写回
+game/page/account.rs       账户分组
+game/page/java.rs          Java 分组与后台探测
+game/page/window.rs        窗口类型分组
+game/page/quick_play.rs    快速游玩分组
+game/page/game_args.rs     游戏参数分组
+game/page/priority.rs      进程优先级分组
+game/page/memory.rs        内存分组
+game/page/version_isolation.rs  版本隔离分组
 instance/mod.rs            实例设置页：两组侧栏、内容切换、标签标题与页面输出
 instance/general.rs        「实例」分类：图标、名称、分类、加载器与删除
 instance/files.rs          实例目录重命名与删除
 instance/loaders.rs        从 dmcl-patches 读取当前加载器
-instance/target.rs         实例落点：字段级覆盖写进实例 dmcl.json
 ```
 
 ## 设计约定
@@ -52,7 +60,8 @@ instance/target.rs         实例落点：字段级覆盖写进实例 dmcl.json
   processor，不影响启动。
 - **全局游戏选项**：`GameOptionsPage` 是可复用表单，只通过 `GameOptionsTarget` 读取当前
   生效的启动配置、提交字段级改动；全局 target 写入共享配置。控件改动立即更新模型，防抖后
-  只提交本次改动的字段。
+  只提交本次改动的字段。表单按 `GameOptionGroup` 拆在 `game/page/` 下，每组持有自己的
+  选择状态、探测缓存与控件，通过 `GroupView` 读取共享的启动配置与继承状态。
 - **实例设置**：同一个 root + 实例名只保留一个标签，再次「管理」时聚焦已有标签；页面关闭
   即销毁。实例覆盖是字段级的：只写本次改动过的 `launch` 字段到实例 `dmcl.json`，未覆盖的
   字段继续继承全局；选「使用全局配置」就删掉对应键。是否覆盖以实例文件里出现的键为准，

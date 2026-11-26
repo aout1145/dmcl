@@ -7,7 +7,6 @@
 mod files;
 mod general;
 mod loaders;
-mod target;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -21,12 +20,10 @@ use dmcl_game::{resolve_version, VersionRef};
 
 use crate::gui::gtk4::app::page_host::{Page, PageInit, TabTitle};
 use crate::gui::gtk4::app::{config_store, PageToast, Shell};
-use crate::gui::gtk4::pages::settings::{
-    GameOptionsInit, GameOptionsMsg, GameOptionsPage, JavaProbeCache,
-};
+use crate::gui::gtk4::pages::settings::JavaProbeCache;
 
+use super::game::{GameOptionsInit, GameOptionsMsg, GameOptionsPage, InstanceGameOptionsTarget};
 use general::{GeneralInit, GeneralOut, GeneralPage};
-use target::InstanceGameOptionsTarget;
 
 /// 实例设置页发给根组件的动作。
 #[derive(Debug)]
