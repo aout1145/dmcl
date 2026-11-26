@@ -1,4 +1,4 @@
-//! 首选项里的「账号」分类：账户列表、添加离线账户、微软登录与删除。
+//! 首选项里的「账户」分类：账户列表、添加离线账户、微软登录与删除。
 
 use std::rc::Rc;
 
@@ -17,7 +17,7 @@ use crate::gui::gtk4::pages::settings::common::{
     account_avatar_text, account_type_label, account_username,
 };
 
-/// 「账号」分类收到的消息。
+/// 「账户」分类收到的消息。
 #[derive(Debug)]
 pub(crate) enum AccountMsg {
     /// 共享配置变了：重新读取账户表。

@@ -21,7 +21,7 @@ dmcl-rs/
     ├── dmcl-game/             # 版本引用、文件规划 / 完整性 / 补全、natives
     ├── dmcl-java/             # Java 探测 / 扫描 / 选择、Mojang JRE 安装
     ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge/OptiFine 安装
-    ├── dmcl-launch/           # 账号、命令行生成、启动
+    ├── dmcl-launch/           # 账户、命令行生成、启动
     └── dmcl/                  # 应用：config + cli + gui（GTK4）
 ```
 

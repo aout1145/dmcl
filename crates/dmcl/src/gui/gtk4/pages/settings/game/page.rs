@@ -226,6 +226,7 @@ impl SimpleComponent for GameOptionsPage {
         adw::PreferencesPage {
             add = &adw::PreferencesGroup {
                 set_title: "游戏",
+                set_description: Some("设置启动游戏时使用的账户、Java、窗口大小与内存等选项。"),
                 #[local_ref]
                 account_expander -> adw::ExpanderRow {},
                 #[local_ref]

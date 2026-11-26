@@ -1,7 +1,7 @@
 //! 首选项：GNOME 设置式的左右分栏。
 //!
 //! 左侧是分类列表，右侧显示当前分类；页面嵌在标签页里，没有自己的窗口标题栏，所以
-//! 分栏保持常驻、不做折叠。「Minecraft 目录」「账号」「全局游戏选项」「Java 管理」和
+//! 分栏保持常驻、不做折叠。「Minecraft 目录」「账户」「全局游戏选项」「Java 管理」和
 //! 「下载」各自对应一个分类页。
 
 mod account;
@@ -37,7 +37,7 @@ pub(crate) enum PreferencesMsg {
 pub(crate) struct PreferencesPage {
     /// 「Minecraft 目录」分类；控制器同时负责保活子组件。
     directory: Controller<DirectoryPage>,
-    /// 「账号」分类。
+    /// 「账户」分类。
     account: Controller<AccountPage>,
     /// 「Java 管理」分类。
     java: Controller<JavaPage>,
@@ -86,7 +86,7 @@ impl SimpleComponent for PreferencesPage {
                             },
 
                             append = &adw::ActionRow {
-                                set_title: "账号",
+                                set_title: "账户",
                                 set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("avatar-default-symbolic"),

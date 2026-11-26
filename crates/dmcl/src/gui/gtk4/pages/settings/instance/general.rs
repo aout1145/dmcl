@@ -352,6 +352,7 @@ impl SimpleComponent for GeneralPage {
             #[name(instance_group)]
             adw::PreferencesGroup {
                 set_title: "实例",
+                set_description: Some("管理实例的图标、名称与分类。"),
 
                 adw::ActionRow {
                     set_title: "图标",
@@ -423,6 +424,7 @@ impl SimpleComponent for GeneralPage {
             #[name(loader_group)]
             adw::PreferencesGroup {
                 set_title: "加载器",
+                set_description: Some("查看 Minecraft 版本，添加或更换加载器。"),
                 #[watch]
                 set_visible: model.loader_supported,
                 #[watch]
@@ -434,11 +436,6 @@ impl SimpleComponent for GeneralPage {
                     #[watch]
                     set_subtitle: model.mc_version.as_deref().unwrap_or(""),
                 },
-            },
-
-            adw::PreferencesGroup {
-                #[watch]
-                set_visible: model.loader_supported,
 
                 adw::ActionRow {
                     set_title: "应用加载器更改",
@@ -455,6 +452,8 @@ impl SimpleComponent for GeneralPage {
             },
 
             adw::PreferencesGroup {
+                set_title: "加载器",
+                set_description: Some("查看 Minecraft 版本，添加或更换加载器。"),
                 #[watch]
                 set_visible: !model.loader_supported,
 
@@ -468,6 +467,7 @@ impl SimpleComponent for GeneralPage {
 
             adw::PreferencesGroup {
                 set_title: "危险操作",
+                set_description: Some("这些操作不可撤销，请谨慎操作。"),
 
                 adw::ActionRow {
                     set_title: "删除实例",

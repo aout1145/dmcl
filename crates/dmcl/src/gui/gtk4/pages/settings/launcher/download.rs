@@ -111,6 +111,7 @@ impl SimpleComponent for DownloadPage {
 
             add = &adw::PreferencesGroup {
                 set_title: "下载内容",
+                set_description: Some("选择下载时可跳过的内容。"),
                 #[local_ref]
                 skip_music_row -> adw::SwitchRow {},
             },

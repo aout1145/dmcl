@@ -182,8 +182,8 @@ pub(super) fn validate_selection(
         if !accounts.contains_key(&name) {
             launch.account = None;
             warnings.push(ConfigWarning {
-                message: format!("配置项「launch.account」指向的账号不存在：{name}，已改为 null"),
-                detail: "请编辑配置选择已有账号".to_string(),
+                message: format!("配置项「launch.account」指向的账户不存在：{name}，已改为 null"),
+                detail: "请编辑配置选择已有账户".to_string(),
             });
         }
     }
@@ -231,7 +231,7 @@ impl Config {
         let account = self
             .accounts
             .get(name)
-            .ok_or_else(|| anyhow!("配置项「launch.account」指向的账号不存在：{name}"))?;
+            .ok_or_else(|| anyhow!("配置项「launch.account」指向的账户不存在：{name}"))?;
         Ok(account.source(name))
     }
 }
@@ -427,7 +427,7 @@ mod tests {
             .selected_account_source(&launch)
             .err()
             .expect("应当报错");
-        assert!(err.to_string().contains("账号不存在：nope"));
+        assert!(err.to_string().contains("账户不存在：nope"));
 
         launch.account = Some("player".to_string());
         assert_eq!(
