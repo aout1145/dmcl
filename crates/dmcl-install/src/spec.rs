@@ -6,10 +6,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use dmcl_download::DownloadContext;
 use dmcl_game::{
-    ensure_assets, ensure_client_jar, ensure_libraries, resolve_version, ResolvedVersion,
-    VersionRef,
+    download_planned, ensure_assets, ensure_client_jar, ensure_libraries, plan_native_jars,
+    resolve_version, ResolvedVersion, VersionRef,
 };
 use dmcl_mcmeta::layout::version_dir;
+use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_mcmeta::vanilla::{VersionJson, VersionJsonPatch};
 use dmcl_task::{task_fn, Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use sanitize_filename::{is_sanitized_with_options, OptionsForCheck};
@@ -287,10 +288,36 @@ fn download_assets_step(
     })
 }
 
-/// `完成` 节点的输入：原版版本、按安装顺序排列的 patch，以及三个文件下载屏障。
+/// 下载当前平台需要的 natives 分类器 jar。
+///
+/// natives 的分类器取决于 CPU 架构；安装时按当前平台下载，启动时再按所选 Java 的架构
+/// 解压。这样即使启动配置不补全文件，安装完也能直接启动。
+fn download_natives_step(
+    options: Arc<InstallOptions>,
+    downloads: Arc<DownloadContext>,
+) -> impl Task<Arc<ResolvedVersion>, ()> + 'static {
+    task_fn(move |version: Arc<ResolvedVersion>, ctx: TaskContext| {
+        let options = options.clone();
+        let downloads = downloads.clone();
+        async move {
+            let arch = Arch::current().context("无法确定当前 CPU 架构，不能下载 natives")?;
+            let planned = plan_native_jars(
+                &version.reference,
+                &version.json.libraries,
+                Os::current(),
+                arch,
+            );
+            download_planned(&options.game, &downloads, "natives", planned, &ctx).await?;
+            Ok(())
+        }
+    })
+}
+
+/// `完成` 节点的输入：原版版本、按安装顺序排列的 patch，以及四个文件下载屏障。
 type FinishInput = (
     Arc<ResolvedVersion>,
     Vec<Arc<VersionJsonPatch>>,
+    Arc<()>,
     Arc<()>,
     Arc<()>,
     Arc<()>,
@@ -301,7 +328,7 @@ type FinishInput = (
 /// 这是安装流程里唯一修改版本 JSON 的步骤；加载器只负责下载自己的库并返回 patch。
 fn finish_step(version_name: String) -> impl Task<FinishInput, InstallOutcome> + 'static {
     task_fn(
-        move |(version, patches, _client_jar, _assets, _libraries): FinishInput,
+        move |(version, patches, _client_jar, _assets, _libraries, _natives): FinishInput,
               ctx: TaskContext| {
             let version_name = version_name.clone();
             async move {
@@ -332,8 +359,9 @@ pub(crate) fn finish_version_json(json: &mut VersionJson, version_name: &str) {
 /// 完整的安装任务图：获取版本元数据 → 下载游戏文件 / 安装加载器 → 完成。
 ///
 /// 显示上分为 `获取版本元数据`、`下载游戏文件`、每个加载器一个 `安装 X`，最后是
-/// `完成`。原版依赖库只依赖原版版本 JSON，和版本 jar、资源一起下载；加载器步骤各自
-/// 下载自己的库并返回 patch，不修改版本 JSON。所有 patch 在最后一步统一应用并写盘。
+/// `完成`。原版依赖库、natives jar 只依赖原版版本 JSON，和版本 jar、资源一起下载；
+/// 加载器步骤各自下载自己的库并返回 patch，不修改版本 JSON。所有 patch 在最后一步统一
+/// 应用并写盘。
 ///
 /// 客户端 jar 必须先于 Forge / NeoForge 的 processor 就位，因为 processor 要读它来
 /// 生成 patched client（`{MINECRAFT_JAR}`）。
@@ -378,6 +406,12 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
         "下载原版依赖库",
         resolved.clone(),
         download_libraries_step(options.clone(), downloads.clone()),
+    );
+    let natives = builder.add(
+        download_step,
+        "下载 natives",
+        resolved.clone(),
+        download_natives_step(options.clone(), downloads.clone()),
     );
 
     let has_forge = spec
@@ -443,7 +477,7 @@ pub fn install_task(options: Arc<InstallOptions>, spec: InstallSpec) -> TaskGrap
     let sink = builder.add(
         finish,
         "写入版本 JSON",
-        (resolved, patches, client_jar, assets, libraries),
+        (resolved, patches, client_jar, assets, libraries, natives),
         finish_step(spec.version_name),
     );
     builder.build(sink).expect("安装图的最终节点由构造保证")
