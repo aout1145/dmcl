@@ -386,7 +386,6 @@ impl SimpleComponent for DownloadPage {
                     self.mark_dirty(&sender);
                 }
                 self.sync_ui();
-                self.java_expander.set_expanded(false);
             }
             DownloadMsg::Flush => {
                 self.flush = None;

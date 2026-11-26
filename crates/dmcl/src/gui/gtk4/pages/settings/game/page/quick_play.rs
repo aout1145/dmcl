@@ -9,9 +9,10 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::config::{LaunchConfig, QuickPlayConfig, QuickPlayTarget};
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct QuickPlayGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -34,17 +35,17 @@ impl QuickPlayGroup {
             .title("快速游玩")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::QuickPlay))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
 
-        let none = FixedRow::new("无");
-        none.row.connect_activated({
+        let none = FixedRow::builder("无").build();
+        none.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::QuickPlaySelected(0))
         });
@@ -52,10 +53,10 @@ impl QuickPlayGroup {
             quick_play_row("单人游戏", "世界文件夹名", 1, sender, &syncing);
         let (multi, multi_entry) = quick_play_row("多人联机", "服务器地址", 2, sender, &syncing);
         let (realms, realms_entry) = quick_play_row("Realms", "Realm ID", 3, sender, &syncing);
-        expander.add_row(&none.row);
-        expander.add_row(&single.row);
-        expander.add_row(&multi.row);
-        expander.add_row(&realms.row);
+        expander.add_row(none.row());
+        expander.add_row(single.row());
+        expander.add_row(multi.row());
+        expander.add_row(realms.row());
 
         Self {
             expander,
@@ -193,20 +194,12 @@ fn quick_play_row(
         }
     });
 
-    let row = adw::ActionRow::builder()
-        .title(title)
-        .activatable(true)
-        .build();
-    row.add_suffix(&entry);
-    let mark = gtk::Image::from_icon_name("object-select-symbolic");
-    mark.add_css_class("accent");
-    mark.set_valign(gtk::Align::Center);
-    row.add_suffix(&mark);
-    row.connect_activated({
+    let row = FixedRow::builder(title).suffix(&entry).keep_open().build();
+    row.row().connect_activated({
         let sender = sender.clone();
         move |_| notify(&sender, GameOptionsMsg::QuickPlaySelected(index))
     });
-    (FixedRow { row, mark }, entry)
+    (row, entry)
 }
 
 /// 下拉下标 → 快速游玩目标；0 是无。

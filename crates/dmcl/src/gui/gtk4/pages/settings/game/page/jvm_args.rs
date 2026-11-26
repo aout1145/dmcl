@@ -8,9 +8,10 @@ use relm4::adw::prelude::*;
 use relm4::prelude::*;
 
 use crate::config::LaunchConfig;
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct JvmArgsGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -29,24 +30,24 @@ impl JvmArgsGroup {
             .title("JVM 参数")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::JvmArgs))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
 
-        let default = FixedRow::new("默认");
+        let default = FixedRow::builder("默认").build();
         default.set_subtitle("使用默认 JVM 参数");
-        default.row.connect_activated({
+        default.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmArgsModeSelected(0))
         });
-        let custom = FixedRow::new("自定义");
+        let custom = FixedRow::builder("自定义").keep_open().build();
         custom.set_subtitle("在默认参数后追加");
-        custom.row.connect_activated({
+        custom.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmArgsModeSelected(1))
         });
@@ -64,8 +65,8 @@ impl JvmArgsGroup {
                 );
             }
         });
-        expander.add_row(&default.row);
-        expander.add_row(&custom.row);
+        expander.add_row(default.row());
+        expander.add_row(custom.row());
         expander.add_row(&entry);
 
         Self {

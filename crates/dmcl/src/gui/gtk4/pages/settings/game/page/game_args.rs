@@ -8,9 +8,10 @@ use relm4::adw::prelude::*;
 use relm4::prelude::*;
 
 use crate::config::LaunchConfig;
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct GameArgsGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -27,13 +28,13 @@ impl GameArgsGroup {
             .title("游戏参数")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::GameArgs))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
         let entry = adw::EntryRow::builder().title("附加参数").build();
         entry.connect_changed({

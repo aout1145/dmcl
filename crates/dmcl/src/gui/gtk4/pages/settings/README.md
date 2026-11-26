@@ -16,7 +16,8 @@
 
 ```text
 common/account_display.rs  账户的 ID、类型文案与占位头像文字
-common/choice_row.rs       展开式选择行里的一项
+common/choice_row.rs       展开式选择行的列表项（ChoiceRow）
+common/fixed_row.rs        展开式选择行的固定项（FixedRow）
 common/drag_list.rs        通用拖动排序
 common/java_cache.rs       Java 探测结果缓存
 common/java_display.rs     Java 标题 / 供应商 / 架构的展示文案
@@ -64,6 +65,8 @@ instance/loaders.rs        从 dmcl-patches 读取当前加载器
   生效的启动配置、提交字段级改动；全局 target 写入共享配置。控件改动立即更新模型，防抖后
   只提交本次改动的字段。表单按 `GameOptionGroup` 拆在 `game/page/` 下，每组持有自己的
   选择状态、探测缓存与控件，通过 `GroupView` 读取共享的启动配置与继承状态。
+- **展开式选择行**：列表项用 `ChoiceRow`，固定项用 `FixedRow`；两者激活后都自动收起所在的
+  展开行。需要保留输入框的行显式 `keep_open`，分组里不再手写 `set_expanded(false)`。
 - **JVM 参数与兼容性**：`additional_jvm` 为 `null` 表示使用默认参数，空串表示自定义但未填写；
   「JVM 兼容性」决定启动时是否校验所选 Java 的版本与架构，以及「自动选择」找不到合适 Java 时
   是否下载 JRE；已指定具体 Java 时只检查、不替换（选「忽略」则跳过检查）。

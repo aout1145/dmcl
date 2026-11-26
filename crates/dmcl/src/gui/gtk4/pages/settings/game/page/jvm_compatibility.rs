@@ -5,9 +5,10 @@ use relm4::adw::prelude::*;
 use relm4::prelude::*;
 
 use crate::config::JvmCompatibility;
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct JvmCompatibilityGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -23,8 +24,8 @@ impl JvmCompatibilityGroup {
             .title("JVM 兼容性")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| {
                 notify(
@@ -34,30 +35,30 @@ impl JvmCompatibilityGroup {
             }
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
 
-        let ignore = FixedRow::new("忽略");
+        let ignore = FixedRow::builder("忽略").build();
         ignore.set_subtitle("不检查 Java 版本与架构");
-        ignore.row.connect_activated({
+        ignore.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmCompatibilitySelected(1))
         });
-        let check = FixedRow::new("仅检查");
+        let check = FixedRow::builder("仅检查").build();
         check.set_subtitle("不匹配时提示，但不自动更换 Java");
-        check.row.connect_activated({
+        check.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmCompatibilitySelected(2))
         });
-        let complete = FixedRow::new("检查并补全");
+        let complete = FixedRow::builder("检查并补全").build();
         complete.set_subtitle("自动选择且没有合适的 Java 时下载；手动选择时只检查");
-        complete.row.connect_activated({
+        complete.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmCompatibilitySelected(3))
         });
-        expander.add_row(&ignore.row);
-        expander.add_row(&check.row);
-        expander.add_row(&complete.row);
+        expander.add_row(ignore.row());
+        expander.add_row(check.row());
+        expander.add_row(complete.row());
 
         Self {
             expander,
@@ -111,7 +112,6 @@ pub(super) fn selected(
             {
                 return;
             }
-            page.jvm_compatibility.expander.set_expanded(false);
             page.launch.jvm_compatibility = compatibility;
             page.mark_override([GameOptionField::JvmCompatibility]);
             page.sync_ui();

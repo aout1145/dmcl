@@ -12,16 +12,16 @@ use relm4::gtk::glib;
 use relm4::prelude::*;
 
 use crate::config::{JavaChoice, LaunchConfig};
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup, JavaEntry};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct MemoryGroup {
     pub(super) expander: adw::ExpanderRow,
     inherit: FixedRow,
-    auto_row: adw::ActionRow,
-    auto_mark: gtk::Image,
-    manual_mark: gtk::Image,
+    auto_row: FixedRow,
+    manual_row: FixedRow,
     min_spin: gtk::SpinButton,
     max_spin: gtk::SpinButton,
     /// 同步控件时临时屏蔽信号。
@@ -44,13 +44,13 @@ impl MemoryGroup {
             .title("内存")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::Memory))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
 
         let auto_memory = auto_memory_mib(launch, javas);
@@ -115,31 +115,23 @@ impl MemoryGroup {
         memory_box.append(&xmx);
         memory_box.append(&max_spin);
 
-        let auto_row = adw::ActionRow::builder().title("自动分配内存").build();
-        auto_row.set_activatable(true);
-        let auto_mark = gtk::Image::from_icon_name("object-select-symbolic");
-        auto_mark.add_css_class("accent");
-        auto_mark.set_valign(gtk::Align::Center);
-        auto_row.add_suffix(&auto_mark);
-        auto_row.connect_activated({
+        let auto_row = FixedRow::builder("自动分配内存").build();
+        auto_row.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::MemoryModeSelected(0))
         });
 
-        let manual_row = adw::ActionRow::builder().title("手动分配内存").build();
-        manual_row.set_activatable(true);
-        manual_row.add_suffix(&memory_box);
-        let manual_mark = gtk::Image::from_icon_name("object-select-symbolic");
-        manual_mark.add_css_class("accent");
-        manual_mark.set_valign(gtk::Align::Center);
-        manual_row.add_suffix(&manual_mark);
-        manual_row.connect_activated({
+        let manual_row = FixedRow::builder("手动分配内存")
+            .suffix(&memory_box)
+            .keep_open()
+            .build();
+        manual_row.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::MemoryModeSelected(1))
         });
 
-        expander.add_row(&auto_row);
-        expander.add_row(&manual_row);
+        expander.add_row(auto_row.row());
+        expander.add_row(manual_row.row());
 
         // 系统可用内存会随其他进程变化，设置页可见时每秒刷新一次自动值。
         let auto_memory_source = glib::timeout_add_seconds_local(1, {
@@ -154,8 +146,7 @@ impl MemoryGroup {
             expander,
             inherit,
             auto_row,
-            auto_mark,
-            manual_mark,
+            manual_row,
             min_spin,
             max_spin,
             syncing,
@@ -187,8 +178,8 @@ pub(super) fn sync(group: &MemoryGroup, javas: &[JavaEntry], view: GroupView<'_>
         format!("当前自动分配：{auto_memory} MiB")
     };
     group.auto_row.set_subtitle(&auto_detail);
-    group.auto_mark.set_visible(!view.inherited && auto);
-    group.manual_mark.set_visible(!view.inherited && !auto);
+    group.auto_row.set_selected(!view.inherited && auto);
+    group.manual_row.set_selected(!view.inherited && !auto);
     group.inherit.set_selected(view.inherited);
     group
         .inherit
@@ -226,7 +217,6 @@ pub(super) fn mode_selected(
                 page.schedule_flush(sender);
             }
             page.sync_ui();
-            page.memory.expander.set_expanded(false);
         }
         1 => {
             let inherited = page.inherited(GameOptionGroup::Memory);

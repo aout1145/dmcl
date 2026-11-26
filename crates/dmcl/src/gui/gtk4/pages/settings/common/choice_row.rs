@@ -10,6 +10,8 @@ use relm4::factory::FactoryView;
 use relm4::gtk;
 use relm4::prelude::*;
 
+use super::collapse_expander;
+
 /// 一行可选项。
 pub(crate) struct ChoiceRow {
     index: u32,
@@ -90,7 +92,8 @@ impl FactoryComponent for ChoiceRow {
                 set_valign: gtk::Align::Center,
             },
 
-            connect_activated[sender] => move |_| {
+            connect_activated[sender] => move |row| {
+                collapse_expander(row);
                 let _ = sender.output(ChoiceRowOut::Selected(index));
             },
         }

@@ -7,14 +7,14 @@ use relm4::prelude::*;
 use crate::config::{AccountConfig, Config, LaunchConfig};
 use crate::gui::gtk4::pages::settings::common::{
     account_avatar_text, account_type_label, account_username, ChoiceRow, ChoiceRowInit,
-    ChoiceRowMsg, ChoiceRowOut,
+    ChoiceRowMsg, ChoiceRowOut, FixedRow,
 };
 
 use super::super::{
     account_for_index, account_index_for, account_label, GameOptionField, GameOptionGroup,
     ACCOUNT_NONE_INDEX,
 };
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct AccountGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -31,13 +31,13 @@ impl AccountGroup {
             .title("账户")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::Account))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
         let rows = FactoryVecDeque::builder().launch(expander.clone()).forward(
             sender.input_sender(),
@@ -114,7 +114,6 @@ pub(super) fn selected(
         page.schedule_flush(sender);
     }
     page.sync_ui();
-    page.account.expander.set_expanded(false);
 }
 
 fn account_label_of(accounts: &[(String, AccountConfig)], account: &Option<String>) -> String {

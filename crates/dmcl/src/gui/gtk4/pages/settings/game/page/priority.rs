@@ -5,9 +5,10 @@ use relm4::adw::prelude::*;
 use relm4::prelude::*;
 
 use crate::config::ProcessPriority;
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct PriorityGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -23,8 +24,8 @@ impl PriorityGroup {
             .title("进程优先级")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| {
                 notify(
@@ -34,29 +35,29 @@ impl PriorityGroup {
             }
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
-        let low = FixedRow::new("低");
+        let low = FixedRow::builder("低").build();
         low.set_subtitle("低于正常优先级");
-        low.row.connect_activated({
+        low.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(1))
         });
-        let normal = FixedRow::new("正常");
+        let normal = FixedRow::builder("正常").build();
         normal.set_subtitle("系统默认");
-        normal.row.connect_activated({
+        normal.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(2))
         });
-        let high = FixedRow::new("高");
+        let high = FixedRow::builder("高").build();
         high.set_subtitle("高于正常优先级");
-        high.row.connect_activated({
+        high.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(3))
         });
-        expander.add_row(&low.row);
-        expander.add_row(&normal.row);
-        expander.add_row(&high.row);
+        expander.add_row(low.row());
+        expander.add_row(normal.row());
+        expander.add_row(high.row());
 
         Self {
             expander,
@@ -109,7 +110,6 @@ pub(super) fn selected(
             {
                 return;
             }
-            page.priority.expander.set_expanded(false);
             page.launch.process_priority = priority;
             page.mark_override([GameOptionField::ProcessPriority]);
             page.sync_ui();

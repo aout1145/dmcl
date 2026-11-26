@@ -12,14 +12,14 @@ use relm4::prelude::*;
 
 use crate::config::{configured_java, same_java_path, Config, JavaChoice, LaunchConfig};
 use crate::gui::gtk4::pages::settings::common::{
-    ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut, JavaProbeCache,
+    ChoiceRow, ChoiceRowInit, ChoiceRowMsg, ChoiceRowOut, FixedRow, JavaProbeCache,
 };
 
 use super::super::{
     java_choice_for_index, java_detail, java_index_for_choice, java_label, java_title,
     GameOptionField, GameOptionGroup, JavaEntry, JAVA_AUTO_INDEX,
 };
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct JavaGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -51,13 +51,13 @@ impl JavaGroup {
             .title("Java")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::Java))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
         let rows = FactoryVecDeque::builder().launch(expander.clone()).forward(
             sender.input_sender(),
@@ -173,8 +173,6 @@ pub(super) fn selected(
         page.schedule_flush(sender);
     }
     page.sync_ui();
-    // 自动内存的 32 位上限取决于选中的 Java。
-    page.java.expander.set_expanded(false);
 }
 
 /// 实例版本要求的 Java 大版本读出来了。

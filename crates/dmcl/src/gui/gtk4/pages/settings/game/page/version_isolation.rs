@@ -4,8 +4,10 @@ use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::prelude::*;
 
+use crate::gui::gtk4::pages::settings::common::FixedRow;
+
 use super::super::{GameOptionField, GameOptionGroup};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct VersionIsolationGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -20,8 +22,8 @@ impl VersionIsolationGroup {
             .title("版本隔离")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| {
                 notify(
@@ -31,22 +33,22 @@ impl VersionIsolationGroup {
             }
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
-        let on = FixedRow::new("开启");
+        let on = FixedRow::builder("开启").build();
         on.set_subtitle("每个版本使用独立的游戏目录");
-        on.row.connect_activated({
+        on.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::VersionIsolationSelected(1))
         });
-        let off = FixedRow::new("关闭");
+        let off = FixedRow::builder("关闭").build();
         off.set_subtitle("共用 Minecraft 根目录");
-        off.row.connect_activated({
+        off.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::VersionIsolationSelected(2))
         });
-        expander.add_row(&on.row);
-        expander.add_row(&off.row);
+        expander.add_row(on.row());
+        expander.add_row(off.row());
 
         Self {
             expander,
@@ -85,7 +87,6 @@ pub(super) fn selected(
     match index {
         0 => page.inherit_group(GameOptionGroup::VersionIsolation, sender),
         1 | 2 => {
-            page.version_isolation.expander.set_expanded(false);
             let value = index == 1;
             if value == page.launch.version_isolation
                 && !page.inherited(GameOptionGroup::VersionIsolation)

@@ -9,9 +9,10 @@ use relm4::gtk;
 use relm4::prelude::*;
 
 use crate::config::LaunchConfig;
+use crate::gui::gtk4::pages::settings::common::FixedRow;
 
 use super::super::{window_preset, GameOptionField, GameOptionGroup, WINDOW_PRESETS};
-use super::{notify, FixedRow, GameOptionsMsg, GameOptionsPage, GroupView};
+use super::{notify, GameOptionsMsg, GameOptionsPage, GroupView};
 
 pub(super) struct WindowGroup {
     pub(super) expander: adw::ExpanderRow,
@@ -30,13 +31,13 @@ impl WindowGroup {
             .title("窗口类型")
             .show_enable_switch(false)
             .build();
-        let inherit = FixedRow::new("使用全局配置");
-        inherit.row.connect_activated({
+        let inherit = FixedRow::builder("使用全局配置").build();
+        inherit.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::Window))
         });
         if allow_inherit {
-            expander.add_row(&inherit.row);
+            expander.add_row(inherit.row());
         }
 
         let preset_labels: Vec<String> = WINDOW_PRESETS
@@ -61,31 +62,19 @@ impl WindowGroup {
             }
         });
 
-        let windowed_row = adw::ActionRow::builder()
-            .title("窗口化")
-            .activatable(true)
-            .build();
-        windowed_row.add_suffix(&preset_dropdown);
-        let windowed_mark = gtk::Image::from_icon_name("object-select-symbolic");
-        windowed_mark.add_css_class("accent");
-        windowed_mark.set_valign(gtk::Align::Center);
-        windowed_row.add_suffix(&windowed_mark);
-        windowed_row.connect_activated({
+        let windowed = FixedRow::builder("窗口化").suffix(&preset_dropdown).build();
+        windowed.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::WindowModeSelected(1))
         });
-        let windowed = FixedRow {
-            row: windowed_row,
-            mark: windowed_mark,
-        };
 
-        let fullscreen = FixedRow::new("全屏");
-        fullscreen.row.connect_activated({
+        let fullscreen = FixedRow::builder("全屏").build();
+        fullscreen.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::WindowModeSelected(2))
         });
-        expander.add_row(&windowed.row);
-        expander.add_row(&fullscreen.row);
+        expander.add_row(windowed.row());
+        expander.add_row(fullscreen.row());
 
         Self {
             expander,
@@ -162,7 +151,6 @@ pub(super) fn mode_selected(
     match index {
         0 => page.inherit_group(GameOptionGroup::Window, sender),
         1 | 2 => {
-            page.window.expander.set_expanded(false);
             let fullscreen = index == 2;
             if fullscreen == page.launch.fullscreen && !page.inherited(GameOptionGroup::Window) {
                 return;

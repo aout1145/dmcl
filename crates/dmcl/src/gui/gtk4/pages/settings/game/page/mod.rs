@@ -27,7 +27,6 @@ use std::time::Duration;
 use dmcl_java::JavaDetails;
 use relm4::adw;
 use relm4::adw::prelude::*;
-use relm4::gtk;
 use relm4::gtk::glib;
 use relm4::prelude::*;
 
@@ -120,34 +119,6 @@ pub(crate) enum GameOptionsMsg {
     Flush,
     /// 定时刷新自动分配的内存值。
     RefreshAutoMemory,
-}
-
-/// 展开行里的一行固定选项：主标题 + 小字 + 右侧对勾。
-pub(super) struct FixedRow {
-    row: adw::ActionRow,
-    mark: gtk::Image,
-}
-
-impl FixedRow {
-    fn new(title: &str) -> Self {
-        let row = adw::ActionRow::builder()
-            .title(title)
-            .activatable(true)
-            .build();
-        let mark = gtk::Image::from_icon_name("object-select-symbolic");
-        mark.add_css_class("accent");
-        mark.set_valign(gtk::Align::Center);
-        row.add_suffix(&mark);
-        Self { row, mark }
-    }
-
-    fn set_selected(&self, selected: bool) {
-        self.mark.set_visible(selected);
-    }
-
-    fn set_subtitle(&self, subtitle: &str) {
-        self.row.set_subtitle(subtitle);
-    }
 }
 
 /// 分组同步需要读取的共享状态。
@@ -440,25 +411,7 @@ impl GameOptionsPage {
         if overridden {
             self.schedule_flush(sender);
         }
-        self.collapse_group(group);
         self.sync_ui();
-    }
-
-    /// 选定一组后收起对应的展开行，和选中账户、Java、预设后的行为一致。
-    fn collapse_group(&self, group: GameOptionGroup) {
-        let expander = match group {
-            GameOptionGroup::Account => &self.account.expander,
-            GameOptionGroup::Java => &self.java.expander,
-            GameOptionGroup::Window => &self.window.expander,
-            GameOptionGroup::QuickPlay => &self.quick_play.expander,
-            GameOptionGroup::GameArgs => &self.game_args.expander,
-            GameOptionGroup::ProcessPriority => &self.priority.expander,
-            GameOptionGroup::Memory => &self.memory.expander,
-            GameOptionGroup::JvmArgs => &self.jvm_args.expander,
-            GameOptionGroup::JvmCompatibility => &self.jvm_compatibility.expander,
-            GameOptionGroup::VersionIsolation => &self.version_isolation.expander,
-        };
-        expander.set_expanded(false);
     }
 
     /// 把模型同步到所有控件；期间屏蔽信号。
