@@ -68,7 +68,8 @@ enum Busy {
 
 #[derive(Debug)]
 pub(crate) enum GeneralMsg {
-    CommitName,
+    RenameRequested,
+    Rename(String),
     RenameDone {
         old: String,
         new: String,
@@ -105,7 +106,6 @@ pub(crate) struct GeneralPage {
     page_toast: PageToast,
     root_path: PathBuf,
     name: String,
-    name_entry: adw::EntryRow,
     category: String,
     category_picker: Controller<CategoryPicker>,
     /// 分类输入防抖的挂起定时器。
@@ -134,7 +134,6 @@ impl GeneralPage {
     fn set_busy(&mut self, busy: Option<Busy>) {
         self.busy = busy;
         let enabled = busy.is_none();
-        self.name_entry.set_sensitive(enabled);
         self.category_picker.widget().set_sensitive(enabled);
     }
 
@@ -312,6 +311,70 @@ impl GeneralPage {
         });
     }
 
+    fn show_rename_dialog(&self, sender: &ComponentSender<Self>) {
+        if self.is_busy() {
+            return;
+        }
+        let Some(window) = relm4::main_adw_application().active_window() else {
+            return;
+        };
+        let entry = adw::EntryRow::builder().title("实例名称").build();
+        entry.set_text(&self.name);
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.append(&entry);
+        let error = gtk::Label::new(None);
+        error.add_css_class("error");
+        error.set_wrap(true);
+        error.set_xalign(0.0);
+        error.set_visible(false);
+        let child = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        child.append(&list);
+        child.append(&error);
+        let dialog = adw::AlertDialog::builder()
+            .heading("重命名实例")
+            .extra_child(&child)
+            .build();
+        dialog.add_response("cancel", "取消");
+        dialog.add_response("rename", "重命名");
+        dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("rename"));
+        dialog.set_close_response("cancel");
+        dialog.set_response_enabled("rename", false);
+        let root = self.root_path.clone();
+        let current = self.name.clone();
+        entry.connect_changed({
+            let dialog = dialog.clone();
+            move |row| {
+                let name = row.text();
+                let problem = rename_error(&root, &current, &name);
+                error.set_label(problem.as_deref().unwrap_or_default());
+                error.set_visible(problem.is_some());
+                dialog.set_response_enabled("rename", problem.is_none() && name != current);
+            }
+        });
+        dialog.connect_response(None, {
+            let entry = entry.clone();
+            let sender = sender.clone();
+            move |_, response| {
+                if response == "rename" {
+                    sender.input(GeneralMsg::Rename(entry.text().to_string()));
+                }
+            }
+        });
+        entry.connect_apply({
+            let dialog = dialog.clone();
+            let sender = sender.clone();
+            move |row| {
+                if dialog.is_response_enabled("rename") {
+                    sender.input(GeneralMsg::Rename(row.text().to_string()));
+                    dialog.close();
+                }
+            }
+        });
+        dialog.present(Some(&window));
+    }
+
     fn show_delete_dialog(&self, sender: &ComponentSender<Self>) {
         if self.is_busy() {
             return;
@@ -349,10 +412,25 @@ impl SimpleComponent for GeneralPage {
 
     view! {
         adw::PreferencesPage {
-            #[name(instance_group)]
             adw::PreferencesGroup {
                 set_title: "实例",
                 set_description: Some("管理实例的图标、名称与分类。"),
+
+                adw::ActionRow {
+                    set_title: "名称",
+                    set_activatable: false,
+                    #[watch]
+                    set_subtitle: &model.name,
+                    add_suffix = &gtk::Button {
+                        add_css_class: "flat",
+                        set_valign: gtk::Align::Center,
+                        set_tooltip_text: Some("重命名实例"),
+                        set_icon_name: "document-edit-symbolic",
+                        #[watch]
+                        set_sensitive: !model.is_busy(),
+                        connect_clicked => GeneralMsg::RenameRequested,
+                    },
+                },
 
                 adw::ActionRow {
                     set_title: "图标",
@@ -415,10 +493,7 @@ impl SimpleComponent for GeneralPage {
                 },
 
                 #[local_ref]
-                name_row_widget -> adw::EntryRow {
-                    #[watch]
-                    set_sensitive: !model.is_busy(),
-                },
+                category_widget -> adw::ExpanderRow {},
             },
 
             #[name(loader_group)]
@@ -437,6 +512,7 @@ impl SimpleComponent for GeneralPage {
                     set_subtitle: model.mc_version.as_deref().unwrap_or(""),
                 },
 
+                #[name(apply_row)]
                 adw::ActionRow {
                     set_title: "应用加载器更改",
                     #[watch]
@@ -502,19 +578,6 @@ impl SimpleComponent for GeneralPage {
         let support = read_loader_support(&root_path, &name);
         let supported = matches!(support, LoaderSupport::Supported { .. });
 
-        let name_entry = adw::EntryRow::builder().title("名称").build();
-        name_entry.set_text(&name);
-        name_entry.connect_apply({
-            let sender = sender.clone();
-            move |_| sender.input(GeneralMsg::CommitName)
-        });
-        let focus = gtk::EventControllerFocus::new();
-        focus.connect_leave({
-            let sender = sender.clone();
-            move |_| sender.input(GeneralMsg::CommitName)
-        });
-        name_entry.add_controller(focus);
-
         let category_picker = CategoryPicker::builder()
             .launch(CategoryPickerInit {
                 categories,
@@ -560,7 +623,6 @@ impl SimpleComponent for GeneralPage {
             page_toast,
             root_path,
             name,
-            name_entry,
             category,
             category_picker,
             category_flush: None,
@@ -576,13 +638,14 @@ impl SimpleComponent for GeneralPage {
             busy: None,
         };
 
-        let name_row_widget = model.name_entry.clone();
         let category_widget = model.category_picker.widget().clone();
         let widgets = view_output!();
-        widgets.instance_group.add(&category_widget);
         for slot in &model.loaders {
             widgets.loader_group.add(slot.select.widget());
         }
+        // 加载器行在运行时才加入分组；把「应用加载器更改」重新挂到末尾。
+        widgets.loader_group.remove(&widgets.apply_row);
+        widgets.loader_group.add(&widgets.apply_row);
 
         let mut model = model;
         model.apply_loader_support(support);
@@ -592,22 +655,17 @@ impl SimpleComponent for GeneralPage {
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
-            GeneralMsg::CommitName => {
-                if self.is_busy() {
-                    return;
-                }
-                let new_name = self.name_entry.text().to_string();
-                if new_name == self.name {
+            GeneralMsg::RenameRequested => self.show_rename_dialog(&sender),
+            GeneralMsg::Rename(new_name) => {
+                if self.is_busy() || new_name == self.name {
                     return;
                 }
                 if validate_version_name(&new_name).is_err() {
                     self.shell.page_toast(&self.page_toast, "实例名称不合法");
-                    self.name_entry.set_text(&self.name);
                     return;
                 }
                 if version_dir(&self.root_path, &new_name).exists() {
                     self.shell.page_toast(&self.page_toast, "实例已经存在");
-                    self.name_entry.set_text(&self.name);
                     return;
                 }
                 // 分类可能还在防抖窗口里；和改名共用一把锁，先在旧名字下写完分类。
@@ -637,14 +695,12 @@ impl SimpleComponent for GeneralPage {
             GeneralMsg::RenameDone { old, new } => {
                 self.set_busy(None);
                 self.name = new.clone();
-                self.name_entry.set_text(&new);
                 self.refresh_auto_icon(&sender);
                 self.shell.page_toast(&self.page_toast, "已重命名实例");
                 let _ = sender.output(GeneralOut::Renamed { old, new });
             }
             GeneralMsg::RenameFailed(err) => {
                 self.set_busy(None);
-                self.name_entry.set_text(&self.name);
                 self.shell
                     .page_toast(&self.page_toast, &format!("重命名实例失败：{err}"));
             }
@@ -845,6 +901,19 @@ async fn write_category(root: &Path, name: &str, category: &str) -> anyhow::Resu
     } else {
         write_instance_category(root, name, category).await
     }
+}
+
+/// 重命名对话框的实时校验：返回要显示的提示，`None` 表示名称可以提交。
+fn rename_error(root: &Path, current: &str, name: &str) -> Option<String> {
+    if name == current {
+        return None;
+    }
+    if let Err(err) = validate_version_name(name) {
+        return Some(err.to_string());
+    }
+    version_dir(root, name)
+        .exists()
+        .then(|| "实例已经存在。".to_string())
 }
 
 fn take_selection(out: SelectOut) -> Option<VersionItem> {
