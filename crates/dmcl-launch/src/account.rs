@@ -18,6 +18,8 @@ pub struct Account {
     pub access_token: String,
     /// 账户类型（`${user_type}`）：离线为 `"legacy"`，微软为 `"msa"`。
     pub user_type: String,
+    /// Xbox User ID（`${auth_xuid}`）；离线账户为空。
+    pub xuid: String,
 }
 
 /// 配置里的一个账户：负责登录 / 刷新，产出可启动的 [`Account`]。
@@ -60,6 +62,7 @@ impl OfflineAccountSource {
             username: self.username.clone(),
             access_token: String::new(),
             user_type: "legacy".to_string(),
+            xuid: String::new(),
         }
     }
 
@@ -139,6 +142,7 @@ mod tests {
         assert_eq!(account.uuid, OfflineAccountSource::offline_uuid("player"));
         assert_eq!(account.access_token, "");
         assert_eq!(account.user_type, "legacy");
+        assert_eq!(account.xuid, "");
     }
 
     #[tokio::test]

@@ -86,6 +86,8 @@ pub struct LaunchOption {
     /// 堆大小；`None` 表示自动分配。
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
+    /// 传给游戏的客户端 ID（`${clientid}`，用于遥测）；默认空串。
+    pub client_id: String,
     pub custom_info: String,
     pub additional_jvm: Vec<String>,
     pub additional_game: Vec<String>,
@@ -127,6 +129,7 @@ impl LaunchOption {
             process_priority: ProcessPriority::Normal,
             min_memory: None,
             max_memory: None,
+            client_id: String::new(),
             custom_info: LAUNCHER_NAME.to_string(),
             additional_jvm: vec![
                 "-Dfml.ignoreInvalidMinecraftCertificates=True".to_string(),

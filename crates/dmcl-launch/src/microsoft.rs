@@ -433,6 +433,21 @@ struct XstsProperties {
 struct XstsResponse {
     #[serde(rename = "Token")]
     token: String,
+    #[serde(rename = "DisplayClaims")]
+    display_claims: XstsDisplayClaims,
+}
+
+#[derive(Deserialize)]
+struct XstsDisplayClaims {
+    #[serde(rename = "xui")]
+    xui: Vec<XstsXui>,
+}
+
+#[derive(Deserialize)]
+struct XstsXui {
+    /// XUID；并非所有 RelyingParty 的响应都带。
+    #[serde(rename = "xid")]
+    xid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -508,7 +523,7 @@ async fn authenticate_minecraft(
     msa_access_token: &str,
 ) -> Result<Account> {
     let (xbl_token, uhs) = authenticate_xbox_live(client, msa_access_token).await?;
-    let xsts_token = authorize_xsts(client, &xbl_token).await?;
+    let (xsts_token, xuid) = authorize_xsts(client, &xbl_token).await?;
     let minecraft_token = login_minecraft(client, &uhs, &xsts_token).await?;
     let profile = fetch_profile(client, &minecraft_token).await?;
 
@@ -517,6 +532,7 @@ async fn authenticate_minecraft(
         uuid: profile.id,
         access_token: minecraft_token,
         user_type: "msa".to_string(),
+        xuid,
     })
 }
 
@@ -561,7 +577,7 @@ async fn authenticate_xbox_live(
     Ok((response.token, uhs))
 }
 
-async fn authorize_xsts(client: &reqwest::Client, xbl_token: &str) -> Result<String> {
+async fn authorize_xsts(client: &reqwest::Client, xbl_token: &str) -> Result<(String, String)> {
     let request = XstsRequest {
         properties: XstsProperties {
             sandbox_id: "RETAIL",
@@ -587,7 +603,14 @@ async fn authorize_xsts(client: &reqwest::Client, xbl_token: &str) -> Result<Str
     }
 
     let response: XstsResponse = serde_json::from_str(&body).context("无法解析 Xbox 授权响应")?;
-    Ok(response.token)
+    let xuid = response
+        .display_claims
+        .xui
+        .into_iter()
+        .next()
+        .and_then(|xui| xui.xid)
+        .unwrap_or_default();
+    Ok((response.token, xuid))
 }
 
 fn xsts_error(xerr: i64) -> anyhow::Error {
@@ -731,6 +754,26 @@ mod tests {
         .unwrap();
         assert_eq!(response.token, "t");
         assert_eq!(response.display_claims.xui[0].uhs, "u");
+    }
+
+    #[test]
+    fn xsts_responses_expose_the_xuid_when_present() {
+        let response: XstsResponse = serde_json::from_str(
+            r#"{
+                "Token": "t",
+                "DisplayClaims": { "xui": [{ "xid": "2535412345678901", "uhs": "u" }] }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            response.display_claims.xui[0].xid.as_deref(),
+            Some("2535412345678901")
+        );
+
+        let response: XstsResponse =
+            serde_json::from_str(r#"{"Token": "t", "DisplayClaims": {"xui": [{"uhs": "u"}]}}"#)
+                .unwrap();
+        assert!(response.display_claims.xui[0].xid.is_none());
     }
 
     #[test]

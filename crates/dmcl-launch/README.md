@@ -4,7 +4,8 @@
 
 在 workspace 内依赖 `dmcl-game`、`dmcl-java`、`dmcl-mcmeta` 和 `dmcl-task`。它**不依赖
 `dmcl-install`**，也**不读全局配置**：账户来源、版本引用、窗口模式 / 快速游玩 / 进程优先级 /
-内存、版本隔离、Java 解析器、JRE 安装位置全部通过 `LaunchOption` / `launch_chain` 由调用者传入。
+内存、版本隔离、客户端 ID、Java 解析器、JRE 安装位置全部通过 `LaunchOption` / `launch_chain`
+由调用者传入。
 
 ## 模块布局
 

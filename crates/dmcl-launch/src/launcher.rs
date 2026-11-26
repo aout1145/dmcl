@@ -214,8 +214,8 @@ impl GameLauncher {
 
         // 额外的 jvm 参数（调用者已经拆成独立参数）。
         args.extend(self.option.additional_jvm.iter().cloned());
-        // 内存上限
-        args.push(format!("-Xmn{min_memory}m"));
+        // 堆内存（初始 / 上限）
+        args.push(format!("-Xms{min_memory}m"));
         args.push(format!("-Xmx{max_memory}m"));
         // 主类
         args.push(self.json.main_class.clone().unwrap_or_default());
@@ -298,6 +298,8 @@ impl GameLauncher {
                 .replace("${auth_player_name}", &account.username)
                 .replace("${auth_uuid}", &account.uuid)
                 .replace("${uuid}", &account.uuid)
+                .replace("${auth_xuid}", &account.xuid)
+                .replace("${clientid}", &self.option.client_id)
                 .replace("${version_name}", &version_id)
                 .replace("${game_directory}", &game_path)
                 .replace("${assets_root}", &assets_root)
@@ -646,6 +648,8 @@ mod tests {
                     "jvm": ["-XstartOnFirstThread"],
                     "game": [
                         "--username", "${auth_player_name}",
+                        "--clientId", "${clientid}",
+                        "--xuid", "${auth_xuid}",
                         {"rules": [{"action": "allow", "os": {"name": "plan9"}}], "value": ["--never"]},
                         {"rules": [{"action": "allow"}, {"action": "disallow", "os": {"name": "plan9"}}], "value": "--always"}
                     ]
@@ -657,6 +661,8 @@ mod tests {
         let mut launcher = launcher_with(json, root).await;
         launcher.option.min_memory = Some(512);
         launcher.option.max_memory = Some(2048);
+        launcher.option.client_id = "test-client".to_string();
+        launcher.account.xuid = "2535412345678901".to_string();
         launcher
             .option
             .additional_jvm
@@ -681,9 +687,13 @@ mod tests {
         assert!(args.contains(&"--always".to_string()));
         // 模板被替换成账户里的名字
         assert!(args.contains(&"player".to_string()));
+        // 1.18+ 的 clientId / xuid 也要替换，不能把占位符原样传给游戏
+        assert!(args.contains(&"test-client".to_string()));
+        assert!(args.contains(&"2535412345678901".to_string()));
+        assert!(!args.iter().any(|arg| arg.contains("${")), "{args:?}");
         // 内存参数按 MiB 展开
         assert!(args.contains(&"-Xmx2048m".to_string()));
-        assert!(args.contains(&"-Xmn512m".to_string()));
+        assert!(args.contains(&"-Xms512m".to_string()));
         // 窗口尺寸通过命令行参数传入
         assert!(args.contains(&"--width".to_string()));
         // 快速游玩参数紧跟在游戏参数之后
