@@ -145,45 +145,49 @@ pub fn plan_libraries(reference: &VersionRef, libraries: &[Library]) -> Vec<Plan
         let coord = lib.name.as_str();
         let lib_path = lib_name_to_path(coord);
 
-        match lib.downloads.as_ref() {
-            // 有 downloads 的「普通库」：用文档里给的地址；地址为空时只检查本地文件。
-            Some(downloads) => {
-                if let Some(artifact) = downloads.artifact.as_ref() {
-                    // `path` 是仓库里的相对路径；极少数文档不带它，这时按 maven 坐标推导
-                    let relative = artifact
-                        .path
-                        .clone()
-                        .unwrap_or_else(|| lib_name_to_path(coord));
-                    let url = artifact.url.clone().filter(|url| !url.trim().is_empty());
-                    planned.push(PlannedFile {
-                        url,
-                        save_to: libraries_dir.join(&relative),
-                        checksum: artifact.sha1.clone().map(Checksum::sha1),
-                        size: artifact.size,
-                        name: base_name(&relative),
-                    });
-                }
-            }
-            // 没有仓库地址的「困难库」：按 maven 坐标拼到官方库仓库
-            None if lib.url.is_none() => planned.push(PlannedFile {
-                url: Some(maven_library_url(&lib_path)),
-                save_to: libraries_dir.join(&lib_path),
-                checksum: lib_checksum(lib),
-                size: None,
-                name: base_name(&lib_path),
-            }),
-            // 自带仓库地址的「困难库」
-            None => {
-                let base = lib.url.as_deref().unwrap_or("").trim_end_matches('/');
-                planned.push(PlannedFile {
-                    url: Some(format!("{base}/{lib_path}")),
-                    save_to: libraries_dir.join(&lib_path),
-                    checksum: lib_checksum(lib),
-                    size: None,
-                    name: base_name(&lib_path),
-                });
-            }
+        // 有 artifact 的「普通库」：用文档里给的地址；地址为空时只检查本地文件。
+        if let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
+            // `path` 是仓库里的相对路径；极少数文档不带它，这时按 maven 坐标推导
+            let relative = artifact
+                .path
+                .clone()
+                .unwrap_or_else(|| lib_name_to_path(coord));
+            let url = artifact.url.clone().filter(|url| !url.trim().is_empty());
+            planned.push(PlannedFile {
+                url,
+                save_to: libraries_dir.join(&relative),
+                checksum: artifact.sha1.clone().map(Checksum::sha1),
+                size: artifact.size,
+                name: base_name(&relative),
+            });
+            continue;
         }
+
+        // 只有 natives 分类器的库由 `plan_native_jars` 负责，不生成普通库计划。
+        let natives_only = lib
+            .downloads
+            .as_ref()
+            .and_then(|d| d.classifiers.as_ref())
+            .is_some_and(|classifiers| !classifiers.is_empty());
+        if natives_only {
+            continue;
+        }
+
+        // 没有 artifact 的库按 maven 坐标拼本地路径。
+        // 显式给了 `downloads` 块却没有 artifact（例如 1.12.2 Forge 的 `{}`）时，
+        // 文件由加载器安装器铺好，只能检查本地、不能从仓库补下载。
+        let url = match lib.url.as_deref() {
+            Some(base) => Some(format!("{}/{lib_path}", base.trim_end_matches('/'))),
+            None if lib.downloads.is_some() => None,
+            None => Some(maven_library_url(&lib_path)),
+        };
+        planned.push(PlannedFile {
+            url,
+            save_to: libraries_dir.join(&lib_path),
+            checksum: lib_checksum(lib),
+            size: None,
+            name: base_name(&lib_path),
+        });
     }
 
     planned
@@ -416,6 +420,9 @@ mod tests {
                     {"name": "difficult:lib:2"},
                     {"name": "reposed:lib:3", "url": "https://maven.example.com/repo/"},
                     {"name": "net.minecraftforge:forge:1.20.1-47.2.0", "url": "https://maven.minecraftforge.net/"},
+                    {"name": "net.minecraftforge:forge:1.12.2-14.23.5.2864", "downloads": {}},
+                    {"name": "org.lwjgl:lwjgl:3.3.1",
+                     "downloads": {"classifiers": {"natives-linux": {"path": "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1-natives-linux.jar"}}}},
                     {"name": "skipped:lib:9", "rules": [{"action": "allow", "os": {"name": "plan9"}}]},
                     {"name": "empty:url:1",
                      "downloads": {"artifact": {"url": "", "path": "empty/url/1/url-1.jar"}}},
@@ -433,6 +440,7 @@ mod tests {
                 "lib-2.jar",
                 "lib-3.jar",
                 "forge-1.20.1-47.2.0.jar",
+                "forge-1.12.2-14.23.5.2864.jar",
                 "url-1.jar",
                 "lib-4.jar"
             ]
@@ -462,18 +470,29 @@ mod tests {
             planned[3].url.as_deref(),
             Some("${FORGE_MAVEN}/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0.jar")
         );
-        // 规则不通过的库不下
-        assert!(!names.iter().any(|name| name.contains("lib-9")));
-        // 空 URL 的 artifact 仍然进入计划，只是没有可下载地址（例如 Forge 安装器内嵌的库）
+        // `downloads: {}` 的 Forge 库也进入计划：安装器负责铺文件，只检查本地
         assert_eq!(planned[4].url, None);
         assert_eq!(
             planned[4].save_to,
+            PathBuf::from("/mc/libraries/net/minecraftforge/forge/1.12.2-14.23.5.2864/forge-1.12.2-14.23.5.2864.jar")
+        );
+        // 只有 natives 分类器的库不生成普通库计划
+        assert!(
+            !names.iter().any(|name| name.contains("lwjgl")),
+            "{names:?}"
+        );
+        // 规则不通过的库不下
+        assert!(!names.iter().any(|name| name.contains("lib-9")));
+        // 空 URL 的 artifact 仍然进入计划，只是没有可下载地址（例如 Forge 安装器内嵌的库）
+        assert_eq!(planned[5].url, None);
+        assert_eq!(
+            planned[5].save_to,
             PathBuf::from("/mc/libraries/empty/url/1/url-1.jar")
         );
         // 只给了 url 没给 path 的 artifact：按 maven 坐标推导路径
-        assert_eq!(planned[5].url.as_deref(), Some("https://example.com/x.jar"));
+        assert_eq!(planned[6].url.as_deref(), Some("https://example.com/x.jar"));
         assert_eq!(
-            planned[5].save_to,
+            planned[6].save_to,
             PathBuf::from("/mc/libraries/old/lib/4/lib-4.jar")
         );
     }

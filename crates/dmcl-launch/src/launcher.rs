@@ -96,24 +96,28 @@ impl GameLauncher {
                 },
             };
 
-            match lib.downloads.as_ref() {
-                // 原版库
-                Some(downloads) => {
-                    if let Some(artifact) = &downloads.artifact {
-                        if better {
-                            libs.insert(
-                                name,
-                                (
-                                    version,
-                                    libraries_dir.join(artifact.path.as_deref().unwrap_or("")),
-                                ),
-                            );
-                        }
+            match lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
+                // 原版库：按 JSON 给的下载路径
+                Some(artifact) => {
+                    if better {
+                        libs.insert(
+                            name,
+                            (
+                                version,
+                                libraries_dir.join(artifact.path.as_deref().unwrap_or("")),
+                            ),
+                        );
                     }
                 }
-                // modloader 库
+                // 没有 artifact 的库：`downloads: {}` 的 Forge / modloader 库按 maven
+                // 坐标拼路径；只有 natives 分类器的库不放进 classpath（由启动前解压）。
                 None => {
-                    if better {
+                    let natives_only = lib
+                        .downloads
+                        .as_ref()
+                        .and_then(|d| d.classifiers.as_ref())
+                        .is_some_and(|classifiers| !classifiers.is_empty());
+                    if better && !natives_only {
                         libs.insert(name, (version, libraries_dir.join(lib_name_to_path(coord))));
                     }
                 }
@@ -541,6 +545,9 @@ mod tests {
                     {"name": "org.lwjgl:lwjgl:3.3.2", "downloads": {"artifact":
                         {"path": "org/lwjgl/lwjgl/3.3.2/lwjgl-3.3.2.jar"}}},
                     {"name": "net.minecraftforge:forge:1.20.1-47.2.0"},
+                    {"name": "com.example:modloader:1.0", "downloads": {}},
+                    {"name": "net.java.jinput:jinput-platform:2.0.5",
+                     "downloads": {"classifiers": {"natives-linux": {"path": "x/y/jinput-natives.jar"}}}},
                     {"name": "only:other:1", "rules": [{"action": "allow", "os": {"name": "plan9"}}]}
                 ]
             }"#,
@@ -564,6 +571,13 @@ mod tests {
             classpath.contains("net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0.jar"),
             "{classpath}"
         );
+        // `downloads: {}` 的 modloader 库同样要按 maven 坐标进 classpath
+        assert!(
+            classpath.contains("com/example/modloader/1.0/modloader-1.0.jar"),
+            "{classpath}"
+        );
+        // 只有 natives 分类器的库不进 classpath
+        assert!(!classpath.contains("jinput-platform"), "{classpath}");
         // 平台不匹配的库不在里面
         assert!(!classpath.contains("only/other/1"), "{classpath}");
         // 条目之间保留占位分隔符（最终由 gen_args 换成平台分隔符），
