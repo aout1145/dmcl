@@ -25,5 +25,8 @@ version-compare.workspace = true
 sysinfo.workspace = true
 anyhow.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [lints]
 workspace = true

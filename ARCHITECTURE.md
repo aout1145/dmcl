@@ -67,7 +67,7 @@ dmcl ───────────► 全部
 | `dmcl-game`     | `GameFilesOptions`（下载源、下载策略、是否跳过音乐）                                  |
 | `dmcl-java`     | `JavaResolver`（选 Java）、`JavaRuntimeOptions` + `JreInstallRequest`（装 JRE）       |
 | `dmcl-install`  | `InstallOptions`（根目录、游戏文件选项、Java 解析器、JRE 安装位置）                   |
-| `dmcl-launch`   | `LaunchOption`（账户登录源、`VersionRef`、窗口模式 / 内存 / 版本隔离、`JavaResolver`）、`GameFilesOptions` |
+| `dmcl-launch`   | `LaunchOption`（账户登录源、`VersionRef`、窗口模式 / 快速游玩 / 进程优先级 / 内存 / 版本隔离、`JavaResolver`）、`GameFilesOptions` |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 这样每个业务 crate 都能被 GUI / TUI / 测试用自定义选项直接调用。

@@ -3,10 +3,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dmcl_game::VersionRef;
 use dmcl_java::{JavaInstalledHook, JavaResolver};
-use dmcl_launch::{LaunchOption, WindowMode as LaunchWindowMode, LAUNCHER_NAME};
+use dmcl_launch::{
+    LaunchOption, ProcessPriority as LaunchPriority, QuickPlay as LaunchQuickPlay,
+    WindowMode as LaunchWindowMode, LAUNCHER_NAME,
+};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +17,39 @@ use super::{
     account, instance::instance_config_path, java, AccountConfig, Config, ConfigError,
     ConfigWarning, JavaChoice, JavaConfigs,
 };
+
+/// 快速游玩的目标类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickPlayTarget {
+    /// 单人世界的文件夹名。
+    Singleplayer,
+    /// 多人服务器地址。
+    Multiplayer,
+    /// Realms ID。
+    Realms,
+}
+
+/// 启动后直接进入的世界 / 服务器。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuickPlayConfig {
+    pub target: QuickPlayTarget,
+    pub value: String,
+}
+
+/// 游戏进程的优先级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessPriority {
+    /// 低于正常优先级。
+    Low,
+    /// 正常优先级。
+    #[default]
+    Normal,
+    /// 高于正常优先级。
+    High,
+}
 
 /// 全局 `launch.*` 段，也是实例覆盖后的结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +66,10 @@ pub struct LaunchConfig {
     /// 窗口化时的初始尺寸（像素）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
+    /// 启动后直接进入的单人世界、服务器或 Realm；`None` 表示进入主菜单。
+    pub quick_play: Option<QuickPlayConfig>,
+    /// 游戏进程的优先级。
+    pub process_priority: ProcessPriority,
     /// 堆大小（MiB）；`None` 表示自动分配。
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
@@ -47,6 +87,8 @@ impl Default for LaunchConfig {
             fullscreen: false,
             window_width: 854,
             window_height: 480,
+            quick_play: None,
+            process_priority: ProcessPriority::Normal,
             min_memory: None,
             max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),
@@ -216,16 +258,29 @@ impl Config {
         option.max_memory = launch.max_memory;
         option.custom_info = launch.custom_info.clone();
         option.version_isolation = launch.version_isolation;
+        option.quick_play = launch.quick_play.as_ref().and_then(|quick| {
+            let value = quick.value.trim();
+            if value.is_empty() {
+                return None;
+            }
+            Some(match quick.target {
+                QuickPlayTarget::Singleplayer => LaunchQuickPlay::Singleplayer(value.to_string()),
+                QuickPlayTarget::Multiplayer => LaunchQuickPlay::Multiplayer(value.to_string()),
+                QuickPlayTarget::Realms => LaunchQuickPlay::Realms(value.to_string()),
+            })
+        });
+        option.process_priority = match launch.process_priority {
+            ProcessPriority::Low => LaunchPriority::Low,
+            ProcessPriority::Normal => LaunchPriority::Normal,
+            ProcessPriority::High => LaunchPriority::High,
+        };
         option.additional_jvm = launch
             .additional_jvm
             .split_whitespace()
             .map(str::to_string)
             .collect();
-        option.additional_game = launch
-            .additional_game
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
+        option.additional_game = shell_words::split(&launch.additional_game)
+            .map_err(|_| anyhow!("游戏参数引号不配对：{}", launch.additional_game))?;
         Ok(option)
     }
 }
@@ -441,7 +496,12 @@ mod tests {
         config.launch.max_memory = Some(4096);
         config.launch.custom_info = "test".to_string();
         config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
-        config.launch.additional_game = "--foo bar".to_string();
+        config.launch.additional_game = "--foo \"bar baz\"".to_string();
+        config.launch.quick_play = Some(QuickPlayConfig {
+            target: QuickPlayTarget::Multiplayer,
+            value: "example.org".to_string(),
+        });
+        config.launch.process_priority = ProcessPriority::High;
         config.launch.version_isolation = false;
         config.javas.insert(
             "jdk".to_string(),
@@ -479,7 +539,12 @@ mod tests {
         assert_eq!(option.custom_info, "test");
         assert!(option.additional_jvm.contains(&"-Da=1".to_string()));
         assert!(option.additional_jvm.contains(&"-Db=2".to_string()));
-        assert_eq!(option.additional_game, vec!["--foo", "bar"]);
+        assert_eq!(option.additional_game, vec!["--foo", "bar baz"]);
+        assert_eq!(
+            option.quick_play,
+            Some(LaunchQuickPlay::Multiplayer("example.org".to_string()))
+        );
+        assert_eq!(option.process_priority, LaunchPriority::High);
         assert!(!option.version_isolation);
         assert_eq!(option.account_source.name(), "Steve");
 
@@ -497,6 +562,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(option.window, LaunchWindowMode::Fullscreen);
+
+        config.launch.additional_game = "--foo \"bar".to_string();
+        let error = config
+            .launch_option(
+                &config.launch,
+                VersionRef::new(&root, "1.20.1"),
+                Arc::new(dmcl_java::JavaOption {
+                    path: PathBuf::from("/nonexistent/bin/java"),
+                    major: 17,
+                    arch: dmcl_mcmeta::os::Arch::X86_64,
+                }),
+                None,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("引号不配对"), "{error}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

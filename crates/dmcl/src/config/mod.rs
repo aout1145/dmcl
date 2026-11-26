@@ -59,7 +59,9 @@ pub use java::{
 };
 #[cfg(feature = "gtk4")]
 pub(crate) use java::{configured_java, scan_configs};
-pub use launch::{LaunchConfig, LoadedInstanceConfig};
+pub use launch::{
+    LaunchConfig, LoadedInstanceConfig, ProcessPriority, QuickPlayConfig, QuickPlayTarget,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -598,7 +600,9 @@ mod tests {
             "launch": {
                 "java": "jdk",
                 "account": "steve",
-                "window_width": 1280
+                "window_width": 1280,
+                "quick_play": { "target": "realms", "value": "1234" },
+                "process_priority": "high"
             },
             "accounts": {
                 "steve": { "type": "offline", "username": "Steve" }
@@ -619,6 +623,14 @@ mod tests {
         assert_eq!(config.launch.java, JavaChoice::Named("jdk".to_string()));
         assert_eq!(config.launch.account.as_deref(), Some("steve"));
         assert_eq!(config.launch.window_width, 1280);
+        assert_eq!(
+            config.launch.quick_play,
+            Some(QuickPlayConfig {
+                target: QuickPlayTarget::Realms,
+                value: "1234".to_string()
+            })
+        );
+        assert_eq!(config.launch.process_priority, ProcessPriority::High);
         assert_eq!(
             config.accounts.get("steve"),
             Some(&AccountConfig::Offline {

@@ -38,7 +38,7 @@ use dmcl_task::{Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use crate::account::{Account, AccountSource};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
-use crate::option::LaunchOption;
+use crate::option::{LaunchOption, ProcessPriority};
 
 /// 生成启动参数之后的产出。
 #[derive(Debug, Clone)]
@@ -49,6 +49,8 @@ pub struct PreparedLaunch {
     pub command: String,
     /// 游戏进程的工作目录（开启版本隔离时是 `versions/<name>`，否则是根目录）。
     pub game_path: PathBuf,
+    /// 启动游戏时使用的进程优先级。
+    pub process_priority: ProcessPriority,
 }
 
 /// 让账户来源产出一个可用会话。
@@ -323,6 +325,7 @@ impl Task<(Arc<Account>, Arc<JavaOption>), PreparedLaunch> for GenerateArgsTask 
             args,
             command,
             game_path: launcher.game_path.clone(),
+            process_priority: self.option.process_priority,
         })
     }
 }
@@ -339,7 +342,7 @@ impl Task<Arc<PreparedLaunch>, GameMonitor> for LaunchTask {
             "命令：{}",
             command_preview(&input.game_path, &input.args)
         ));
-        spawn_game(&input.game_path, &input.args)
+        spawn_game(&input.game_path, &input.args, input.process_priority)
     }
 }
 

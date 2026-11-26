@@ -73,6 +73,8 @@ version-compare = "0.2"
 regex = "1"
 os_info = "3"
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+shell-words = "1"
+libc = "0.2"
 notify = "8.2"
 relm4 = { version = "0.11", features = ["libadwaita", "gnome_50"] }
 

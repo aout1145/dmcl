@@ -23,6 +23,47 @@ pub enum WindowMode {
     Fullscreen,
 }
 
+/// 启动后直接进入的目标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuickPlay {
+    /// 单人世界的文件夹名。
+    Singleplayer(String),
+    /// 多人服务器地址。
+    Multiplayer(String),
+    /// Realms ID。
+    Realms(String),
+}
+
+impl QuickPlay {
+    /// 对应的 Minecraft 参数名。
+    pub fn argument(&self) -> &'static str {
+        match self {
+            Self::Singleplayer(_) => "--quickPlaySingleplayer",
+            Self::Multiplayer(_) => "--quickPlayMultiplayer",
+            Self::Realms(_) => "--quickPlayRealms",
+        }
+    }
+
+    /// 参数值。
+    pub fn value(&self) -> &str {
+        match self {
+            Self::Singleplayer(value) | Self::Multiplayer(value) | Self::Realms(value) => value,
+        }
+    }
+}
+
+/// 游戏进程的优先级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessPriority {
+    /// 低于正常优先级。
+    Low,
+    /// 正常优先级。
+    #[default]
+    Normal,
+    /// 高于正常优先级。
+    High,
+}
+
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户来源与 Java 解析都由调用者通过 `Arc<dyn …>` 传入，结构体因此仍是
@@ -38,6 +79,10 @@ pub struct LaunchOption {
     pub version_isolation: bool,
     /// 窗口的初始状态；宽高不可能为负。
     pub window: WindowMode,
+    /// 启动后直接进入的单人世界、服务器或 Realm；`None` 表示进入主菜单。
+    pub quick_play: Option<QuickPlay>,
+    /// 游戏进程的优先级。
+    pub process_priority: ProcessPriority,
     /// 堆大小；`None` 表示自动分配。
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
@@ -78,6 +123,8 @@ impl LaunchOption {
                 width: 854,
                 height: 480,
             },
+            quick_play: None,
+            process_priority: ProcessPriority::Normal,
             min_memory: None,
             max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),
@@ -105,6 +152,24 @@ mod tests {
             path: PathBuf::from("/opt/jdk17/bin/java"),
             major: 17,
             arch: Arch::X86_64,
+        }
+    }
+
+    #[test]
+    fn quick_play_maps_to_minecraft_arguments() {
+        let cases = [
+            (
+                QuickPlay::Singleplayer("world".into()),
+                "--quickPlaySingleplayer",
+            ),
+            (
+                QuickPlay::Multiplayer("example.org".into()),
+                "--quickPlayMultiplayer",
+            ),
+            (QuickPlay::Realms("1234".into()), "--quickPlayRealms"),
+        ];
+        for (quick_play, argument) in cases {
+            assert_eq!(quick_play.argument(), argument);
         }
     }
 

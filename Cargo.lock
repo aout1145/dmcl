@@ -703,6 +703,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "shell-words",
  "sysinfo",
  "tokio",
 ]
@@ -779,6 +780,7 @@ dependencies = [
  "dmcl-java",
  "dmcl-mcmeta",
  "dmcl-task",
+ "libc",
  "md-5",
  "reqwest",
  "serde",

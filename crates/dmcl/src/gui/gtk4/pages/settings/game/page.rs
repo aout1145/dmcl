@@ -24,6 +24,7 @@ use relm4::prelude::*;
 
 use crate::config::{
     configured_java, same_java_path, AccountConfig, JavaChoice, JavaConfig, LaunchConfig,
+    ProcessPriority, QuickPlayConfig, QuickPlayTarget,
 };
 use crate::gui::gtk4::app::ConfigRef;
 use crate::gui::gtk4::pages::settings::common::{
@@ -72,6 +73,14 @@ pub(crate) enum GameOptionsMsg {
     WindowPresetSelected(u32),
     /// 窗口类型：0 使用全局、1 窗口化、2 全屏。
     WindowModeSelected(u32),
+    /// 快速游玩目标：0 无、1 单人游戏、2 多人联机、3 Realms。
+    QuickPlaySelected(u32),
+    /// 某个快速游玩目标的值变了（目标下标，文本）。
+    QuickPlayValueChanged(u32, String),
+    /// 游戏参数文本变了。
+    GameArgsChanged(String),
+    /// 进程优先级：0 使用全局、1 低、2 正常、3 高。
+    ProcessPrioritySelected(u32),
     /// 内存模式：0 自动、1 手动。
     MemoryModeSelected(u32),
     MemoryChanged {
@@ -169,6 +178,23 @@ pub(crate) struct GameOptionsPage {
     window_preset_dropdown: gtk::DropDown,
     windowed: FixedRow,
     fullscreen: FixedRow,
+    quick_play_expander: adw::ExpanderRow,
+    quick_play_inherit: FixedRow,
+    quick_play_none: FixedRow,
+    quick_play_single: FixedRow,
+    quick_play_multi: FixedRow,
+    quick_play_realms: FixedRow,
+    quick_play_single_entry: gtk::Entry,
+    quick_play_multi_entry: gtk::Entry,
+    quick_play_realms_entry: gtk::Entry,
+    game_args_expander: adw::ExpanderRow,
+    game_args_inherit: FixedRow,
+    game_args_entry: adw::EntryRow,
+    priority_expander: adw::ExpanderRow,
+    priority_inherit: FixedRow,
+    priority_low: FixedRow,
+    priority_normal: FixedRow,
+    priority_high: FixedRow,
     auto_memory_row: adw::ActionRow,
     auto_memory_mark: gtk::Image,
     manual_memory_mark: gtk::Image,
@@ -201,6 +227,16 @@ impl SimpleComponent for GameOptionsPage {
                 window_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 memory_expander -> adw::ExpanderRow {},
+            },
+            add = &adw::PreferencesGroup {
+                set_title: "游戏",
+                set_description: Some("设置快速游玩、游戏参数和进程优先级。"),
+                #[local_ref]
+                quick_play_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                game_args_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                priority_expander -> adw::ExpanderRow {},
             },
         }
     }
@@ -321,6 +357,101 @@ impl SimpleComponent for GameOptionsPage {
         });
         window_expander.add_row(&windowed.row);
         window_expander.add_row(&fullscreen.row);
+
+        let quick_play_expander = adw::ExpanderRow::builder()
+            .title("快速游玩")
+            .show_enable_switch(false)
+            .build();
+        let quick_play_inherit = FixedRow::new("使用全局配置");
+        quick_play_inherit.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::QuickPlay))
+        });
+        if allow_inherit {
+            quick_play_expander.add_row(&quick_play_inherit.row);
+        }
+        let quick_play_none = FixedRow::new("无");
+        quick_play_none.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::QuickPlaySelected(0))
+        });
+        let (quick_play_single, quick_play_single_entry) =
+            quick_play_row("单人游戏", "世界文件夹名", 1, &sender, &syncing);
+        let (quick_play_multi, quick_play_multi_entry) =
+            quick_play_row("多人联机", "服务器地址", 2, &sender, &syncing);
+        let (quick_play_realms, quick_play_realms_entry) =
+            quick_play_row("Realms", "Realm ID", 3, &sender, &syncing);
+        quick_play_expander.add_row(&quick_play_none.row);
+        quick_play_expander.add_row(&quick_play_single.row);
+        quick_play_expander.add_row(&quick_play_multi.row);
+        quick_play_expander.add_row(&quick_play_realms.row);
+
+        let game_args_expander = adw::ExpanderRow::builder()
+            .title("游戏参数")
+            .show_enable_switch(false)
+            .build();
+        let game_args_inherit = FixedRow::new("使用全局配置");
+        game_args_inherit.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::GameArgs))
+        });
+        if allow_inherit {
+            game_args_expander.add_row(&game_args_inherit.row);
+        }
+        let game_args_entry = adw::EntryRow::builder().title("附加参数").build();
+        game_args_entry.connect_changed({
+            let sender = sender.clone();
+            let syncing = Rc::clone(&syncing);
+            move |entry| {
+                if syncing.get() {
+                    return;
+                }
+                notify(
+                    &sender,
+                    GameOptionsMsg::GameArgsChanged(entry.text().to_string()),
+                );
+            }
+        });
+        game_args_expander.add_row(&game_args_entry);
+
+        let priority_expander = adw::ExpanderRow::builder()
+            .title("进程优先级")
+            .show_enable_switch(false)
+            .build();
+        let priority_inherit = FixedRow::new("使用全局配置");
+        priority_inherit.row.connect_activated({
+            let sender = sender.clone();
+            move |_| {
+                notify(
+                    &sender,
+                    GameOptionsMsg::Inherit(GameOptionGroup::ProcessPriority),
+                )
+            }
+        });
+        if allow_inherit {
+            priority_expander.add_row(&priority_inherit.row);
+        }
+        let priority_low = FixedRow::new("低");
+        priority_low.set_subtitle("低于正常优先级");
+        priority_low.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(1))
+        });
+        let priority_normal = FixedRow::new("正常");
+        priority_normal.set_subtitle("系统默认");
+        priority_normal.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(2))
+        });
+        let priority_high = FixedRow::new("高");
+        priority_high.set_subtitle("高于正常优先级");
+        priority_high.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::ProcessPrioritySelected(3))
+        });
+        priority_expander.add_row(&priority_low.row);
+        priority_expander.add_row(&priority_normal.row);
+        priority_expander.add_row(&priority_high.row);
 
         let memory_expander = adw::ExpanderRow::builder()
             .title("内存")
@@ -506,6 +637,23 @@ impl SimpleComponent for GameOptionsPage {
             window_preset_dropdown,
             windowed,
             fullscreen,
+            quick_play_expander: quick_play_expander.clone(),
+            quick_play_inherit,
+            quick_play_none,
+            quick_play_single,
+            quick_play_multi,
+            quick_play_realms,
+            quick_play_single_entry,
+            quick_play_multi_entry,
+            quick_play_realms_entry,
+            game_args_expander: game_args_expander.clone(),
+            game_args_inherit,
+            game_args_entry,
+            priority_expander: priority_expander.clone(),
+            priority_inherit,
+            priority_low,
+            priority_normal,
+            priority_high,
             auto_memory_row,
             auto_memory_mark,
             manual_memory_mark,
@@ -601,6 +749,81 @@ impl SimpleComponent for GameOptionsPage {
                     }
                     self.launch.fullscreen = fullscreen;
                     self.mark_override([GameOptionField::Fullscreen]);
+                    self.sync_ui();
+                    self.schedule_flush(&sender);
+                }
+                _ => {}
+            },
+            GameOptionsMsg::QuickPlaySelected(index) => {
+                let inherited = self.inherited(GameOptionGroup::QuickPlay);
+                if index == 0 {
+                    if self.launch.quick_play.is_none() && !inherited {
+                        return;
+                    }
+                    self.launch.quick_play = None;
+                    self.mark_override([GameOptionField::QuickPlay]);
+                    self.sync_ui();
+                    self.schedule_flush(&sender);
+                    return;
+                }
+                let Some(target) = quick_play_target(index) else {
+                    return;
+                };
+                if !inherited
+                    && self
+                        .launch
+                        .quick_play
+                        .as_ref()
+                        .is_some_and(|quick| quick.target == target)
+                {
+                    return;
+                }
+                let value = self.quick_play_entry(target).text().to_string();
+                self.launch.quick_play = Some(QuickPlayConfig { target, value });
+                self.mark_override([GameOptionField::QuickPlay]);
+                self.sync_ui();
+                self.schedule_flush(&sender);
+            }
+            GameOptionsMsg::QuickPlayValueChanged(index, value) => {
+                let Some(target) = quick_play_target(index) else {
+                    return;
+                };
+                let current = self.launch.quick_play.as_ref();
+                if current.is_some_and(|quick| quick.target == target && quick.value == value) {
+                    return;
+                }
+                self.launch.quick_play = Some(QuickPlayConfig { target, value });
+                self.mark_override([GameOptionField::QuickPlay]);
+                self.sync_choice_marks();
+                self.sync_subtitles();
+                self.schedule_flush(&sender);
+            }
+            GameOptionsMsg::GameArgsChanged(value) => {
+                if self.launch.additional_game == value {
+                    return;
+                }
+                self.launch.additional_game = value;
+                self.mark_override([GameOptionField::AdditionalGame]);
+                self.sync_choice_marks();
+                self.sync_subtitles();
+                self.schedule_flush(&sender);
+            }
+            GameOptionsMsg::ProcessPrioritySelected(index) => match index {
+                0 => self.inherit_group(GameOptionGroup::ProcessPriority, &sender),
+                1..=3 => {
+                    let priority = match index {
+                        1 => ProcessPriority::Low,
+                        2 => ProcessPriority::Normal,
+                        _ => ProcessPriority::High,
+                    };
+                    if priority == self.launch.process_priority
+                        && !self.inherited(GameOptionGroup::ProcessPriority)
+                    {
+                        return;
+                    }
+                    self.priority_expander.set_expanded(false);
+                    self.launch.process_priority = priority;
+                    self.mark_override([GameOptionField::ProcessPriority]);
                     self.sync_ui();
                     self.schedule_flush(&sender);
                 }
@@ -826,6 +1049,9 @@ impl GameOptionsPage {
             GameOptionGroup::Account => self.account_expander.set_expanded(false),
             GameOptionGroup::Java => self.java_expander.set_expanded(false),
             GameOptionGroup::Window => self.window_expander.set_expanded(false),
+            GameOptionGroup::QuickPlay => self.quick_play_expander.set_expanded(false),
+            GameOptionGroup::GameArgs => self.game_args_expander.set_expanded(false),
+            GameOptionGroup::ProcessPriority => self.priority_expander.set_expanded(false),
             GameOptionGroup::Memory => self.memory_expander.set_expanded(false),
             GameOptionGroup::VersionIsolation => {
                 self.version_isolation_expander.set_expanded(false);
@@ -870,6 +1096,35 @@ impl GameOptionsPage {
         self.fullscreen
             .set_selected(!window_inherited && self.launch.fullscreen);
 
+        let quick_play_inherited = self.inherited(GameOptionGroup::QuickPlay);
+        self.quick_play_inherit.set_selected(quick_play_inherited);
+        let quick_target = self.launch.quick_play.as_ref().map(|quick| quick.target);
+        self.quick_play_none
+            .set_selected(!quick_play_inherited && quick_target.is_none());
+        self.quick_play_single.set_selected(
+            !quick_play_inherited && quick_target == Some(QuickPlayTarget::Singleplayer),
+        );
+        self.quick_play_multi.set_selected(
+            !quick_play_inherited && quick_target == Some(QuickPlayTarget::Multiplayer),
+        );
+        self.quick_play_realms
+            .set_selected(!quick_play_inherited && quick_target == Some(QuickPlayTarget::Realms));
+
+        let game_args_inherited = self.inherited(GameOptionGroup::GameArgs);
+        self.game_args_inherit.set_selected(game_args_inherited);
+
+        let priority_inherited = self.inherited(GameOptionGroup::ProcessPriority);
+        self.priority_inherit.set_selected(priority_inherited);
+        self.priority_low.set_selected(
+            !priority_inherited && self.launch.process_priority == ProcessPriority::Low,
+        );
+        self.priority_normal.set_selected(
+            !priority_inherited && self.launch.process_priority == ProcessPriority::Normal,
+        );
+        self.priority_high.set_selected(
+            !priority_inherited && self.launch.process_priority == ProcessPriority::High,
+        );
+
         let version_inherited = self.inherited(GameOptionGroup::VersionIsolation);
         self.version_inherit.set_selected(version_inherited);
         self.version_on
@@ -888,7 +1143,28 @@ impl GameOptionsPage {
             self.window_preset_dropdown.set_selected(index);
         }
         self.window_preset_dropdown.set_sensitive(windowed);
+
+        let quick_play = self.launch.quick_play.as_ref();
+        if let Some(quick) = quick_play {
+            let entry = self.quick_play_entry(quick.target);
+            if entry.text() != quick.value.as_str() {
+                entry.set_text(&quick.value);
+            }
+        }
+
+        if self.game_args_entry.text() != self.launch.additional_game.as_str() {
+            self.game_args_entry.set_text(&self.launch.additional_game);
+        }
         self.syncing.set(false);
+    }
+
+    /// 某个快速游玩目标对应的输入框。
+    fn quick_play_entry(&self, target: QuickPlayTarget) -> &gtk::Entry {
+        match target {
+            QuickPlayTarget::Singleplayer => &self.quick_play_single_entry,
+            QuickPlayTarget::Multiplayer => &self.quick_play_multi_entry,
+            QuickPlayTarget::Realms => &self.quick_play_realms_entry,
+        }
     }
 
     /// 更新各展开行的小字。
@@ -918,6 +1194,25 @@ impl GameOptionsPage {
         );
         self.window_inherit
             .set_subtitle(&window_label(&self.global));
+        self.quick_play_expander.set_subtitle(
+            &self.inherited_subtitle(GameOptionGroup::QuickPlay, quick_play_label(&self.launch)),
+        );
+        self.quick_play_inherit
+            .set_subtitle(&quick_play_label(&self.global));
+        self.game_args_expander.set_subtitle(
+            &self.inherited_subtitle(GameOptionGroup::GameArgs, game_args_label(&self.launch)),
+        );
+        self.game_args_inherit
+            .set_subtitle(&game_args_label(&self.global));
+        self.priority_expander
+            .set_subtitle(&self.inherited_subtitle(
+                GameOptionGroup::ProcessPriority,
+                priority_label(self.launch.process_priority),
+            ));
+        if self.allow_inherit {
+            self.priority_inherit
+                .set_subtitle(&priority_label(self.global.process_priority));
+        }
         self.version_isolation_expander
             .set_subtitle(&self.inherited_subtitle(
                 GameOptionGroup::VersionIsolation,
@@ -1206,6 +1501,97 @@ fn isolation_label(enabled: bool) -> String {
     } else {
         "关闭".to_string()
     }
+}
+
+/// 下拉下标 → 快速游玩目标；0 是无。
+fn quick_play_target(index: u32) -> Option<QuickPlayTarget> {
+    match index {
+        1 => Some(QuickPlayTarget::Singleplayer),
+        2 => Some(QuickPlayTarget::Multiplayer),
+        3 => Some(QuickPlayTarget::Realms),
+        _ => None,
+    }
+}
+
+/// 快速游玩的一个目标行：右侧输入框 + 选中对勾。
+fn quick_play_row(
+    title: &str,
+    placeholder: &str,
+    index: u32,
+    sender: &ComponentSender<GameOptionsPage>,
+    syncing: &Rc<Cell<bool>>,
+) -> (FixedRow, gtk::Entry) {
+    let entry = gtk::Entry::builder()
+        .placeholder_text(placeholder)
+        .width_chars(18)
+        .valign(gtk::Align::Center)
+        .build();
+    entry.connect_changed({
+        let sender = sender.clone();
+        let syncing = Rc::clone(syncing);
+        move |entry| {
+            if syncing.get() {
+                return;
+            }
+            notify(
+                &sender,
+                GameOptionsMsg::QuickPlayValueChanged(index, entry.text().to_string()),
+            );
+        }
+    });
+
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .activatable(true)
+        .build();
+    row.add_suffix(&entry);
+    let mark = gtk::Image::from_icon_name("object-select-symbolic");
+    mark.add_css_class("accent");
+    mark.set_valign(gtk::Align::Center);
+    row.add_suffix(&mark);
+    row.connect_activated({
+        let sender = sender.clone();
+        move |_| notify(&sender, GameOptionsMsg::QuickPlaySelected(index))
+    });
+    (FixedRow { row, mark }, entry)
+}
+
+fn quick_play_target_label(target: QuickPlayTarget) -> &'static str {
+    match target {
+        QuickPlayTarget::Singleplayer => "单人游戏",
+        QuickPlayTarget::Multiplayer => "多人联机",
+        QuickPlayTarget::Realms => "Realms",
+    }
+}
+
+fn quick_play_label(launch: &LaunchConfig) -> String {
+    let Some(quick) = &launch.quick_play else {
+        return "无".to_string();
+    };
+    let target = quick_play_target_label(quick.target);
+    if quick.value.trim().is_empty() {
+        format!("{target}（未填写）")
+    } else {
+        format!("{target}：{}", quick.value)
+    }
+}
+
+fn game_args_label(launch: &LaunchConfig) -> String {
+    let args = launch.additional_game.trim();
+    if args.is_empty() {
+        "未设置".to_string()
+    } else {
+        args.to_string()
+    }
+}
+
+fn priority_label(priority: ProcessPriority) -> String {
+    match priority {
+        ProcessPriority::Low => "低",
+        ProcessPriority::Normal => "正常",
+        ProcessPriority::High => "高",
+    }
+    .to_string()
 }
 
 /// Java 可执行文件的绝对路径，显示在选择项下方。

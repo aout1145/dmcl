@@ -23,7 +23,7 @@ use version_compare::{compare_to, Cmp};
 use crate::account::Account;
 use crate::memory::resolve_memory;
 use crate::monitor::GameMonitor;
-use crate::option::{LaunchOption, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION};
+use crate::option::{LaunchOption, ProcessPriority, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION};
 
 /// 启动一个版本。
 pub struct GameLauncher {
@@ -234,6 +234,12 @@ impl GameLauncher {
             );
         }
 
+        // 快速游玩：启动后直接进入世界 / 服务器 / Realm。
+        if let Some(quick_play) = &self.option.quick_play {
+            args.push(quick_play.argument().to_string());
+            args.push(quick_play.value().to_string());
+        }
+
         // 窗口类型：窗口化传初始宽高，全屏交给游戏自己用显示器的全屏分辨率。
         match self.option.window {
             WindowMode::Windowed { width, height } => {
@@ -396,14 +402,60 @@ fn quote_windows(arg: &str) -> String {
 /// 抽成自由函数是为了让 [`crate::LaunchTask`] 能直接用 [`crate::PreparedLaunch`]
 /// 里已有的参数启动，不必再建一个 [`GameLauncher`]、再选一次 java。这里**不打印**
 /// 任何东西：命令行由 [`crate::LaunchTask`] 通过进度事件流展示。
-pub(crate) fn spawn_game(game_path: &std::path::Path, args: &[String]) -> Result<GameMonitor> {
+pub(crate) fn spawn_game(
+    game_path: &std::path::Path,
+    args: &[String],
+    priority: ProcessPriority,
+) -> Result<GameMonitor> {
     if args.is_empty() {
         return Err(anyhow!("命令为空"));
     }
     let mut command = tokio::process::Command::new(&args[0]);
     command.args(&args[1..]).current_dir(game_path);
+    apply_priority(&mut command, priority);
     let child = command.spawn()?;
     Ok(GameMonitor::new(child))
+}
+
+#[cfg(windows)]
+fn apply_priority(command: &mut tokio::process::Command, priority: ProcessPriority) {
+    // `CreateProcess` 的进程优先级类；正常优先级不需要额外标志。
+    const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+    const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x0000_8000;
+
+    let flags = match priority {
+        ProcessPriority::Low => BELOW_NORMAL_PRIORITY_CLASS,
+        ProcessPriority::Normal => 0,
+        ProcessPriority::High => ABOVE_NORMAL_PRIORITY_CLASS,
+    };
+    if flags != 0 {
+        command.creation_flags(flags);
+    }
+}
+
+#[cfg(unix)]
+fn apply_priority(command: &mut tokio::process::Command, priority: ProcessPriority) {
+    let nice = match priority {
+        ProcessPriority::Low => 10,
+        ProcessPriority::Normal => 0,
+        ProcessPriority::High => -5,
+    };
+    if nice == 0 {
+        return;
+    }
+    // 负 nice 需要权限；没有权限时保持当前优先级启动，而不是让游戏起不来。
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setpriority(libc::PRIO_PROCESS, 0, nice) == 0 {
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EPERM) | Some(libc::EACCES) => Ok(()),
+                _ => Err(error),
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -609,6 +661,9 @@ mod tests {
             .option
             .additional_jvm
             .push("-Ddmcl.test.extra=1.0".to_string());
+        launcher.option.quick_play = Some(crate::option::QuickPlay::Multiplayer(
+            "example.org:25565".to_string(),
+        ));
         let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
         let args = run_node(move |ctx| {
             let launcher = launcher.clone();
@@ -629,8 +684,11 @@ mod tests {
         // 内存参数按 MiB 展开
         assert!(args.contains(&"-Xmx2048m".to_string()));
         assert!(args.contains(&"-Xmn512m".to_string()));
-        // 窗口尺寸在最前面（走命令行参数）
+        // 窗口尺寸通过命令行参数传入
         assert!(args.contains(&"--width".to_string()));
+        // 快速游玩参数紧跟在游戏参数之后
+        assert!(args.contains(&"--quickPlayMultiplayer".to_string()));
+        assert!(args.contains(&"example.org:25565".to_string()));
         // 没有加载器时 additional_jvm 的默认值也会带上
         assert!(args
             .iter()

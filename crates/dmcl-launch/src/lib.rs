@@ -63,7 +63,9 @@ pub use microsoft::{
     MicrosoftAccountSource, RefreshTokenStore, StoredCredential, CLIENT_ID as MICROSOFT_CLIENT_ID,
 };
 pub use monitor::GameMonitor;
-pub use option::{LaunchOption, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION};
+pub use option::{
+    LaunchOption, ProcessPriority, QuickPlay, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION,
+};
 pub use prepare::{
     launch_chain, GenerateArgsTask, LaunchTask, LoginTask, PrepareLaunchFilesTask,
     PrepareNativesTask, PreparedLaunch, ReadVersionTask, SelectJavaTask,
