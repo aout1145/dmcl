@@ -192,14 +192,6 @@ impl SimpleComponent for GameOptionsPage {
                 memory_expander -> adw::ExpanderRow {},
             },
             add = &adw::PreferencesGroup {
-                set_title: "Java 虚拟机",
-                set_description: Some("设置附加 JVM 参数与对所选 Java 的兼容性检查。"),
-                #[local_ref]
-                jvm_args_expander -> adw::ExpanderRow {},
-                #[local_ref]
-                jvm_compatibility_expander -> adw::ExpanderRow {},
-            },
-            add = &adw::PreferencesGroup {
                 set_title: "游戏",
                 set_description: Some("设置快速游玩、游戏参数和进程优先级。"),
                 #[local_ref]
@@ -208,6 +200,14 @@ impl SimpleComponent for GameOptionsPage {
                 game_args_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 priority_expander -> adw::ExpanderRow {},
+            },
+            add = &adw::PreferencesGroup {
+                set_title: "Java 虚拟机",
+                set_description: Some("设置附加 JVM 参数与对所选 Java 的兼容性检查。"),
+                #[local_ref]
+                jvm_args_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                jvm_compatibility_expander -> adw::ExpanderRow {},
             },
         }
     }

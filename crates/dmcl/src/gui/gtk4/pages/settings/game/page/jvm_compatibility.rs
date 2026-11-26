@@ -45,7 +45,7 @@ impl JvmCompatibilityGroup {
             move |_| notify(&sender, GameOptionsMsg::JvmCompatibilitySelected(1))
         });
         let check = FixedRow::builder("仅检查").build();
-        check.set_subtitle("不匹配时提示，但不自动更换 Java");
+        check.set_subtitle("在不匹配时提示");
         check.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmCompatibilitySelected(2))

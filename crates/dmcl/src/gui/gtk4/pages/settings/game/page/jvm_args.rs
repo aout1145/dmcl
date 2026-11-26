@@ -1,4 +1,4 @@
-//! JVM 参数分组：使用默认参数或自定义附加参数。
+//! JVM 参数分组：使用默认参数，或用自定义参数取代。
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -46,7 +46,7 @@ impl JvmArgsGroup {
             move |_| notify(&sender, GameOptionsMsg::JvmArgsModeSelected(0))
         });
         let custom = FixedRow::builder("自定义").keep_open().build();
-        custom.set_subtitle("在默认参数后追加");
+        custom.set_subtitle("使用自定义的附加参数");
         custom.row().connect_activated({
             let sender = sender.clone();
             move |_| notify(&sender, GameOptionsMsg::JvmArgsModeSelected(1))
