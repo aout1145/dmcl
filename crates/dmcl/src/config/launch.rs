@@ -100,6 +100,7 @@ pub struct LaunchConfig {
     /// 堆大小（MiB）；`None` 表示自动分配。
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
+    /// 传给 `--versionType` 的文本，显示在游戏主菜单；空串表示使用版本 JSON 的 `type`。
     pub custom_info: String,
     /// 附加 JVM 参数；`None` 表示使用默认参数，`Some("")` 表示自定义但未填写。
     pub additional_jvm: Option<String>,

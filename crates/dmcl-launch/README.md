@@ -4,8 +4,8 @@
 
 在 workspace 内依赖 `dmcl-game`、`dmcl-java`、`dmcl-mcmeta` 和 `dmcl-task`。它**不依赖
 `dmcl-install`**，也**不读全局配置**：账户来源、版本引用、窗口模式 / 快速游玩 / 进程优先级 /
-内存、版本隔离、客户端 ID、Java 解析器、JRE 安装位置全部通过 `LaunchOption` / `launch_chain`
-由调用者传入。
+内存、自定义信息、版本隔离、客户端 ID、Java 解析器、JRE 安装位置全部通过 `LaunchOption` /
+`launch_chain` 由调用者传入。
 
 ## 模块布局
 
@@ -14,7 +14,7 @@ account.rs   Account（登录快照）与 AccountSource（登录 / 刷新）
 microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
-option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / JVM 兼容性 / 游戏完整性选项
+option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / 自定义信息 / JVM 兼容性 / 游戏完整性选项
 prepare.rs   启动链：读取版本 → 检查 / 补全文件、选择 Java → 解压 natives → 登录 → 生成参数 → 启动
 monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```

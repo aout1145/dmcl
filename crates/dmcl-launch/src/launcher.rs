@@ -289,7 +289,12 @@ impl GameLauncher {
         let version_id = self.json.id.clone().unwrap_or_default();
         let game_path = self.game_path.to_string_lossy().into_owned();
         let account = &self.account;
-        let custom_info = self.option.custom_info.clone();
+        // 自定义信息为空时沿用版本 JSON 的 `type`，与 `${version_type}` 原本的语义一致。
+        let version_type = if self.option.custom_info.is_empty() {
+            self.json.kind.clone().unwrap_or_default()
+        } else {
+            self.option.custom_info.clone()
+        };
         let classpath_separator = classpath_separator().to_string();
 
         for arg in args.iter_mut() {
@@ -311,7 +316,7 @@ impl GameLauncher {
                 .replace("${auth_access_token}", &account.access_token)
                 .replace("${auth_session}", &account.access_token)
                 .replace("${user_type}", &account.user_type)
-                .replace("${version_type}", &custom_info)
+                .replace("${version_type}", &version_type)
                 .replace("${user_properties}", "{}")
                 .replace("${game_assets}", &game_assets)
                 .replace("${classpath_separator}", &classpath_separator);
@@ -719,6 +724,42 @@ mod tests {
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         // 调用者追加的额外 JVM 参数原样带上
         assert!(args.contains(&"-Ddmcl.test.extra=1.0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn version_type_prefers_custom_info_and_falls_back_to_the_json_type() {
+        let root = std::env::temp_dir().join(format!("dmcl-launch-type-{}", std::process::id()));
+        let json: VersionJson = serde_json::from_str(
+            r#"{
+                "id": "1.0",
+                "type": "snapshot",
+                "mainClass": "com.example.Main",
+                "arguments": {"game": ["--versionType", "${version_type}"]}
+            }"#,
+        )
+        .unwrap();
+
+        let mut launcher = launcher_with(json.clone(), root.clone()).await;
+        launcher.option.custom_info = "custom".to_string();
+        let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+        let args = run_node(move |ctx| {
+            let launcher = launcher.clone();
+            async move { launcher.lock().await.gen_args(&ctx).await }
+        })
+        .await
+        .unwrap();
+        assert!(args.contains(&"custom".to_string()), "{args:?}");
+
+        let mut launcher = launcher_with(json, root).await;
+        launcher.option.custom_info = String::new();
+        let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+        let args = run_node(move |ctx| {
+            let launcher = launcher.clone();
+            async move { launcher.lock().await.gen_args(&ctx).await }
+        })
+        .await
+        .unwrap();
+        assert!(args.contains(&"snapshot".to_string()), "{args:?}");
     }
 
     #[tokio::test]

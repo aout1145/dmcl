@@ -112,6 +112,7 @@ pub struct LaunchOption {
     pub max_memory: Option<u32>,
     /// 传给游戏的客户端 ID（`${clientid}`，用于遥测）；默认空串。
     pub client_id: String,
+    /// `${version_type}`（`--versionType`）的文本，显示在游戏主菜单；空串表示使用版本 JSON 的 `type`。
     pub custom_info: String,
     /// 附加 JVM 参数。
     pub additional_jvm: Vec<String>,
