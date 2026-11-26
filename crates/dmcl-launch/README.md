@@ -14,7 +14,7 @@ account.rs   Account（登录快照）与 AccountSource（登录 / 刷新）
 microsoft.rs 微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
 memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
-option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级选项
+option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / JVM 兼容性选项
 prepare.rs   启动链：读取版本 → 检查并补全 / 选择 Java → 解压 natives → 登录 → 生成参数 → 启动
 monitor.rs   GameMonitor：等待退出 / 停止游戏
 ```
@@ -37,6 +37,8 @@ monitor.rs   GameMonitor：等待退出 / 停止游戏
 
 启动链只使用 `dmcl_java::JavaResolver` 与 `JavaOption`，选哪个 Java 由调用者决定；找不到
 且允许自动安装时，按版本要求下载 JRE，并通过 hook 把结果交给调用方决定是否写回配置。
+`LaunchOption::jvm_compatibility` 决定是否检查所选 Java 的版本与架构：忽略直接使用，仅检查
+在不匹配时等用户确认，检查并补全只对允许自动安装的解析器下载 JRE。
 内存留空时按系统可用内存自动分配，手动值不合法时仍交给调用方决定如何处理。
 
 ### 版本隔离

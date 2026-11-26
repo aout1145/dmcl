@@ -60,7 +60,8 @@ pub use java::{
 #[cfg(feature = "gtk4")]
 pub(crate) use java::{configured_java, scan_configs};
 pub use launch::{
-    LaunchConfig, LoadedInstanceConfig, ProcessPriority, QuickPlayConfig, QuickPlayTarget,
+    JvmCompatibility, LaunchConfig, LoadedInstanceConfig, ProcessPriority, QuickPlayConfig,
+    QuickPlayTarget,
 };
 
 use std::path::{Path, PathBuf};
@@ -397,9 +398,9 @@ impl Config {
         JreAutoInstall::new(runtime_root)
     }
 
-    /// 启动流程的 JRE 安装位置：只有自动选择 Java 时才允许自动下载。
+    /// 启动流程的 JRE 安装位置：只有「自动选择 + 检查并补全」才允许自动下载。
     pub fn launch_jre_auto_install(&self, launch: &LaunchConfig) -> Option<JreAutoInstall> {
-        if launch.java.is_auto() {
+        if launch.java.is_auto() && launch.jvm_compatibility == JvmCompatibility::Complete {
             dmcl_java::official_runtime_root().map(JreAutoInstall::new)
         } else {
             None

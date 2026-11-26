@@ -38,7 +38,7 @@ use dmcl_task::{Task, TaskContext, TaskGraph, TaskGraphBuilder};
 use crate::account::{Account, AccountSource};
 use crate::launcher::{command_preview, spawn_game, GameLauncher};
 use crate::monitor::GameMonitor;
-use crate::option::{LaunchOption, ProcessPriority};
+use crate::option::{JvmCompatibility, LaunchOption, ProcessPriority};
 
 /// 生成启动参数之后的产出。
 #[derive(Debug, Clone)]
@@ -206,10 +206,14 @@ impl Task<Arc<ResolvedVersion>, JavaOption> for SelectJavaTask {
             .and_then(|java| java.component.clone())
             .filter(|component| !component.is_empty());
 
+        let compatibility = self.option.jvm_compatibility;
         let mut downloaded = false;
         let mut java = match self.option.java.resolve(required_major).await {
             Ok(java) => java,
             Err(err) => {
+                if compatibility != JvmCompatibility::Complete {
+                    return Err(err);
+                }
                 let Some(jre) = &self.jre else {
                     return Err(err);
                 };
@@ -220,7 +224,19 @@ impl Task<Arc<ResolvedVersion>, JavaOption> for SelectJavaTask {
             }
         };
 
-        if !downloaded && !java_is_suitable(&java, required_major) {
+        if compatibility == JvmCompatibility::Ignore {
+            ctx.log(format!(
+                "使用 Java {}：{}（忽略兼容性检查）",
+                java.major,
+                java.path.display()
+            ));
+            return Ok(java);
+        }
+
+        if !downloaded
+            && compatibility == JvmCompatibility::Complete
+            && !java_is_suitable(&java, required_major)
+        {
             if let Some(jre) = &self.jre {
                 match self
                     .auto_install_java(preferred.as_deref(), required_major, jre, &ctx)

@@ -64,6 +64,18 @@ pub enum ProcessPriority {
     High,
 }
 
+/// 启动时对所选 Java 的兼容性检查。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JvmCompatibility {
+    /// 不检查 Java 版本与架构。
+    Ignore,
+    /// 检查 Java 版本与架构；不匹配时等用户确认。
+    Check,
+    /// 自动选择 Java 时允许下载合适的 JRE；手动指定时同 [`Self::Check`]。
+    #[default]
+    Complete,
+}
+
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户来源与 Java 解析都由调用者通过 `Arc<dyn …>` 传入，结构体因此仍是
@@ -89,7 +101,10 @@ pub struct LaunchOption {
     /// 传给游戏的客户端 ID（`${clientid}`，用于遥测）；默认空串。
     pub client_id: String,
     pub custom_info: String,
+    /// 附加 JVM 参数。
     pub additional_jvm: Vec<String>,
+    /// 启动时对所选 Java 的兼容性检查。
+    pub jvm_compatibility: JvmCompatibility,
     pub additional_game: Vec<String>,
     /// 怎么找 java：由调用者提供的解析器决定。
     pub java: Arc<dyn JavaResolver>,
@@ -131,10 +146,8 @@ impl LaunchOption {
             max_memory: None,
             client_id: String::new(),
             custom_info: LAUNCHER_NAME.to_string(),
-            additional_jvm: vec![
-                "-Dfml.ignoreInvalidMinecraftCertificates=True".to_string(),
-                "-Dfml.ignorePatchDiscrepancies=True".to_string(),
-            ],
+            additional_jvm: Vec::new(),
+            jvm_compatibility: JvmCompatibility::Complete,
             additional_game: Vec::new(),
             java,
             java_installed_hook,

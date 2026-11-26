@@ -95,6 +95,7 @@ pub(crate) enum GameOptionField {
     MaxMemory,
     CustomInfo,
     AdditionalJvm,
+    JvmCompatibility,
     AdditionalGame,
     VersionIsolation,
 }
@@ -114,6 +115,7 @@ impl GameOptionField {
             Self::MaxMemory => "max_memory",
             Self::CustomInfo => "custom_info",
             Self::AdditionalJvm => "additional_jvm",
+            Self::JvmCompatibility => "jvm_compatibility",
             Self::AdditionalGame => "additional_game",
             Self::VersionIsolation => "version_isolation",
         }
@@ -133,6 +135,7 @@ impl GameOptionField {
             "max_memory" => Self::MaxMemory,
             "custom_info" => Self::CustomInfo,
             "additional_jvm" => Self::AdditionalJvm,
+            "jvm_compatibility" => Self::JvmCompatibility,
             "additional_game" => Self::AdditionalGame,
             "version_isolation" => Self::VersionIsolation,
             _ => return None,
@@ -150,6 +153,8 @@ pub(crate) enum GameOptionGroup {
     GameArgs,
     ProcessPriority,
     Memory,
+    JvmArgs,
+    JvmCompatibility,
     VersionIsolation,
 }
 
@@ -167,6 +172,8 @@ impl GameOptionGroup {
             Self::GameArgs => &[GameOptionField::AdditionalGame],
             Self::ProcessPriority => &[GameOptionField::ProcessPriority],
             Self::Memory => &[GameOptionField::MinMemory, GameOptionField::MaxMemory],
+            Self::JvmArgs => &[GameOptionField::AdditionalJvm],
+            Self::JvmCompatibility => &[GameOptionField::JvmCompatibility],
             Self::VersionIsolation => &[GameOptionField::VersionIsolation],
         }
     }
@@ -200,6 +207,9 @@ pub(crate) fn copy_fields<'a>(
             GameOptionField::MaxMemory => target.max_memory = source.max_memory,
             GameOptionField::CustomInfo => target.custom_info = source.custom_info.clone(),
             GameOptionField::AdditionalJvm => target.additional_jvm = source.additional_jvm.clone(),
+            GameOptionField::JvmCompatibility => {
+                target.jvm_compatibility = source.jvm_compatibility
+            }
             GameOptionField::AdditionalGame => {
                 target.additional_game = source.additional_game.clone()
             }

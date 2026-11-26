@@ -36,6 +36,8 @@ game/page/quick_play.rs    快速游玩分组
 game/page/game_args.rs     游戏参数分组
 game/page/priority.rs      进程优先级分组
 game/page/memory.rs        内存分组
+game/page/jvm_args.rs      JVM 参数分组
+game/page/jvm_compatibility.rs  JVM 兼容性分组
 game/page/version_isolation.rs  版本隔离分组
 instance/mod.rs            实例设置页：两组侧栏、内容切换、标签标题与页面输出
 instance/general.rs        「实例」分类：图标、名称、分类、加载器与删除
@@ -62,6 +64,9 @@ instance/loaders.rs        从 dmcl-patches 读取当前加载器
   生效的启动配置、提交字段级改动；全局 target 写入共享配置。控件改动立即更新模型，防抖后
   只提交本次改动的字段。表单按 `GameOptionGroup` 拆在 `game/page/` 下，每组持有自己的
   选择状态、探测缓存与控件，通过 `GroupView` 读取共享的启动配置与继承状态。
+- **JVM 参数与兼容性**：`additional_jvm` 为 `null` 表示使用默认参数，空串表示自定义但未填写；
+  「JVM 兼容性」决定启动时是否校验所选 Java 的版本与架构，以及「自动选择」找不到合适 Java 时
+  是否下载 JRE；已指定具体 Java 时只检查、不替换（选「忽略」则跳过检查）。
 - **实例设置**：同一个 root + 实例名只保留一个标签，再次「管理」时聚焦已有标签；页面关闭
   即销毁。实例覆盖是字段级的：只写本次改动过的 `launch` 字段到实例 `dmcl.json`，未覆盖的
   字段继续继承全局；选「使用全局配置」就删掉对应键。是否覆盖以实例文件里出现的键为准，

@@ -11,6 +11,8 @@
 mod account;
 mod game_args;
 mod java;
+mod jvm_args;
+mod jvm_compatibility;
 mod memory;
 mod priority;
 mod quick_play;
@@ -41,6 +43,8 @@ use super::{
 use account::AccountGroup;
 use game_args::GameArgsGroup;
 use java::JavaGroup;
+use jvm_args::JvmArgsGroup;
+use jvm_compatibility::JvmCompatibilityGroup;
 use memory::MemoryGroup;
 use priority::PriorityGroup;
 use quick_play::QuickPlayGroup;
@@ -95,6 +99,12 @@ pub(crate) enum GameOptionsMsg {
         min: u32,
         max: u32,
     },
+    /// JVM 参数模式：0 默认、1 自定义。
+    JvmArgsModeSelected(u32),
+    /// 自定义 JVM 参数文本变了。
+    JvmArgsChanged(String),
+    /// JVM 兼容性：0 使用全局、1 忽略、2 仅检查、3 检查并补全。
+    JvmCompatibilitySelected(u32),
     /// 版本隔离展开行：0 使用全局、1 开启、2 关闭。
     VersionIsolationSelected(u32),
     /// 恢复某一组字段的全局值。
@@ -183,6 +193,8 @@ pub(crate) struct GameOptionsPage {
     game_args: GameArgsGroup,
     priority: PriorityGroup,
     memory: MemoryGroup,
+    jvm_args: JvmArgsGroup,
+    jvm_compatibility: JvmCompatibilityGroup,
     version_isolation: VersionIsolationGroup,
 }
 
@@ -207,6 +219,14 @@ impl SimpleComponent for GameOptionsPage {
                 window_expander -> adw::ExpanderRow {},
                 #[local_ref]
                 memory_expander -> adw::ExpanderRow {},
+            },
+            add = &adw::PreferencesGroup {
+                set_title: "Java 虚拟机",
+                set_description: Some("设置附加 JVM 参数与对所选 Java 的兼容性检查。"),
+                #[local_ref]
+                jvm_args_expander -> adw::ExpanderRow {},
+                #[local_ref]
+                jvm_compatibility_expander -> adw::ExpanderRow {},
             },
             add = &adw::PreferencesGroup {
                 set_title: "游戏",
@@ -248,12 +268,16 @@ impl SimpleComponent for GameOptionsPage {
         let game_args = GameArgsGroup::new(allow_inherit, &sender);
         let priority = PriorityGroup::new(allow_inherit, &sender);
         let memory = MemoryGroup::new(&launch, &java.javas, allow_inherit, &sender);
+        let jvm_args = JvmArgsGroup::new(allow_inherit, &sender);
+        let jvm_compatibility = JvmCompatibilityGroup::new(allow_inherit, &sender);
         let version_isolation = VersionIsolationGroup::new(allow_inherit, &sender);
 
         let account_expander = account.expander.clone();
         let java_expander = java.expander.clone();
         let window_expander = window.expander.clone();
         let memory_expander = memory.expander.clone();
+        let jvm_args_expander = jvm_args.expander.clone();
+        let jvm_compatibility_expander = jvm_compatibility.expander.clone();
         let quick_play_expander = quick_play.expander.clone();
         let game_args_expander = game_args.expander.clone();
         let priority_expander = priority.expander.clone();
@@ -282,6 +306,8 @@ impl SimpleComponent for GameOptionsPage {
             game_args,
             priority,
             memory,
+            jvm_args,
+            jvm_compatibility,
             version_isolation,
         };
         let widgets = view_output!();
@@ -326,6 +352,13 @@ impl SimpleComponent for GameOptionsPage {
                 memory::mode_selected(self, index, &sender)
             }
             GameOptionsMsg::MemoryChanged { min, max } => memory::changed(self, min, max, &sender),
+            GameOptionsMsg::JvmArgsModeSelected(index) => {
+                jvm_args::mode_selected(self, index, &sender)
+            }
+            GameOptionsMsg::JvmArgsChanged(value) => jvm_args::changed(self, value, &sender),
+            GameOptionsMsg::JvmCompatibilitySelected(index) => {
+                jvm_compatibility::selected(self, index, &sender)
+            }
             GameOptionsMsg::VersionIsolationSelected(index) => {
                 version_isolation::selected(self, index, &sender)
             }
@@ -421,6 +454,8 @@ impl GameOptionsPage {
             GameOptionGroup::GameArgs => &self.game_args.expander,
             GameOptionGroup::ProcessPriority => &self.priority.expander,
             GameOptionGroup::Memory => &self.memory.expander,
+            GameOptionGroup::JvmArgs => &self.jvm_args.expander,
+            GameOptionGroup::JvmCompatibility => &self.jvm_compatibility.expander,
             GameOptionGroup::VersionIsolation => &self.version_isolation.expander,
         };
         expander.set_expanded(false);
@@ -438,6 +473,11 @@ impl GameOptionsPage {
             &self.memory,
             &self.java.javas,
             self.view(GameOptionGroup::Memory),
+        );
+        jvm_args::sync(&self.jvm_args, self.view(GameOptionGroup::JvmArgs));
+        jvm_compatibility::sync(
+            &self.jvm_compatibility,
+            self.view(GameOptionGroup::JvmCompatibility),
         );
         version_isolation::sync(
             &self.version_isolation,

@@ -7,8 +7,8 @@ use anyhow::{anyhow, Result};
 use dmcl_game::VersionRef;
 use dmcl_java::{JavaInstalledHook, JavaResolver};
 use dmcl_launch::{
-    LaunchOption, ProcessPriority as LaunchPriority, QuickPlay as LaunchQuickPlay,
-    WindowMode as LaunchWindowMode, LAUNCHER_NAME,
+    JvmCompatibility as LaunchJvmCompatibility, LaunchOption, ProcessPriority as LaunchPriority,
+    QuickPlay as LaunchQuickPlay, WindowMode as LaunchWindowMode, LAUNCHER_NAME,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,19 @@ pub enum ProcessPriority {
     High,
 }
 
+/// 启动时对所选 Java 的兼容性检查。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JvmCompatibility {
+    /// 不检查 Java 版本与架构，直接使用选中的 Java。
+    Ignore,
+    /// 按用户的 Java 选择检查版本与架构；不匹配时等用户确认。
+    Check,
+    /// 自动选择 Java 时，没有合适的 Java 就下载；手动指定时同 [`Self::Check`]。
+    #[default]
+    Complete,
+}
+
 /// 全局 `launch.*` 段，也是实例覆盖后的结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -74,7 +87,10 @@ pub struct LaunchConfig {
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
     pub custom_info: String,
-    pub additional_jvm: String,
+    /// 附加 JVM 参数；`None` 表示使用默认参数，`Some("")` 表示自定义但未填写。
+    pub additional_jvm: Option<String>,
+    /// 启动时对所选 Java 的兼容性检查。
+    pub jvm_compatibility: JvmCompatibility,
     pub additional_game: String,
 }
 
@@ -92,11 +108,8 @@ impl Default for LaunchConfig {
             min_memory: None,
             max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),
-            // 历史默认：这两个 `-D` 是给 FML/OptiFine 兼容用的，从旧实现继承下来。
-            // 以后应改成空 / 更中性的默认，或交给用户配置。
-            additional_jvm:
-                "-Dfml.ignoreInvalidMinecraftCertificates=True -Dfml.ignorePatchDiscrepancies=True"
-                    .to_string(),
+            additional_jvm: None,
+            jvm_compatibility: JvmCompatibility::Complete,
             additional_game: String::new(),
         }
     }
@@ -274,8 +287,15 @@ impl Config {
             ProcessPriority::Normal => LaunchPriority::Normal,
             ProcessPriority::High => LaunchPriority::High,
         };
+        option.jvm_compatibility = match launch.jvm_compatibility {
+            JvmCompatibility::Ignore => LaunchJvmCompatibility::Ignore,
+            JvmCompatibility::Check => LaunchJvmCompatibility::Check,
+            JvmCompatibility::Complete => LaunchJvmCompatibility::Complete,
+        };
         option.additional_jvm = launch
             .additional_jvm
+            .as_deref()
+            .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
             .collect();
@@ -309,6 +329,13 @@ fn instance_result(
 mod tests {
     use super::*;
     use crate::config::{temp_dir, JavaConfig};
+
+    #[test]
+    fn default_jvm_args_serialize_as_null() {
+        let value = serde_json::to_value(LaunchConfig::default()).unwrap();
+        assert!(value["additional_jvm"].is_null());
+        assert_eq!(value["jvm_compatibility"], "complete");
+    }
 
     #[tokio::test]
     async fn a_missing_instance_file_uses_the_global_launch() {
@@ -369,18 +396,28 @@ mod tests {
             .insert("test".to_string(), root.clone());
         config.minecraft_root = "test".to_string();
         config.launch.max_memory = Some(3000);
+        config.launch.additional_jvm = Some("-Dglobal=1".to_string());
 
         let path = instance_config_path(&root, "1.20.1");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text =
-            r#"{"launch": {"max_memory": 4096, "account": null, "version_isolation": false}}"#;
-        std::fs::write(&path, text).unwrap();
+        let text = serde_json::json!({
+            "launch": {
+                "max_memory": 4096,
+                "account": null,
+                "additional_jvm": null,
+                "version_isolation": false,
+            }
+        })
+        .to_string();
+        std::fs::write(&path, &text).unwrap();
 
         let loaded = config.load_instance(&root, "1.20.1").await;
         assert!(loaded.error.is_none(), "{:?}", loaded.error);
         assert_eq!(loaded.launch.max_memory, Some(4096));
         assert_eq!(loaded.launch.window_width, 854);
         assert_eq!(loaded.launch.account, None);
+        // 显式 null 表示使用默认 JVM 参数，不能退回全局的自定义值。
+        assert_eq!(loaded.launch.additional_jvm, None);
         assert!(!loaded.launch.version_isolation);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
@@ -495,13 +532,14 @@ mod tests {
         config.launch.min_memory = Some(1024);
         config.launch.max_memory = Some(4096);
         config.launch.custom_info = "test".to_string();
-        config.launch.additional_jvm = "-Da=1  -Db=2".to_string();
+        config.launch.additional_jvm = Some("-Da=1  -Db=2".to_string());
         config.launch.additional_game = "--foo \"bar baz\"".to_string();
         config.launch.quick_play = Some(QuickPlayConfig {
             target: QuickPlayTarget::Multiplayer,
             value: "example.org".to_string(),
         });
         config.launch.process_priority = ProcessPriority::High;
+        config.launch.jvm_compatibility = JvmCompatibility::Ignore;
         config.launch.version_isolation = false;
         config.javas.insert(
             "jdk".to_string(),
@@ -545,6 +583,7 @@ mod tests {
             Some(LaunchQuickPlay::Multiplayer("example.org".to_string()))
         );
         assert_eq!(option.process_priority, LaunchPriority::High);
+        assert_eq!(option.jvm_compatibility, LaunchJvmCompatibility::Ignore);
         assert!(!option.version_isolation);
         assert_eq!(option.account_source.name(), "Steve");
 

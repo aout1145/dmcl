@@ -64,7 +64,8 @@ pub use microsoft::{
 };
 pub use monitor::GameMonitor;
 pub use option::{
-    LaunchOption, ProcessPriority, QuickPlay, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION,
+    JvmCompatibility, LaunchOption, ProcessPriority, QuickPlay, WindowMode, LAUNCHER_NAME,
+    LAUNCHER_VERSION,
 };
 pub use prepare::{
     launch_chain, GenerateArgsTask, LaunchTask, LoginTask, PrepareLaunchFilesTask,

@@ -713,8 +713,8 @@ mod tests {
         // 快速游玩参数紧跟在游戏参数之后
         assert!(args.contains(&"--quickPlayMultiplayer".to_string()));
         assert!(args.contains(&"example.org:25565".to_string()));
-        // 没有加载器时 additional_jvm 的默认值也会带上
-        assert!(args
+        // 默认不再附加历史 FML 兼容参数
+        assert!(!args
             .iter()
             .any(|arg| arg.contains("ignoreInvalidMinecraftCertificates")));
         // 调用者追加的额外 JVM 参数原样带上
