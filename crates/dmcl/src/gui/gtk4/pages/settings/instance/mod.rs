@@ -1,6 +1,6 @@
 //! 单个实例的设置页：左侧分两组分类，右侧按分类显示实例信息或游戏设置。
 //!
-//! 「实例」分类编辑图标、名称、分类、加载器并删除实例；「启动选项」复用全局游戏设置
+//! 「实例」分类编辑图标、名称、分类、加载器并删除实例；「启动」复用全局游戏设置
 //! 表单。页面是关闭即销毁的一次性标签页；实例文件的变化不走全局配置仓库，各子页面自己
 //! 写盘。同一实例由根组件按 `(root, 实例名)` 去重，这个模块只负责页面本身。
 
@@ -92,7 +92,7 @@ impl SimpleComponent for InstancePage {
                             },
 
                             append = &adw::ActionRow {
-                                set_title: "启动选项",
+                                set_title: "启动",
                                 set_activatable: true,
                                 add_prefix = &gtk::Image {
                                     set_icon_name: Some("media-playback-start-symbolic"),

@@ -39,28 +39,35 @@ pub(crate) struct GameOptionsState {
 
 /// 一个游戏窗口预设。
 pub(crate) struct WindowPreset {
-    /// 展开行里的大字描述。
-    pub label: &'static str,
     pub width: u32,
     pub height: u32,
 }
 
-/// 游戏窗口提供的常用预设。
+/// 游戏窗口提供的常用预设，沿用 HMCL 的挡位。
 pub(crate) const WINDOW_PRESETS: &[WindowPreset] = &[
     WindowPreset {
-        label: "默认",
         width: 854,
         height: 480,
     },
     WindowPreset {
-        label: "720p",
         width: 1280,
         height: 720,
     },
     WindowPreset {
-        label: "1080p",
+        width: 1600,
+        height: 900,
+    },
+    WindowPreset {
         width: 1920,
         height: 1080,
+    },
+    WindowPreset {
+        width: 2560,
+        height: 1440,
+    },
+    WindowPreset {
+        width: 3840,
+        height: 2160,
     },
 ];
 
@@ -76,6 +83,7 @@ pub(crate) fn window_preset(width: u32, height: u32) -> Option<usize> {
 pub(crate) enum GameOptionField {
     Java,
     Account,
+    Fullscreen,
     WindowWidth,
     WindowHeight,
     MinMemory,
@@ -92,6 +100,7 @@ impl GameOptionField {
         match self {
             Self::Java => "java",
             Self::Account => "account",
+            Self::Fullscreen => "fullscreen",
             Self::WindowWidth => "window_width",
             Self::WindowHeight => "window_height",
             Self::MinMemory => "min_memory",
@@ -108,6 +117,7 @@ impl GameOptionField {
         Some(match key {
             "java" => Self::Java,
             "account" => Self::Account,
+            "fullscreen" => Self::Fullscreen,
             "window_width" => Self::WindowWidth,
             "window_height" => Self::WindowHeight,
             "min_memory" => Self::MinMemory,
@@ -126,7 +136,7 @@ impl GameOptionField {
 pub(crate) enum GameOptionGroup {
     Account,
     Java,
-    WindowSize,
+    Window,
     Memory,
     VersionIsolation,
 }
@@ -136,7 +146,11 @@ impl GameOptionGroup {
         match self {
             Self::Account => &[GameOptionField::Account],
             Self::Java => &[GameOptionField::Java],
-            Self::WindowSize => &[GameOptionField::WindowWidth, GameOptionField::WindowHeight],
+            Self::Window => &[
+                GameOptionField::Fullscreen,
+                GameOptionField::WindowWidth,
+                GameOptionField::WindowHeight,
+            ],
             Self::Memory => &[GameOptionField::MinMemory, GameOptionField::MaxMemory],
             Self::VersionIsolation => &[GameOptionField::VersionIsolation],
         }
@@ -162,6 +176,7 @@ pub(crate) fn copy_fields<'a>(
         match field {
             GameOptionField::Java => target.java = source.java.clone(),
             GameOptionField::Account => target.account = source.account.clone(),
+            GameOptionField::Fullscreen => target.fullscreen = source.fullscreen,
             GameOptionField::WindowWidth => target.window_width = source.window_width,
             GameOptionField::WindowHeight => target.window_height = source.window_height,
             GameOptionField::MinMemory => target.min_memory = source.min_memory,
@@ -361,6 +376,7 @@ mod tests {
         let keys = [
             GameOptionField::Java,
             GameOptionField::Account,
+            GameOptionField::Fullscreen,
             GameOptionField::WindowWidth,
             GameOptionField::WindowHeight,
             GameOptionField::MinMemory,
@@ -392,17 +408,17 @@ mod tests {
     #[test]
     fn a_group_is_overridden_when_any_of_its_fields_is() {
         let mut overrides = BTreeSet::new();
-        assert!(!group_overridden(&overrides, GameOptionGroup::WindowSize));
+        assert!(!group_overridden(&overrides, GameOptionGroup::Window));
 
         overrides.insert(GameOptionField::WindowHeight);
-        assert!(group_overridden(&overrides, GameOptionGroup::WindowSize));
+        assert!(group_overridden(&overrides, GameOptionGroup::Window));
         assert!(!group_overridden(&overrides, GameOptionGroup::Memory));
     }
 
     #[test]
     fn window_presets_match_sizes() {
         assert_eq!(window_preset(854, 480), Some(0));
-        assert_eq!(window_preset(1920, 1080), Some(2));
+        assert_eq!(window_preset(3840, 2160), Some(5));
         assert_eq!(window_preset(800, 600), None);
     }
 

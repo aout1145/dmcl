@@ -68,11 +68,10 @@ pub(crate) enum GameOptionsMsg {
     JavaSelected(u32),
     /// 默认账户选择变了。
     AccountSelected(u32),
+    /// 窗口化尺寸预设的下标。
     WindowPresetSelected(u32),
-    /// 实例页点了「自定义」窗口大小。
-    WindowCustomSelected,
-    WindowWidthChanged(u32),
-    WindowHeightChanged(u32),
+    /// 窗口类型：0 使用全局、1 窗口化、2 全屏。
+    WindowModeSelected(u32),
     /// 内存模式：0 自动、1 手动。
     MemoryModeSelected(u32),
     MemoryChanged {
@@ -167,12 +166,9 @@ pub(crate) struct GameOptionsPage {
     memory_inherit: FixedRow,
     account_rows: FactoryVecDeque<ChoiceRow>,
     java_rows: FactoryVecDeque<ChoiceRow>,
-    window_rows: FactoryVecDeque<ChoiceRow>,
-    custom_size_row: adw::ActionRow,
-    custom_mark: gtk::Image,
-    window_choice: WindowChoice,
-    width_spin: gtk::SpinButton,
-    height_spin: gtk::SpinButton,
+    window_preset_dropdown: gtk::DropDown,
+    windowed: FixedRow,
+    fullscreen: FixedRow,
     auto_memory_row: adw::ActionRow,
     auto_memory_mark: gtk::Image,
     manual_memory_mark: gtk::Image,
@@ -182,20 +178,6 @@ pub(crate) struct GameOptionsPage {
     version_inherit: FixedRow,
     version_on: FixedRow,
     version_off: FixedRow,
-}
-
-/// 窗口大小选中的是某个预设，还是手动输入的宽高。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowChoice {
-    Preset(usize),
-    Custom,
-}
-
-impl WindowChoice {
-    /// 配置里只保存宽高，加载时按值反推选中的预设。
-    fn of(launch: &LaunchConfig) -> Self {
-        window_preset(launch.window_width, launch.window_height).map_or(Self::Custom, Self::Preset)
-    }
 }
 
 #[relm4::component(pub(crate))]
@@ -208,7 +190,7 @@ impl SimpleComponent for GameOptionsPage {
         adw::PreferencesPage {
             add = &adw::PreferencesGroup {
                 set_title: "通用",
-                set_description: Some("设置启动游戏时使用的账户、Java、窗口大小与内存。"),
+                set_description: Some("设置启动游戏时使用的账户、Java、窗口与内存。"),
                 #[local_ref]
                 account_expander -> adw::ExpanderRow {},
                 #[local_ref]
@@ -280,86 +262,65 @@ impl SimpleComponent for GameOptionsPage {
             });
 
         let window_expander = adw::ExpanderRow::builder()
-            .title("窗口大小")
+            .title("窗口类型")
             .show_enable_switch(false)
             .build();
         let window_inherit = FixedRow::new("使用全局配置");
         window_inherit.row.connect_activated({
             let sender = sender.clone();
-            move |_| {
-                notify(
-                    &sender,
-                    GameOptionsMsg::Inherit(GameOptionGroup::WindowSize),
-                )
-            }
+            move |_| notify(&sender, GameOptionsMsg::Inherit(GameOptionGroup::Window))
         });
         if allow_inherit {
             window_expander.add_row(&window_inherit.row);
         }
-        let window_rows = FactoryVecDeque::builder()
-            .launch(window_expander.clone())
-            .forward(sender.input_sender(), |out| match out {
-                ChoiceRowOut::Selected(index) => GameOptionsMsg::WindowPresetSelected(index),
-            });
 
-        let width_spin = spin_button(launch.window_width);
-        width_spin.connect_value_changed({
+        let preset_labels: Vec<String> = WINDOW_PRESETS
+            .iter()
+            .map(|preset| format!("{} × {}", preset.width, preset.height))
+            .collect();
+        let preset_labels: Vec<&str> = preset_labels.iter().map(String::as_str).collect();
+        let window_preset_dropdown = gtk::DropDown::from_strings(&preset_labels);
+        window_preset_dropdown.set_enable_search(false);
+        window_preset_dropdown.set_valign(gtk::Align::Center);
+        window_preset_dropdown.connect_selected_notify({
             let sender = sender.clone();
             let syncing = Rc::clone(&syncing);
-            move |spin| {
+            move |dropdown| {
                 if syncing.get() {
                     return;
                 }
                 notify(
                     &sender,
-                    GameOptionsMsg::WindowWidthChanged(spin.value() as u32),
+                    GameOptionsMsg::WindowPresetSelected(dropdown.selected()),
                 );
             }
         });
 
-        let height_spin = spin_button(launch.window_height);
-        height_spin.connect_value_changed({
-            let sender = sender.clone();
-            let syncing = Rc::clone(&syncing);
-            move |spin| {
-                if syncing.get() {
-                    return;
-                }
-                notify(
-                    &sender,
-                    GameOptionsMsg::WindowHeightChanged(spin.value() as u32),
-                );
-            }
-        });
-
-        let size_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        size_box.set_valign(gtk::Align::Center);
-        let times = gtk::Label::new(Some("×"));
-        times.add_css_class("dim-label");
-        size_box.append(&width_spin);
-        size_box.append(&times);
-        size_box.append(&height_spin);
-
-        let custom_mark = gtk::Image::from_icon_name("object-select-symbolic");
-        custom_mark.add_css_class("accent");
-        custom_mark.set_valign(gtk::Align::Center);
-        size_box.append(&custom_mark);
-
-        let custom_size_row = adw::ActionRow::builder()
-            .title("自定义")
-            .subtitle("手动输入宽高")
+        let windowed_row = adw::ActionRow::builder()
+            .title("窗口化")
+            .activatable(true)
             .build();
-        custom_size_row.add_suffix(&size_box);
-        if allow_inherit {
-            custom_size_row.set_activatable(true);
-            custom_size_row.connect_activated({
-                let sender = sender.clone();
-                move |_| notify(&sender, GameOptionsMsg::WindowCustomSelected)
-            });
-        } else {
-            custom_size_row.set_activatable(false);
-        }
-        window_expander.add_row(&custom_size_row);
+        windowed_row.add_suffix(&window_preset_dropdown);
+        let windowed_mark = gtk::Image::from_icon_name("object-select-symbolic");
+        windowed_mark.add_css_class("accent");
+        windowed_mark.set_valign(gtk::Align::Center);
+        windowed_row.add_suffix(&windowed_mark);
+        windowed_row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::WindowModeSelected(1))
+        });
+        let windowed = FixedRow {
+            row: windowed_row,
+            mark: windowed_mark,
+        };
+
+        let fullscreen = FixedRow::new("全屏");
+        fullscreen.row.connect_activated({
+            let sender = sender.clone();
+            move |_| notify(&sender, GameOptionsMsg::WindowModeSelected(2))
+        });
+        window_expander.add_row(&windowed.row);
+        window_expander.add_row(&fullscreen.row);
 
         let memory_expander = adw::ExpanderRow::builder()
             .title("内存")
@@ -511,7 +472,6 @@ impl SimpleComponent for GameOptionsPage {
             }
         });
 
-        let window_choice = WindowChoice::of(&launch);
         let mut model = GameOptionsPage {
             target,
             config,
@@ -543,12 +503,9 @@ impl SimpleComponent for GameOptionsPage {
             memory_inherit,
             account_rows,
             java_rows,
-            window_rows,
-            custom_size_row,
-            custom_mark,
-            window_choice,
-            width_spin,
-            height_spin,
+            window_preset_dropdown,
+            windowed,
+            fullscreen,
             auto_memory_row,
             auto_memory_mark,
             manual_memory_mark,
@@ -610,63 +567,45 @@ impl SimpleComponent for GameOptionsPage {
                 self.account_expander.set_expanded(false);
             }
             GameOptionsMsg::WindowPresetSelected(index) => {
-                let Some(preset) = index
-                    .checked_sub(1)
-                    .and_then(|index| WINDOW_PRESETS.get(index as usize))
-                else {
+                let Some(preset) = WINDOW_PRESETS.get(index as usize) else {
                     return;
                 };
-                let inherited = self.inherited(GameOptionGroup::WindowSize);
-                self.window_choice = WindowChoice::Preset(index as usize - 1);
+                let inherited = self.inherited(GameOptionGroup::Window);
                 if !inherited
+                    && !self.launch.fullscreen
                     && preset.width == self.launch.window_width
                     && preset.height == self.launch.window_height
                 {
-                    self.sync_ui();
-                    self.window_expander.set_expanded(false);
                     return;
                 }
+                self.launch.fullscreen = false;
                 self.launch.window_width = preset.width;
                 self.launch.window_height = preset.height;
-                self.mark_override([GameOptionField::WindowWidth, GameOptionField::WindowHeight]);
+                self.mark_override([
+                    GameOptionField::Fullscreen,
+                    GameOptionField::WindowWidth,
+                    GameOptionField::WindowHeight,
+                ]);
                 self.sync_ui();
-                self.window_expander.set_expanded(false);
                 self.schedule_flush(&sender);
             }
-            GameOptionsMsg::WindowCustomSelected => {
-                self.window_choice = WindowChoice::Custom;
-                if self.inherited(GameOptionGroup::WindowSize) {
-                    self.mark_override([
-                        GameOptionField::WindowWidth,
-                        GameOptionField::WindowHeight,
-                    ]);
+            GameOptionsMsg::WindowModeSelected(index) => match index {
+                0 => self.inherit_group(GameOptionGroup::Window, &sender),
+                1 | 2 => {
+                    self.window_expander.set_expanded(false);
+                    let fullscreen = index == 2;
+                    if fullscreen == self.launch.fullscreen
+                        && !self.inherited(GameOptionGroup::Window)
+                    {
+                        return;
+                    }
+                    self.launch.fullscreen = fullscreen;
+                    self.mark_override([GameOptionField::Fullscreen]);
+                    self.sync_ui();
                     self.schedule_flush(&sender);
                 }
-                self.sync_ui();
-            }
-            GameOptionsMsg::WindowWidthChanged(value) => {
-                if value == self.launch.window_width && !self.inherited(GameOptionGroup::WindowSize)
-                {
-                    return;
-                }
-                self.launch.window_width = value;
-                self.window_choice = WindowChoice::Custom;
-                self.mark_override([GameOptionField::WindowWidth]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
-            GameOptionsMsg::WindowHeightChanged(value) => {
-                if value == self.launch.window_height
-                    && !self.inherited(GameOptionGroup::WindowSize)
-                {
-                    return;
-                }
-                self.launch.window_height = value;
-                self.window_choice = WindowChoice::Custom;
-                self.mark_override([GameOptionField::WindowHeight]);
-                self.sync_ui();
-                self.schedule_flush(&sender);
-            }
+                _ => {}
+            },
             GameOptionsMsg::MemoryModeSelected(index) => match index {
                 0 => {
                     let inherited = self.inherited(GameOptionGroup::Memory);
@@ -782,7 +721,6 @@ impl GameOptionsPage {
         let (state, accounts, javas) = load_choices(&self.target, &self.config, &self.cache);
         self.launch = state.launch;
         self.overrides = state.overrides;
-        self.window_choice = WindowChoice::of(&self.launch);
         self.global = self.config.read().launch.clone();
         self.accounts = accounts;
         self.javas = javas;
@@ -806,7 +744,7 @@ impl GameOptionsPage {
         }
     }
 
-    /// 重建账户、Java 和窗口大小的展开选择列表。
+    /// 重建账户和 Java 的展开选择列表。
     fn rebuild_choices(&mut self) {
         {
             let mut guard = self.account_rows.guard();
@@ -848,28 +786,6 @@ impl GameOptionsPage {
                 });
             }
         }
-
-        self.rebuild_window_choices();
-    }
-
-    /// 重建窗口预设列表，并把「自定义」固定在最后。
-    fn rebuild_window_choices(&mut self) {
-        {
-            let mut guard = self.window_rows.guard();
-            guard.clear();
-            for (index, preset) in WINDOW_PRESETS.iter().enumerate() {
-                guard.push_back(ChoiceRowInit {
-                    index: index as u32 + 1,
-                    title: preset.label.to_string(),
-                    subtitle: format!("{} × {}", preset.width, preset.height),
-                    detail: String::new(),
-                    avatar_text: None,
-                    selected: false,
-                });
-            }
-        }
-        self.window_expander.remove(&self.custom_size_row);
-        self.window_expander.add_row(&self.custom_size_row);
     }
 
     /// 整组是否正在继承全局。
@@ -909,7 +825,7 @@ impl GameOptionsPage {
         match group {
             GameOptionGroup::Account => self.account_expander.set_expanded(false),
             GameOptionGroup::Java => self.java_expander.set_expanded(false),
-            GameOptionGroup::WindowSize => self.window_expander.set_expanded(false),
+            GameOptionGroup::Window => self.window_expander.set_expanded(false),
             GameOptionGroup::Memory => self.memory_expander.set_expanded(false),
             GameOptionGroup::VersionIsolation => {
                 self.version_isolation_expander.set_expanded(false);
@@ -947,18 +863,12 @@ impl GameOptionsPage {
         }
         self.java_inherit.set_selected(java_inherited);
 
-        let window_inherited = self.inherited(GameOptionGroup::WindowSize);
-        for index in 0..self.window_rows.len() {
-            self.window_rows.send(
-                index,
-                ChoiceRowMsg::SetSelected(
-                    !window_inherited && self.window_choice == WindowChoice::Preset(index),
-                ),
-            );
-        }
-        self.custom_mark
-            .set_visible(!window_inherited && self.window_choice == WindowChoice::Custom);
+        let window_inherited = self.inherited(GameOptionGroup::Window);
         self.window_inherit.set_selected(window_inherited);
+        self.windowed
+            .set_selected(!window_inherited && !self.launch.fullscreen);
+        self.fullscreen
+            .set_selected(!window_inherited && self.launch.fullscreen);
 
         let version_inherited = self.inherited(GameOptionGroup::VersionIsolation);
         self.version_inherit.set_selected(version_inherited);
@@ -968,14 +878,16 @@ impl GameOptionsPage {
             .set_selected(!version_inherited && !self.launch.version_isolation);
     }
 
-    /// 把模型同步到数字和文本控件；期间屏蔽信号。
+    /// 把模型同步到窗口尺寸下拉框；期间屏蔽信号。
     fn sync_values(&self) {
         self.syncing.set(true);
-        self.set_spin_button_value(&self.width_spin, self.launch.window_width);
-        self.set_spin_button_value(&self.height_spin, self.launch.window_height);
-        let window_inherited = self.inherited(GameOptionGroup::WindowSize);
-        self.width_spin.set_sensitive(!window_inherited);
-        self.height_spin.set_sensitive(!window_inherited);
+        let windowed = !self.inherited(GameOptionGroup::Window) && !self.launch.fullscreen;
+        let index =
+            window_preset(self.launch.window_width, self.launch.window_height).unwrap_or(0) as u32;
+        if self.window_preset_dropdown.selected() != index {
+            self.window_preset_dropdown.set_selected(index);
+        }
+        self.window_preset_dropdown.set_sensitive(windowed);
         self.syncing.set(false);
     }
 
@@ -1002,9 +914,10 @@ impl GameOptionsPage {
             },
         );
         self.window_expander.set_subtitle(
-            &self.inherited_subtitle(GameOptionGroup::WindowSize, size_label(&self.launch)),
+            &self.inherited_subtitle(GameOptionGroup::Window, window_label(&self.launch)),
         );
-        self.window_inherit.set_subtitle(&size_label(&self.global));
+        self.window_inherit
+            .set_subtitle(&window_label(&self.global));
         self.version_isolation_expander
             .set_subtitle(&self.inherited_subtitle(
                 GameOptionGroup::VersionIsolation,
@@ -1192,19 +1105,6 @@ fn notify(sender: &ComponentSender<GameOptionsPage>, message: GameOptionsMsg) {
     let _ = sender.input_sender().send(message);
 }
 
-fn spin_button(value: u32) -> gtk::SpinButton {
-    let adjustment =
-        gtk::Adjustment::new(f64::from(value), 0.0, f64::from(u32::MAX), 1.0, 100.0, 0.0);
-    gtk::SpinButton::builder()
-        .adjustment(&adjustment)
-        .climb_rate(1.0)
-        .digits(0)
-        .numeric(true)
-        .width_chars(6)
-        .valign(gtk::Align::Center)
-        .build()
-}
-
 fn spin_button_with_upper(value: u32, upper: u32) -> gtk::SpinButton {
     let adjustment = gtk::Adjustment::new(
         f64::from(value),
@@ -1291,8 +1191,13 @@ fn java_label_of(javas: &[JavaEntry], choice: &JavaChoice) -> String {
     }
 }
 
-fn size_label(launch: &LaunchConfig) -> String {
-    format!("{} × {}", launch.window_width, launch.window_height)
+fn window_label(launch: &LaunchConfig) -> String {
+    if launch.fullscreen {
+        return "全屏".to_string();
+    }
+    let index = window_preset(launch.window_width, launch.window_height).unwrap_or(0);
+    let preset = &WINDOW_PRESETS[index];
+    format!("窗口化（{} × {}）", preset.width, preset.height)
 }
 
 fn isolation_label(enabled: bool) -> String {

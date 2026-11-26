@@ -23,7 +23,7 @@ use version_compare::{compare_to, Cmp};
 use crate::account::Account;
 use crate::memory::resolve_memory;
 use crate::monitor::GameMonitor;
-use crate::option::{LaunchOption, LAUNCHER_NAME, LAUNCHER_VERSION};
+use crate::option::{LaunchOption, WindowMode, LAUNCHER_NAME, LAUNCHER_VERSION};
 
 /// 启动一个版本。
 pub struct GameLauncher {
@@ -234,11 +234,16 @@ impl GameLauncher {
             );
         }
 
-        // 窗口尺寸
-        args.push("--width".to_string());
-        args.push(self.option.window_width.to_string());
-        args.push("--height".to_string());
-        args.push(self.option.window_height.to_string());
+        // 窗口类型：窗口化传初始宽高，全屏交给游戏自己用显示器的全屏分辨率。
+        match self.option.window {
+            WindowMode::Windowed { width, height } => {
+                args.push("--width".to_string());
+                args.push(width.to_string());
+                args.push("--height".to_string());
+                args.push(height.to_string());
+            }
+            WindowMode::Fullscreen => args.push("--fullscreen".to_string()),
+        }
         // 额外的游戏参数（调用者已经拆成独立参数）。
         args.extend(self.option.additional_game.iter().cloned());
 

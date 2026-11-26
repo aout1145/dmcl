@@ -14,6 +14,15 @@ pub const LAUNCHER_NAME: &str = "dmcl";
 /// 启动器版本（替换 `${launcher_version}`）。
 pub const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// 游戏窗口的初始状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    /// 窗口化，使用给定的初始宽高（像素）。
+    Windowed { width: u32, height: u32 },
+    /// 全屏启动。
+    Fullscreen,
+}
+
 /// 启动一个版本所需要的全部信息。
 ///
 /// 账户来源与 Java 解析都由调用者通过 `Arc<dyn …>` 传入，结构体因此仍是
@@ -27,9 +36,8 @@ pub struct LaunchOption {
     ///
     /// 关闭后游戏进程的工作目录和 `${game_directory}` 都改用根目录。
     pub version_isolation: bool,
-    /// 窗口尺寸（像素）与堆大小（MiB）—— 不可能为负。
-    pub window_width: u32,
-    pub window_height: u32,
+    /// 窗口的初始状态；宽高不可能为负。
+    pub window: WindowMode,
     /// 堆大小；`None` 表示自动分配。
     pub min_memory: Option<u32>,
     pub max_memory: Option<u32>,
@@ -47,8 +55,7 @@ impl fmt::Debug for LaunchOption {
         f.debug_struct("LaunchOption")
             .field("account", &self.account_source.name())
             .field("version", &self.version)
-            .field("window_width", &self.window_width)
-            .field("window_height", &self.window_height)
+            .field("window", &self.window)
             .field("min_memory", &self.min_memory)
             .field("max_memory", &self.max_memory)
             .finish_non_exhaustive()
@@ -67,8 +74,10 @@ impl LaunchOption {
             account_source,
             version,
             version_isolation: true,
-            window_width: 854,
-            window_height: 480,
+            window: WindowMode::Windowed {
+                width: 854,
+                height: 480,
+            },
             min_memory: None,
             max_memory: None,
             custom_info: LAUNCHER_NAME.to_string(),

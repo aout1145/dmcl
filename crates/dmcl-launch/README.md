@@ -3,7 +3,7 @@
 账户、命令行生成、启动与状态监控。
 
 在 workspace 内依赖 `dmcl-game`、`dmcl-java`、`dmcl-mcmeta` 和 `dmcl-task`。它**不依赖
-`dmcl-install`**，也**不读全局配置**：账户来源、版本引用、窗口 / 内存、版本隔离、Java
+`dmcl-install`**，也**不读全局配置**：账户来源、版本引用、窗口模式 / 内存、版本隔离、Java
 解析器、JRE 安装位置全部通过 `LaunchOption` / `launch_chain` 由调用者传入。
 
 ## 模块布局

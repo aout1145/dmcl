@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use dmcl_game::VersionRef;
 use dmcl_java::{JavaInstalledHook, JavaResolver};
-use dmcl_launch::{LaunchOption, LAUNCHER_NAME};
+use dmcl_launch::{LaunchOption, WindowMode as LaunchWindowMode, LAUNCHER_NAME};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +25,9 @@ pub struct LaunchConfig {
     pub account: Option<String>,
     /// 是否为每个版本使用独立的游戏目录（`versions/<版本名>`）；关闭后共用根目录。
     pub version_isolation: bool,
-    /// 窗口尺寸（像素）—— 不可能为负。
+    /// 是否全屏启动；关闭时使用下面的窗口宽高。
+    pub fullscreen: bool,
+    /// 窗口化时的初始尺寸（像素）—— 不可能为负。
     pub window_width: u32,
     pub window_height: u32,
     /// 堆大小（MiB）；`None` 表示自动分配。
@@ -42,6 +44,7 @@ impl Default for LaunchConfig {
             java: JavaChoice::Auto,
             account: None,
             version_isolation: true,
+            fullscreen: false,
             window_width: 854,
             window_height: 480,
             min_memory: None,
@@ -201,8 +204,14 @@ impl Config {
     ) -> Result<LaunchOption> {
         let account_source = self.selected_account_source(launch)?;
         let mut option = LaunchOption::new(account_source, version, java, java_installed_hook);
-        option.window_width = launch.window_width;
-        option.window_height = launch.window_height;
+        option.window = if launch.fullscreen {
+            LaunchWindowMode::Fullscreen
+        } else {
+            LaunchWindowMode::Windowed {
+                width: launch.window_width,
+                height: launch.window_height,
+            }
+        };
         option.min_memory = launch.min_memory;
         option.max_memory = launch.max_memory;
         option.custom_info = launch.custom_info.clone();
@@ -427,6 +436,7 @@ mod tests {
         );
         config.launch.account = Some("steve".to_string());
         config.launch.window_width = 1920;
+        config.launch.window_height = 1080;
         config.launch.min_memory = Some(1024);
         config.launch.max_memory = Some(4096);
         config.launch.custom_info = "test".to_string();
@@ -457,7 +467,13 @@ mod tests {
             .unwrap();
         assert_eq!(option.version.root, root);
         assert_eq!(option.version.name, "1.20.1");
-        assert_eq!(option.window_width, 1920);
+        assert_eq!(
+            option.window,
+            LaunchWindowMode::Windowed {
+                width: 1920,
+                height: 1080
+            }
+        );
         assert_eq!(option.min_memory, Some(1024));
         assert_eq!(option.max_memory, Some(4096));
         assert_eq!(option.custom_info, "test");
@@ -466,6 +482,21 @@ mod tests {
         assert_eq!(option.additional_game, vec!["--foo", "bar"]);
         assert!(!option.version_isolation);
         assert_eq!(option.account_source.name(), "Steve");
+
+        config.launch.fullscreen = true;
+        let option = config
+            .launch_option(
+                &config.launch,
+                VersionRef::new(&root, "1.20.1"),
+                Arc::new(dmcl_java::JavaOption {
+                    path: PathBuf::from("/nonexistent/bin/java"),
+                    major: 17,
+                    arch: dmcl_mcmeta::os::Arch::X86_64,
+                }),
+                None,
+            )
+            .unwrap();
+        assert_eq!(option.window, LaunchWindowMode::Fullscreen);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
