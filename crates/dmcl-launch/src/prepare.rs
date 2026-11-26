@@ -36,8 +36,8 @@ use dmcl_mcmeta::os::{Arch, Os};
 use dmcl_task::{Task, TaskContext, TaskGraph, TaskGraphBuilder};
 
 use crate::account::{Account, AccountSource};
-use crate::launcher::{command_preview, spawn_game, GameLauncher};
-use crate::monitor::GameMonitor;
+use crate::launcher::{command_preview, GameLauncher};
+use crate::monitor::{spawn_game, GameMonitor};
 use crate::option::{GameIntegrity, JvmCompatibility, LaunchOption, ProcessPriority};
 
 /// 生成启动参数之后的产出。

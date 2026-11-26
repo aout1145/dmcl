@@ -16,7 +16,7 @@ memory.rs    堆内存的自动分配与解析
 launcher.rs  拼启动命令行
 option.rs    LaunchOption、窗口 / 快速游玩 / 进程优先级 / 自定义信息 / JVM 兼容性 / 游戏完整性选项
 prepare.rs   启动链：读取版本 → 检查 / 补全文件、选择 Java → 解压 natives → 登录 → 生成参数 → 启动
-monitor.rs   GameMonitor：等待退出 / 停止游戏
+monitor.rs   游戏进程：启动、等待退出 / 停止
 ```
 
 ## 设计意图
