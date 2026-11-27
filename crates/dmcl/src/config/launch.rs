@@ -294,6 +294,7 @@ impl Config {
                 ProcessPriority::Normal => LaunchPriority::Normal,
                 ProcessPriority::High => LaunchPriority::High,
             },
+            log_path: None,
         };
         let chain = LaunchChainOptions {
             account_source,

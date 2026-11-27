@@ -12,8 +12,9 @@
 //!
 //! 一站式启动把「检查游戏完整性 → 登录 → 启动」组成一张任务图（见 [`crate::chain`]）：
 //! 检查游戏完整性里依次是读取版本、按配置检查 / 补全文件、选择 Java、解压 natives；启动里是
-//! 生成参数与起子进程。[`launch_chain`] 返回 `TaskGraph<GameMonitor>`，由调用者运行、
-//! 订阅事件，并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
+//! 生成参数与起子进程。[`launch_chain`] 返回 `TaskGraph<GameSession>`，由调用者运行、
+//! 订阅事件，并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉；[`GameSession`]
+//! 同时带着本次启动的 [`PreparedLaunch`] 快照，供异常退出报告使用。
 //!
 //! 登录只依赖 [`dmcl_account`]：账户快照、登录源与离线 / 微软实现在那个 crate 里，
 //! 本 crate 通过 [`LaunchChainOptions::account_source`] 取用。登录节点等文件补全与 natives
@@ -48,10 +49,11 @@
 //! let process = ProcessOptions {
 //!     working_dir: game_dir.clone(),
 //!     priority: ProcessPriority::Normal,
+//!     log_path: None,
 //! };
 //!
 //! // 检查游戏完整性 → 登录 → 启动
-//! let monitor = launch_chain(
+//! let session = launch_chain(
 //!     chain,
 //!     GameLaunchOptions::default(),
 //!     game_dir,
@@ -61,9 +63,9 @@
 //! )
 //! .run(|event| println!("{event}"))
 //! .await?;
-//! let mut monitor = std::sync::Arc::try_unwrap(monitor)
-//!     .map_err(|_| anyhow::anyhow!("游戏监控句柄仍被共享"))?;
-//! monitor.wait().await?;
+//! let mut session = std::sync::Arc::try_unwrap(session)
+//!     .map_err(|_| anyhow::anyhow!("游戏会话句柄仍被共享"))?;
+//! session.monitor.wait().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -85,4 +87,6 @@ pub use java::{JvmCompatibility, SelectJavaTask};
 pub use memory::{
     auto_max_memory, resolve_memory, system_available_mib, MemoryOptions, MemorySize,
 };
-pub use monitor::{GameMonitor, LaunchTask, ProcessOptions, ProcessPriority};
+pub use monitor::{
+    session_log_path, GameMonitor, GameSession, LaunchTask, ProcessOptions, ProcessPriority,
+};

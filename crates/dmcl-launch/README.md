@@ -15,7 +15,7 @@ arguments.rs  GameLaunchOptions、generate_arguments、GenerateArgsTask
 java.rs       JvmCompatibility、SelectJavaTask
 files.rs      GameIntegrity、文件 / natives 准备任务
 chain.rs      LaunchChainOptions、读取版本 / 登录任务、launch_chain
-monitor.rs    ProcessOptions、游戏进程启动、等待退出 / 停止
+monitor.rs    ProcessOptions、会话日志、GameSession、游戏进程启动、等待退出 / 停止
 ```
 
 ## 设计意图
@@ -26,7 +26,7 @@ monitor.rs    ProcessOptions、游戏进程启动、等待退出 / 停止
   内存偏好。
 - `GameLaunchOptions` 只控制生成参数：窗口、快速游玩、客户端 ID、自定义信息、附加 JVM /
   游戏参数。
-- `ProcessOptions` 只控制游戏进程：工作目录与优先级。
+- `ProcessOptions` 只控制游戏进程：工作目录、优先级与可选的日志文件路径。
 
 `version_isolation` 不是启动参数，也不再作为布尔值向下传：配置层按它算出 `game_dir` 与
 `ProcessOptions.working_dir`。`generate_arguments` 用 `game_dir` 替换 `${game_directory}`，
@@ -57,6 +57,14 @@ Java 后按它的架构调用 `resolve_memory`，把确定下来的 `MemorySize`
 `--quickPlayMultiplayer` / `--quickPlayRealms`，由 `generate_arguments` 拼进游戏参数。
 `ProcessOptions.priority` 只影响起进程：Windows 用进程创建标志，Unix 用 `nice`；Unix 上负
 nice 需要权限，没有权限时保持当前优先级启动。
+
+`ProcessOptions.log_path` 决定 stdout / stderr 的去向：`None` 继承调用方输出，`Some(path)`
+把两路输出逐行写进同一个文件。`session_log_path(instance)` 在系统临时目录下生成唯一路径；
+父目录与文件由 `spawn_game` 创建，创建失败时退回继承输出，`GameMonitor::log_path()` 返回
+`None`。`GameMonitor::wait()` 会等读取任务读到 EOF 再返回，保证日志已经收尾。
+
+`launch_chain` 的最终节点返回 `GameSession { monitor, launch }`：除了未 wait 的
+`GameMonitor`，还带着本次启动的 `PreparedLaunch` 快照，供 GUI 的异常退出报告使用。
 
 ### 启动与文件物化解耦
 

@@ -49,14 +49,14 @@ pub(crate) async fn run(vername: &str, config: &Config, root_path: &Path) -> Res
     let files = Arc::new(config.game_files_options(config.download_source()));
 
     let mut printer = ProgressPrinter::new();
-    let monitor = dmcl_launch::launch_chain(chain, game, game_dir, process, files, None)
+    let session = dmcl_launch::launch_chain(chain, game, game_dir, process, files, None)
         .run(|event| handle_event(&mut printer, event))
         .await?;
     printer.finish();
 
-    let mut monitor =
-        Arc::try_unwrap(monitor).map_err(|_| anyhow::anyhow!("游戏监控句柄仍被其他地方共享"))?;
-    monitor.wait().await?;
+    let mut session =
+        Arc::try_unwrap(session).map_err(|_| anyhow::anyhow!("游戏会话句柄仍被其他地方共享"))?;
+    session.monitor.wait().await?;
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 //! 启动链：读取版本 → 检查 / 补全文件、选择 Java → 解压 natives → 登录 →
 //! 生成参数 → 启动。
 //!
-//! [`launch_chain`] 把它们组成 `TaskGraph<GameMonitor>`，显示为「检查游戏完整性 → 登录 →
+//! [`launch_chain`] 把它们组成 `TaskGraph<GameSession>`，显示为「检查游戏完整性 → 登录 →
 //! 启动」三步：读取版本后，检查文件与选 Java 并行；natives 依赖两者；登录等文件补全和
 //! natives 都结束才开始，避免会话在长时间下载中过期；生成参数依赖文件、账户与选好的 Java，
 //! 启动是唯一的最终节点。
@@ -19,7 +19,7 @@ use crate::arguments::{GameLaunchOptions, GenerateArgsTask};
 use crate::files::{GameIntegrity, PrepareLaunchFilesTask, PrepareNativesTask};
 use crate::java::{JvmCompatibility, SelectJavaTask};
 use crate::memory::MemoryOptions;
-use crate::monitor::{GameMonitor, LaunchTask, ProcessOptions};
+use crate::monitor::{GameSession, LaunchTask, ProcessOptions};
 use dmcl_account::{Account, AccountSource};
 
 /// 控制启动链的输入。
@@ -104,7 +104,7 @@ impl Task<(Arc<ResolvedVersion>, Arc<JavaOption>), Account> for LoginTask {
 ///
 /// 检查游戏完整性里，读取版本后检查文件与选 Java 并行，natives 同时依赖版本与 Java；
 /// 登录等文件补全和 natives 都完成；启动里生成参数同时依赖文件、账户与选好的 java，
-/// 最终节点「启动游戏」返回 `GameMonitor`。
+/// 最终节点「启动游戏」返回 [`GameSession`]。
 pub fn launch_chain(
     chain: LaunchChainOptions,
     game: GameLaunchOptions,
@@ -112,7 +112,7 @@ pub fn launch_chain(
     process: ProcessOptions,
     files: Arc<GameFilesOptions>,
     jre: Option<JreAutoInstall>,
-) -> TaskGraph<GameMonitor> {
+) -> TaskGraph<GameSession> {
     assert_eq!(
         game_dir, process.working_dir,
         "game_dir 必须与 ProcessOptions.working_dir 一致"
@@ -387,6 +387,7 @@ mod tests {
         let process = ProcessOptions {
             working_dir: root.join("versions").join("1.0"),
             priority: ProcessPriority::Normal,
+            log_path: None,
         };
         let _ = launch_chain(
             chain,
