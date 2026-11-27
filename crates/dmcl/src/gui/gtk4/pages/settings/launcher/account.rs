@@ -2,10 +2,10 @@
 
 use std::rc::Rc;
 
-use dmcl_launch::microsoft::{
-    device_code_login, DeviceCodeLogin, DeviceCodePresenter, DeviceCodePrompt,
+use dmcl_account::{
+    device_code_login, DeviceCodeLogin, DeviceCodePresenter, DeviceCodePrompt, RefreshTokenStore,
+    StoredCredential,
 };
-use dmcl_launch::{RefreshTokenStore, StoredCredential};
 use relm4::adw;
 use relm4::adw::prelude::*;
 use relm4::gtk;

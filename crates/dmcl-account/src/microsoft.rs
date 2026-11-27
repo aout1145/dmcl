@@ -17,7 +17,12 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, AccountSource};
-use crate::LAUNCHER_VERSION;
+
+/// 访问 Microsoft / Xbox 服务时的 User-Agent。
+///
+/// 账户 crate 不依赖 `dmcl-launch`，因此在这里用 workspace 版本单独拼；与启动器自身的
+/// `dmcl/{version}` 保持一致。
+const USER_AGENT: &str = concat!("dmcl/", env!("CARGO_PKG_VERSION"));
 
 /// 编译时嵌入的 Microsoft Entra 公共客户端 ID。
 ///
@@ -202,7 +207,7 @@ fn client_id() -> Result<&'static str> {
 
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(format!("dmcl/{LAUNCHER_VERSION}"))
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap_or_default()

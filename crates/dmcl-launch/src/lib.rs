@@ -1,4 +1,4 @@
-//! 账户、命令行生成、启动与状态监控。
+//! 命令行生成、启动与状态监控。
 //!
 //! 两条设计要点：
 //!
@@ -15,16 +15,18 @@
 //! 生成参数与起子进程。[`launch_chain`] 返回 `TaskGraph<GameMonitor>`，由调用者运行、
 //! 订阅事件，并在拿到**未 wait** 的 [`GameMonitor`] 后决定何时等待或停掉。
 //!
-//! [`Account`] 是登录完成后用来拼命令行的只读快照；[`AccountSource`] 负责 `login` /
-//! `refresh`。登录节点等文件补全与 natives 都结束才开始，避免在线会话在长时间下载中过期。
+//! 登录只依赖 [`dmcl_account`]：账户快照、登录源与离线 / 微软实现在那个 crate 里，
+//! 本 crate 通过 [`LaunchChainOptions::account_source`] 取用。登录节点等文件补全与 natives
+//! 都结束才开始，避免在线会话在长时间下载中过期。
 //!
 //! ```no_run
 //! use std::sync::Arc;
+//! use dmcl_account::OfflineAccountSource;
 //! use dmcl_game::{GameFilesOptions, VersionRef};
 //! use dmcl_java::JavaOption;
 //! use dmcl_launch::{
 //!     launch_chain, GameIntegrity, GameLaunchOptions, JvmCompatibility, LaunchChainOptions,
-//!     MemoryOptions, OfflineAccountSource, ProcessOptions, ProcessPriority,
+//!     MemoryOptions, ProcessOptions, ProcessPriority,
 //! };
 //!
 //! # async fn run(root: std::path::PathBuf, game: Arc<GameFilesOptions>) -> anyhow::Result<()> {
@@ -66,16 +68,13 @@
 //! # }
 //! ```
 
-pub mod account;
 pub mod arguments;
 pub mod chain;
 pub mod files;
 pub mod java;
 pub mod memory;
-pub mod microsoft;
 pub mod monitor;
 
-pub use account::{Account, AccountSource, OfflineAccountSource};
 pub use arguments::{
     generate_arguments, GameLaunchOptions, GenerateArgsTask, PreparedLaunch, QuickPlay, WindowMode,
     LAUNCHER_NAME, LAUNCHER_VERSION,
@@ -85,9 +84,5 @@ pub use files::{GameIntegrity, PrepareLaunchFilesTask, PrepareNativesTask};
 pub use java::{JvmCompatibility, SelectJavaTask};
 pub use memory::{
     auto_max_memory, resolve_memory, system_available_mib, MemoryOptions, MemorySize,
-};
-pub use microsoft::{
-    device_code_login, DeviceCodeLogin, DeviceCodePresenter, DeviceCodePrompt,
-    MicrosoftAccountSource, RefreshTokenStore, StoredCredential, CLIENT_ID as MICROSOFT_CLIENT_ID,
 };
 pub use monitor::{GameMonitor, LaunchTask, ProcessOptions, ProcessPriority};

@@ -698,6 +698,7 @@ dependencies = [
  "clap",
  "dialoguer",
  "dirs",
+ "dmcl-account",
  "dmcl-download",
  "dmcl-game",
  "dmcl-install",
@@ -715,6 +716,20 @@ dependencies = [
  "shell-words",
  "sysinfo",
  "tokio",
+]
+
+[[package]]
+name = "dmcl-account"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "md-5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -784,19 +799,16 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dmcl-account",
  "dmcl-download",
  "dmcl-game",
  "dmcl-java",
  "dmcl-mcmeta",
  "dmcl-task",
  "libc",
- "md-5",
- "reqwest",
- "serde",
  "serde_json",
  "sysinfo",
  "tokio",
- "uuid",
  "version-compare",
 ]
 

@@ -22,8 +22,8 @@ use dmcl_mcmeta::vanilla::{rules_allow, Argument, RuleContext, VersionJson};
 use dmcl_task::{Task, TaskContext};
 use version_compare::{compare_to, Cmp};
 
-use crate::account::Account;
 use crate::memory::{resolve_memory, MemoryOptions, MemorySize};
+use dmcl_account::Account;
 
 /// 启动器名字（替换 `${launcher_name}`）。
 pub const LAUNCHER_NAME: &str = "dmcl";

@@ -15,12 +15,12 @@ use dmcl_game::{resolve_version, GameFilesOptions, ResolvedVersion, VersionRef};
 use dmcl_java::{JavaOption, JavaResolver, JreAutoInstall};
 use dmcl_task::{Task, TaskContext, TaskGraph, TaskGraphBuilder};
 
-use crate::account::{Account, AccountSource};
 use crate::arguments::{GameLaunchOptions, GenerateArgsTask};
 use crate::files::{GameIntegrity, PrepareLaunchFilesTask, PrepareNativesTask};
 use crate::java::{JvmCompatibility, SelectJavaTask};
 use crate::memory::MemoryOptions;
 use crate::monitor::{GameMonitor, LaunchTask, ProcessOptions};
+use dmcl_account::{Account, AccountSource};
 
 /// 控制启动链的输入。
 ///
@@ -185,8 +185,8 @@ pub fn launch_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::account::OfflineAccountSource;
     use crate::monitor::ProcessPriority;
+    use dmcl_account::OfflineAccountSource;
     use dmcl_java::{default_java_roots, find_java};
     use dmcl_mcmeta::source::DownloadSource;
     use dmcl_task::{task_fn, ProgressHandle};

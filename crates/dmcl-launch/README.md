@@ -1,16 +1,15 @@
 # dmcl-launch
 
-账户、命令行生成、启动与状态监控。
+Java 选择、命令行生成、启动与状态监控。
 
-在 workspace 内依赖 `dmcl-game`、`dmcl-java`、`dmcl-mcmeta` 和 `dmcl-task`。它**不依赖
-`dmcl-install`**，也**不读全局配置**：账户来源、版本引用、Java 解析器、JVM 兼容性、文件
-完整性、内存偏好、窗口 / 快速游玩 / 附加参数、进程工作目录与优先级全部由调用者传入。
+在 workspace 内依赖 `dmcl-account`、`dmcl-game`、`dmcl-java`、`dmcl-mcmeta` 和
+`dmcl-task`。它**不依赖 `dmcl-install`**，也**不读全局配置**：账户来源、版本引用、Java
+解析器、JVM 兼容性、文件完整性、内存偏好、窗口 / 快速游玩 / 附加参数、进程工作目录与
+优先级全部由调用者传入。
 
 ## 模块布局
 
 ```text
-account.rs    Account（登录快照）与 AccountSource（登录 / 刷新）
-microsoft.rs  微软账户：设备代码登录、refresh token 刷新、Xbox / Minecraft 会话
 memory.rs     MemoryOptions（用户偏好）、MemorySize（确定值）与自动分配
 arguments.rs  GameLaunchOptions、generate_arguments、GenerateArgsTask
 java.rs       JvmCompatibility、SelectJavaTask
@@ -33,18 +32,6 @@ monitor.rs    ProcessOptions、游戏进程启动、等待退出 / 停止
 `ProcessOptions.working_dir`。`generate_arguments` 用 `game_dir` 替换 `${game_directory}`，
 `spawn_game` 用 `working_dir` 作为子进程的 `current_dir`；两者互不推导。`launch_chain`
 要求两者一致，参数错误会在构图时立刻暴露。
-
-### 账户分两层
-
-`Account` 是登录完成后用于拼命令行的只读快照，`AccountSource` 负责登录 / 刷新并产出快照。
-账户层不依赖启动链或任务系统，启动链只是它的调用方之一，账户管理页也可以直接复用。
-
-### 微软账户
-
-设备代码登录只负责交互式授权：请求设备代码、展示给用户、轮询令牌并换取 Xbox / Minecraft
-会话。`MicrosoftAccountSource` 只做静默刷新，凭据由调用方实现 `RefreshTokenStore` 保存，
-这个 crate 不依赖具体凭据库。凭据缺失或失效时按「尚未登录 / 登录已过期」返回错误，不会在
-启动游戏时突然要求浏览器授权。Azure 客户端 ID 通过编译期环境变量嵌入。
 
 ### Java 与内存
 

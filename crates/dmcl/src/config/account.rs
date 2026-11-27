@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::{
+use dmcl_account::{
     AccountSource, MicrosoftAccountSource, OfflineAccountSource, RefreshTokenStore,
     StoredCredential,
 };

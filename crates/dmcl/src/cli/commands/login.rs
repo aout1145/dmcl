@@ -1,7 +1,7 @@
 //! `login` —— 微软账户设备代码登录。
 
 use anyhow::{anyhow, Result};
-use dmcl_launch::microsoft::{
+use dmcl_account::{
     device_code_login, DeviceCodePresenter, DeviceCodePrompt, RefreshTokenStore, StoredCredential,
 };
 
