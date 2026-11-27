@@ -1,8 +1,8 @@
 //! 游戏堆内存的自动分配与解析。
 //!
-//! 配置里的 `min_memory` / `max_memory` 都可以为 `null`：`null` 表示交给启动器按系统
-//! 可用内存和所选 Java 的架构决定。这里只做纯计算，系统内存由 [`system_available_mib`]
-//! 读取。
+//! 配置里的 `min` / `max` 都可以为 `null`：`null` 表示交给启动器按系统可用内存和
+//! 所选 Java 的架构决定。这里只做纯计算，系统内存由 [`system_available_mib`] 读取；
+//! 生成启动参数只接受已经确定下来的 [`MemorySize`]。
 
 use dmcl_mcmeta::os::Arch;
 
@@ -14,6 +14,20 @@ const X86_MAX_MIB: u32 = 1536;
 
 /// 读不到系统可用内存时固定使用的堆上限（MiB）。
 const UNKNOWN_AVAILABLE_MIB: u32 = 1536;
+
+/// 用户的内存偏好（MiB）；`None` 表示自动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryOptions {
+    pub min: Option<u32>,
+    pub max: Option<u32>,
+}
+
+/// 确定下来的堆大小（MiB），对应 JVM 的 `-Xms` / `-Xmx`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemorySize {
+    pub min: u32,
+    pub max: u32,
+}
 
 /// 当前系统可分配给新进程的内存（MiB）；读不到时返回 `None`。
 pub fn system_available_mib() -> Option<u32> {
@@ -46,37 +60,38 @@ fn auto_max_memory_for(available_mib: Option<u32>, java_arch: Option<Arch>) -> u
     max
 }
 
-/// 解析配置里的可空内存值，返回实际传给 JVM 的 `(Xms, Xmx)`（MiB）。
+/// 把用户偏好解析成实际传给 JVM 的堆大小（MiB）。
 ///
-/// * `max_memory` 为 `None` 时用 [`auto_max_memory`]；32 位 Java 下显式上限也会压到 1.5 GiB。
-/// * `min_memory` 为 `None` 时取最终的 `max_memory`。
-/// * 显式 `min_memory` 大于最终上限时**原样保留**（由调用方决定是否告警）。
-pub fn resolve_memory(
-    min_memory: Option<u32>,
-    max_memory: Option<u32>,
-    java_arch: Option<Arch>,
-) -> (u32, u32) {
-    resolve_memory_for(min_memory, max_memory, system_available_mib(), java_arch)
+/// * `max` 为 `None` 时用 [`auto_max_memory`]；32 位 Java 下显式上限也会压到 1.5 GiB。
+/// * `min` 为 `None` 时取最终的 `max`。
+/// * 显式 `min` 大于最终上限时**原样保留**（由调用方决定是否告警）。
+pub fn resolve_memory(options: &MemoryOptions, java_arch: Option<Arch>) -> MemorySize {
+    resolve_memory_for(options, system_available_mib(), java_arch)
 }
 
 /// [`resolve_memory`] 的纯计算版本，便于测试。
 fn resolve_memory_for(
-    min_memory: Option<u32>,
-    max_memory: Option<u32>,
+    options: &MemoryOptions,
     available_mib: Option<u32>,
     java_arch: Option<Arch>,
-) -> (u32, u32) {
-    let mut max = max_memory.unwrap_or_else(|| auto_max_memory_for(available_mib, java_arch));
+) -> MemorySize {
+    let mut max = options
+        .max
+        .unwrap_or_else(|| auto_max_memory_for(available_mib, java_arch));
     if java_arch == Some(Arch::X86) {
         max = max.min(X86_MAX_MIB);
     }
-    let min = min_memory.unwrap_or(max);
-    (min, max)
+    let min = options.min.unwrap_or(max);
+    MemorySize { min, max }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn options(min: Option<u32>, max: Option<u32>) -> MemoryOptions {
+        MemoryOptions { min, max }
+    }
 
     #[test]
     fn auto_max_takes_three_quarters_with_a_one_gib_floor() {
@@ -91,8 +106,11 @@ mod tests {
         assert_eq!(auto_max_memory_for(None, Some(Arch::X86_64)), 1536);
         assert_eq!(auto_max_memory_for(None, None), 1536);
         assert_eq!(
-            resolve_memory_for(None, None, None, Some(Arch::X86_64)),
-            (1536, 1536)
+            resolve_memory_for(&options(None, None), None, Some(Arch::X86_64)),
+            MemorySize {
+                min: 1536,
+                max: 1536
+            }
         );
     }
 
@@ -103,36 +121,58 @@ mod tests {
             X86_MAX_MIB
         );
         assert_eq!(
-            resolve_memory_for(Some(512), Some(4096), Some(8192), Some(Arch::X86)),
-            (512, X86_MAX_MIB)
+            resolve_memory_for(&options(Some(512), Some(4096)), Some(8192), Some(Arch::X86)),
+            MemorySize {
+                min: 512,
+                max: X86_MAX_MIB
+            }
         );
         assert_eq!(
-            resolve_memory_for(None, None, Some(8192), Some(Arch::X86)),
-            (X86_MAX_MIB, X86_MAX_MIB)
+            resolve_memory_for(&options(None, None), Some(8192), Some(Arch::X86)),
+            MemorySize {
+                min: X86_MAX_MIB,
+                max: X86_MAX_MIB
+            }
         );
     }
 
     #[test]
     fn null_values_fall_back_to_the_auto_max() {
         assert_eq!(
-            resolve_memory_for(None, None, Some(8192), Some(Arch::X86_64)),
-            (6144, 6144)
+            resolve_memory_for(&options(None, None), Some(8192), Some(Arch::X86_64)),
+            MemorySize {
+                min: 6144,
+                max: 6144
+            }
         );
         assert_eq!(
-            resolve_memory_for(None, Some(2048), Some(8192), Some(Arch::X86_64)),
-            (2048, 2048)
+            resolve_memory_for(&options(None, Some(2048)), Some(8192), Some(Arch::X86_64)),
+            MemorySize {
+                min: 2048,
+                max: 2048
+            }
         );
         assert_eq!(
-            resolve_memory_for(Some(512), None, Some(8192), Some(Arch::X86_64)),
-            (512, 6144)
+            resolve_memory_for(&options(Some(512), None), Some(8192), Some(Arch::X86_64)),
+            MemorySize {
+                min: 512,
+                max: 6144
+            }
         );
     }
 
     #[test]
     fn an_explicit_min_above_the_max_is_kept() {
         assert_eq!(
-            resolve_memory_for(Some(4096), Some(2048), Some(8192), Some(Arch::X86_64)),
-            (4096, 2048)
+            resolve_memory_for(
+                &options(Some(4096), Some(2048)),
+                Some(8192),
+                Some(Arch::X86_64)
+            ),
+            MemorySize {
+                min: 4096,
+                max: 2048
+            }
         );
     }
 }

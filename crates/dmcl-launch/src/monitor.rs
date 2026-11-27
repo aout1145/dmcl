@@ -1,15 +1,38 @@
-//! 游戏进程监控。
+//! 游戏进程：配置、启动、等待退出 / 停止。
 
 use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use dmcl_task::{Task, TaskContext};
 
-use crate::option::ProcessPriority;
+use crate::arguments::{command_preview, PreparedLaunch};
+
+/// 游戏进程的优先级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessPriority {
+    /// 低于正常优先级。
+    Low,
+    /// 正常优先级。
+    #[default]
+    Normal,
+    /// 高于正常优先级。
+    High,
+}
+
+/// 游戏进程的配置。
+#[derive(Debug, Clone)]
+pub struct ProcessOptions {
+    /// 游戏进程的工作目录（spawn 用）。
+    pub working_dir: PathBuf,
+    pub priority: ProcessPriority,
+}
 
 /// 被启动的游戏进程。
 ///
-/// 原来是空 stub；这里持有子进程句柄，因此调用者可以等它退出，
-/// 也可以主动把它停掉（GUI 的"停止游戏"）。
+/// 这里持有子进程句柄，因此调用者可以等它退出，也可以主动把它停掉
+/// （GUI 的"停止游戏"）。
 pub struct GameMonitor {
     child: tokio::process::Child,
 }
@@ -49,24 +72,37 @@ impl GameMonitor {
     }
 }
 
-/// 用给定的工作目录与命令行参数启动游戏子进程，返回**未 wait** 的 [`GameMonitor`]。
+/// 用给定的命令行参数与进程配置启动游戏子进程，返回**未 wait** 的 [`GameMonitor`]。
 ///
-/// 抽成自由函数是为了让 [`crate::LaunchTask`] 能直接用 [`crate::PreparedLaunch`]
-/// 里已有的参数启动，不必再建一个 [`crate::GameLauncher`]、再选一次 java。这里**不打印**
-/// 任何东西：命令行由 [`crate::LaunchTask`] 通过进度事件流展示。
-pub(crate) fn spawn_game(
-    game_path: &std::path::Path,
-    args: &[String],
-    priority: ProcessPriority,
-) -> Result<GameMonitor> {
+/// `args` 已经包含 java 可执行文件；工作目录与优先级来自 [`ProcessOptions`]。
+/// 这里**不打印**任何东西：命令行由 [`LaunchTask`] 通过进度事件流展示。
+pub(crate) fn spawn_game(args: &[String], process: &ProcessOptions) -> Result<GameMonitor> {
     if args.is_empty() {
         return Err(anyhow!("命令为空"));
     }
     let mut command = tokio::process::Command::new(&args[0]);
-    command.args(&args[1..]).current_dir(game_path);
-    apply_priority(&mut command, priority);
+    command.args(&args[1..]).current_dir(&process.working_dir);
+    apply_priority(&mut command, process.priority);
     let child = command.spawn()?;
     Ok(GameMonitor::new(child))
+}
+
+/// 用 [`PreparedLaunch`] 里已经生成好的参数启动游戏，产出**未 wait** 的
+/// [`GameMonitor`]（等待 / 结束由调用者决定）。
+pub struct LaunchTask {
+    pub process: ProcessOptions,
+}
+
+#[async_trait::async_trait]
+impl Task<Arc<PreparedLaunch>, GameMonitor> for LaunchTask {
+    async fn run(&self, input: Arc<PreparedLaunch>, ctx: TaskContext) -> Result<GameMonitor> {
+        // 命令行经由事件流显示（走进度打印机），避免直接 println 与进度行抢行
+        ctx.log(format!(
+            "命令：{}",
+            command_preview(&input.game_dir, &input.args)
+        ));
+        spawn_game(&input.args, &self.process)
+    }
 }
 
 #[cfg(windows)]
@@ -140,5 +176,31 @@ mod tests {
         monitor.kill().await.unwrap();
         // 被强杀：unix 死于信号（没有退出码），windows 是一个非 0 退出码
         assert!(!monitor.wait().await.unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn spawn_game_uses_the_working_directory() {
+        let dir = std::env::temp_dir().join(format!("dmcl-spawn-cwd-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        #[cfg(windows)]
+        let args = vec![
+            "cmd".to_string(),
+            "/C".to_string(),
+            "mkdir marker".to_string(),
+        ];
+        #[cfg(not(windows))]
+        let args = vec!["mkdir".to_string(), "marker".to_string()];
+
+        let process = ProcessOptions {
+            working_dir: dir.clone(),
+            priority: ProcessPriority::Normal,
+        };
+        let mut monitor = spawn_game(&args, &process).unwrap();
+        assert!(monitor.wait().await.unwrap().success());
+        assert!(dir.join("marker").is_dir());
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

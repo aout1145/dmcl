@@ -32,7 +32,7 @@ pub struct Account {
 /// 突然要求用户去浏览器操作。
 #[async_trait::async_trait]
 pub trait AccountSource: Send + Sync {
-    /// 账户名，用于日志和 [`crate::LaunchOption`] 的 Debug 输出。
+    /// 账户名，用于日志和展示。
     fn name(&self) -> &str;
 
     /// 确保拿到一个可用会话。

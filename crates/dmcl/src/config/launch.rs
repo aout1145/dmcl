@@ -7,7 +7,8 @@ use anyhow::{anyhow, Result};
 use dmcl_game::VersionRef;
 use dmcl_java::{JavaInstalledHook, JavaResolver};
 use dmcl_launch::{
-    GameIntegrity as LaunchGameIntegrity, JvmCompatibility as LaunchJvmCompatibility, LaunchOption,
+    GameIntegrity as LaunchGameIntegrity, GameLaunchOptions,
+    JvmCompatibility as LaunchJvmCompatibility, LaunchChainOptions, MemoryOptions, ProcessOptions,
     ProcessPriority as LaunchPriority, QuickPlay as LaunchQuickPlay,
     WindowMode as LaunchWindowMode, LAUNCHER_NAME,
 };
@@ -267,64 +268,89 @@ impl Config {
         instance_result(launch, path, warnings)
     }
 
-    /// 配置 + 版本 + Java 解析器 → [`LaunchOption`]。
-    pub fn launch_option(
+    /// 配置 + 版本 + Java 解析器 → 启动链 / 游戏参数 / 游戏目录 / 进程参数。
+    pub fn launch_options(
         &self,
         launch: &LaunchConfig,
         version: VersionRef,
         java: Arc<dyn JavaResolver>,
         java_installed_hook: Option<Arc<dyn JavaInstalledHook>>,
-    ) -> Result<LaunchOption> {
+    ) -> Result<(
+        LaunchChainOptions,
+        GameLaunchOptions,
+        PathBuf,
+        ProcessOptions,
+    )> {
         let account_source = self.selected_account_source(launch)?;
-        let mut option = LaunchOption::new(account_source, version, java, java_installed_hook);
-        option.window = if launch.fullscreen {
-            LaunchWindowMode::Fullscreen
+        let game_dir = if launch.version_isolation {
+            version.dir()
         } else {
-            LaunchWindowMode::Windowed {
-                width: launch.window_width,
-                height: launch.window_height,
-            }
+            version.root.clone()
         };
-        option.min_memory = launch.min_memory;
-        option.max_memory = launch.max_memory;
-        option.custom_info = launch.custom_info.clone();
-        option.version_isolation = launch.version_isolation;
-        option.quick_play = launch.quick_play.as_ref().and_then(|quick| {
-            let value = quick.value.trim();
-            if value.is_empty() {
-                return None;
-            }
-            Some(match quick.target {
-                QuickPlayTarget::Singleplayer => LaunchQuickPlay::Singleplayer(value.to_string()),
-                QuickPlayTarget::Multiplayer => LaunchQuickPlay::Multiplayer(value.to_string()),
-                QuickPlayTarget::Realms => LaunchQuickPlay::Realms(value.to_string()),
-            })
-        });
-        option.process_priority = match launch.process_priority {
-            ProcessPriority::Low => LaunchPriority::Low,
-            ProcessPriority::Normal => LaunchPriority::Normal,
-            ProcessPriority::High => LaunchPriority::High,
+        let process = ProcessOptions {
+            working_dir: game_dir.clone(),
+            priority: match launch.process_priority {
+                ProcessPriority::Low => LaunchPriority::Low,
+                ProcessPriority::Normal => LaunchPriority::Normal,
+                ProcessPriority::High => LaunchPriority::High,
+            },
         };
-        option.jvm_compatibility = match launch.jvm_compatibility {
-            JvmCompatibility::Ignore => LaunchJvmCompatibility::Ignore,
-            JvmCompatibility::Check => LaunchJvmCompatibility::Check,
-            JvmCompatibility::Complete => LaunchJvmCompatibility::Complete,
+        let chain = LaunchChainOptions {
+            account_source,
+            version,
+            java,
+            jvm_compatibility: match launch.jvm_compatibility {
+                JvmCompatibility::Ignore => LaunchJvmCompatibility::Ignore,
+                JvmCompatibility::Check => LaunchJvmCompatibility::Check,
+                JvmCompatibility::Complete => LaunchJvmCompatibility::Complete {
+                    hook: java_installed_hook,
+                },
+            },
+            game_integrity: match launch.game_integrity {
+                GameIntegrity::Ignore => LaunchGameIntegrity::Ignore,
+                GameIntegrity::Check => LaunchGameIntegrity::Check,
+                GameIntegrity::Complete => LaunchGameIntegrity::Complete,
+            },
+            memory: MemoryOptions {
+                min: launch.min_memory,
+                max: launch.max_memory,
+            },
         };
-        option.game_integrity = match launch.game_integrity {
-            GameIntegrity::Ignore => LaunchGameIntegrity::Ignore,
-            GameIntegrity::Check => LaunchGameIntegrity::Check,
-            GameIntegrity::Complete => LaunchGameIntegrity::Complete,
+        let game = GameLaunchOptions {
+            window: if launch.fullscreen {
+                LaunchWindowMode::Fullscreen
+            } else {
+                LaunchWindowMode::Windowed {
+                    width: launch.window_width,
+                    height: launch.window_height,
+                }
+            },
+            quick_play: launch.quick_play.as_ref().and_then(|quick| {
+                let value = quick.value.trim();
+                if value.is_empty() {
+                    return None;
+                }
+                Some(match quick.target {
+                    QuickPlayTarget::Singleplayer => {
+                        LaunchQuickPlay::Singleplayer(value.to_string())
+                    }
+                    QuickPlayTarget::Multiplayer => LaunchQuickPlay::Multiplayer(value.to_string()),
+                    QuickPlayTarget::Realms => LaunchQuickPlay::Realms(value.to_string()),
+                })
+            }),
+            client_id: String::new(),
+            custom_info: launch.custom_info.clone(),
+            additional_jvm: launch
+                .additional_jvm
+                .as_deref()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+            additional_game: shell_words::split(&launch.additional_game)
+                .map_err(|_| anyhow!("游戏参数引号不配对：{}", launch.additional_game))?,
         };
-        option.additional_jvm = launch
-            .additional_jvm
-            .as_deref()
-            .unwrap_or_default()
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
-        option.additional_game = shell_words::split(&launch.additional_game)
-            .map_err(|_| anyhow!("游戏参数引号不配对：{}", launch.additional_game))?;
-        Ok(option)
+        Ok((chain, game, game_dir, process))
     }
 }
 
@@ -537,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_option_follows_the_config() {
+    fn launch_options_follow_the_config() {
         let dir = temp_dir("launch-options");
         let _ = std::fs::remove_dir_all(&dir);
         let root = dir.join("mc");
@@ -576,8 +602,8 @@ mod tests {
         );
         config.launch.java = JavaChoice::Named("jdk".to_string());
 
-        let option = config
-            .launch_option(
+        let (chain, game, game_dir, process) = config
+            .launch_options(
                 &config.launch,
                 VersionRef::new(&root, "1.20.1"),
                 Arc::new(dmcl_java::JavaOption {
@@ -588,34 +614,43 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert_eq!(option.version.root, root);
-        assert_eq!(option.version.name, "1.20.1");
+        assert_eq!(chain.version.root, root);
+        assert_eq!(chain.version.name, "1.20.1");
         assert_eq!(
-            option.window,
+            game.window,
             LaunchWindowMode::Windowed {
                 width: 1920,
                 height: 1080
             }
         );
-        assert_eq!(option.min_memory, Some(1024));
-        assert_eq!(option.max_memory, Some(4096));
-        assert_eq!(option.custom_info, "test");
-        assert!(option.additional_jvm.contains(&"-Da=1".to_string()));
-        assert!(option.additional_jvm.contains(&"-Db=2".to_string()));
-        assert_eq!(option.additional_game, vec!["--foo", "bar baz"]);
         assert_eq!(
-            option.quick_play,
+            chain.memory,
+            MemoryOptions {
+                min: Some(1024),
+                max: Some(4096)
+            }
+        );
+        assert_eq!(game.custom_info, "test");
+        assert!(game.additional_jvm.contains(&"-Da=1".to_string()));
+        assert!(game.additional_jvm.contains(&"-Db=2".to_string()));
+        assert_eq!(game.additional_game, vec!["--foo", "bar baz"]);
+        assert_eq!(
+            game.quick_play,
             Some(LaunchQuickPlay::Multiplayer("example.org".to_string()))
         );
-        assert_eq!(option.process_priority, LaunchPriority::High);
-        assert_eq!(option.jvm_compatibility, LaunchJvmCompatibility::Ignore);
-        assert_eq!(option.game_integrity, LaunchGameIntegrity::Check);
-        assert!(!option.version_isolation);
-        assert_eq!(option.account_source.name(), "Steve");
+        assert_eq!(process.priority, LaunchPriority::High);
+        assert!(matches!(
+            chain.jvm_compatibility,
+            LaunchJvmCompatibility::Ignore
+        ));
+        assert_eq!(chain.game_integrity, LaunchGameIntegrity::Check);
+        assert_eq!(game_dir, root);
+        assert_eq!(process.working_dir, root);
+        assert_eq!(chain.account_source.name(), "Steve");
 
         config.launch.fullscreen = true;
-        let option = config
-            .launch_option(
+        let (_, game, _, _) = config
+            .launch_options(
                 &config.launch,
                 VersionRef::new(&root, "1.20.1"),
                 Arc::new(dmcl_java::JavaOption {
@@ -626,11 +661,27 @@ mod tests {
                 None,
             )
             .unwrap();
-        assert_eq!(option.window, LaunchWindowMode::Fullscreen);
+        assert_eq!(game.window, LaunchWindowMode::Fullscreen);
+
+        config.launch.version_isolation = true;
+        let (_, _, game_dir, process) = config
+            .launch_options(
+                &config.launch,
+                VersionRef::new(&root, "1.20.1"),
+                Arc::new(dmcl_java::JavaOption {
+                    path: PathBuf::from("/nonexistent/bin/java"),
+                    major: 17,
+                    arch: dmcl_mcmeta::os::Arch::X86_64,
+                }),
+                None,
+            )
+            .unwrap();
+        assert_eq!(game_dir, root.join("versions").join("1.20.1"));
+        assert_eq!(process.working_dir, game_dir);
 
         config.launch.additional_game = "--foo \"bar".to_string();
         let error = config
-            .launch_option(
+            .launch_options(
                 &config.launch,
                 VersionRef::new(&root, "1.20.1"),
                 Arc::new(dmcl_java::JavaOption {
@@ -642,6 +693,68 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.to_string().contains("引号不配对"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct NoopHook;
+
+    #[async_trait::async_trait]
+    impl dmcl_java::JavaInstalledHook for NoopHook {
+        async fn on_installed(&self, _details: &dmcl_java::JavaDetails) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn only_complete_jvm_compatibility_keeps_the_install_hook() {
+        let dir = temp_dir("launch-jvm-hook");
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("mc");
+
+        let mut config = Config::default();
+        config.accounts.insert(
+            "steve".to_string(),
+            AccountConfig::Offline {
+                username: "Steve".to_string(),
+            },
+        );
+        config.launch.account = Some("steve".to_string());
+        let hook: Arc<dyn dmcl_java::JavaInstalledHook> = Arc::new(NoopHook);
+
+        config.launch.jvm_compatibility = JvmCompatibility::Complete;
+        let (chain, _, _, _) = config
+            .launch_options(
+                &config.launch,
+                VersionRef::new(&root, "1.20.1"),
+                Arc::new(dmcl_java::JavaOption {
+                    path: PathBuf::from("/nonexistent/bin/java"),
+                    major: 17,
+                    arch: dmcl_mcmeta::os::Arch::X86_64,
+                }),
+                Some(hook.clone()),
+            )
+            .unwrap();
+        assert!(chain.jvm_compatibility.allows_auto_install());
+        assert!(chain.jvm_compatibility.installed_hook().is_some());
+
+        for compatibility in [JvmCompatibility::Ignore, JvmCompatibility::Check] {
+            config.launch.jvm_compatibility = compatibility;
+            let (chain, _, _, _) = config
+                .launch_options(
+                    &config.launch,
+                    VersionRef::new(&root, "1.20.1"),
+                    Arc::new(dmcl_java::JavaOption {
+                        path: PathBuf::from("/nonexistent/bin/java"),
+                        major: 17,
+                        arch: dmcl_mcmeta::os::Arch::X86_64,
+                    }),
+                    Some(hook.clone()),
+                )
+                .unwrap();
+            assert!(!chain.jvm_compatibility.allows_auto_install());
+            assert!(chain.jvm_compatibility.installed_hook().is_none());
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

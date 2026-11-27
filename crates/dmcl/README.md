@@ -25,8 +25,9 @@ gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 REA
 ### 唯一的配置读取层
 
 除 `dmcl` 外，没有任何 crate 会去读配置文件。这一层把配置翻译成各业务 crate 的 `*Options`，
-业务 crate 因此可以被 GUI / TUI / 测试用自定义选项直接调用。配置的键、默认值与用户可见
-含义在 `config/` 各段定义和根 README 里说明。
+业务 crate 因此可以被 GUI / TUI / 测试用自定义选项直接调用。启动配置由
+`Config::launch_options` 翻译成启动链 / 游戏参数 / 进程参数三份选项，以及生成参数用的游戏
+目录。配置的键、默认值与用户可见含义在 `config/` 各段定义和根 README 里说明。
 
 ### 全局配置与实例覆盖
 

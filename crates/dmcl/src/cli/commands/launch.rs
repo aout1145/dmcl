@@ -45,11 +45,11 @@ pub(crate) async fn run(vername: &str, config: &Config, root_path: &Path) -> Res
         configs: config.javas.clone(),
     });
     let version = VersionRef::new(root_path.to_path_buf(), vername);
-    let option = config.launch_option(&launch, version, java, None)?;
-    let game = Arc::new(config.game_files_options(config.download_source()));
+    let (chain, game, game_dir, process) = config.launch_options(&launch, version, java, None)?;
+    let files = Arc::new(config.game_files_options(config.download_source()));
 
     let mut printer = ProgressPrinter::new();
-    let monitor = dmcl_launch::launch_chain(option, game, None)
+    let monitor = dmcl_launch::launch_chain(chain, game, game_dir, process, files, None)
         .run(|event| handle_event(&mut printer, event))
         .await?;
     printer.finish();

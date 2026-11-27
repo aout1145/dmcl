@@ -13,7 +13,7 @@ use std::sync::Arc;
 use dmcl::config::{AccountConfig, Config};
 use dmcl_game::{check_integrity, resolve_version, VersionRef};
 use dmcl_java::JavaOption;
-use dmcl_launch::GameLauncher;
+use dmcl_launch::generate_arguments;
 use dmcl_task::{task_fn, TaskGraphBuilder};
 
 const VERSION: &str = "1.7.10";
@@ -62,25 +62,23 @@ async fn the_whole_chain_runs_from_a_config_document() {
         .join(format!("versions/{VERSION}/{VERSION}.json"))
         .is_file());
 
-    // 配置 → 启动选项 → 启动器；测试用固定的 Java，避免依赖本机安装。
+    // 配置 → 启动选项；测试用固定的 Java，避免依赖本机安装。
     let java = JavaOption {
         path: std::env::temp_dir().join("dmcl-online-java"),
         major: 17,
         arch: dmcl_mcmeta::os::Arch::X86_64,
     };
-    let option = config
-        .launch_option(
+    let (chain, game, game_dir, _process) = config
+        .launch_options(
             &config.launch,
             VersionRef::new(&root, VERSION),
-            Arc::new(java),
+            Arc::new(java.clone()),
             None,
         )
-        .expect("launch_option");
-    assert_eq!(option.account_source.name(), "player");
-    let account = option.account_source.login().await.expect("login");
-    let launcher = GameLauncher::new(option, account)
-        .await
-        .expect("GameLauncher");
+        .expect("launch_options");
+    assert_eq!(chain.account_source.name(), "player");
+    let account = chain.account_source.login().await.expect("login");
+    let memory = dmcl_launch::resolve_memory(&chain.memory, Some(java.arch));
 
     // 只装了元数据，完整性检查必须报告缺件，并且给出可用来修复的模板地址
     let version = resolve_version(&VersionRef::new(&root, VERSION))
@@ -101,7 +99,8 @@ async fn the_whole_chain_runs_from_a_config_document() {
     );
 
     // 命令行能生成；所有模板都必须被替换掉。
-    let launcher = Arc::new(tokio::sync::Mutex::new(launcher));
+    let resolved = Arc::new(version);
+    let account = Arc::new(account);
     let mut builder = TaskGraphBuilder::new("生成命令行");
     let step = builder.step("生成命令行");
     let sink = builder.add(
@@ -109,19 +108,31 @@ async fn the_whole_chain_runs_from_a_config_document() {
         "生成命令行",
         (),
         task_fn(move |_: (), ctx| {
-            let launcher = launcher.clone();
-            async move { launcher.lock().await.generate_command(&ctx).await }
+            let resolved = resolved.clone();
+            let account = account.clone();
+            let java = java.clone();
+            let game_dir = game_dir.clone();
+            let game = game.clone();
+            async move {
+                generate_arguments(&resolved, &account, &java, &game_dir, memory, &game, &ctx).await
+            }
         }),
     );
-    let command = builder
+    let args = builder
         .build(sink)
         .unwrap()
         .run(|_| {})
         .await
-        .expect("generate_command");
-    let command = (*command).clone();
-    assert!(command.contains("--username player"), "{command}");
-    assert!(!command.contains("${"), "还有未替换的模板: {command}");
+        .expect("generate_arguments");
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--username" && pair[1] == "player"),
+        "{args:?}"
+    );
+    assert!(
+        !args.iter().any(|arg| arg.contains("${")),
+        "还有未替换的模板: {args:?}"
+    );
 }
 
 #[tokio::test]
