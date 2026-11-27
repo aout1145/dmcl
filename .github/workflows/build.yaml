@@ -48,7 +48,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dmcl-${{ matrix.os }}
+          name: dacite-${{ matrix.os }}
           path: |
-            target/release/dmcl
-            target/release/dmcl.exe
+            target/release/dacite
+            target/release/dacite.exe

@@ -76,7 +76,7 @@ instance/loaders.rs        从 dmcl-patches 读取当前加载器
   是否继续；只有「检查并补全」会下载缺失文件与 natives jar。安装流程已按当前平台下载
   natives jar。
 - **自定义信息**：`custom_info` 是传给 `--versionType`、显示在游戏主菜单的版本类型；默认
-  `dmcl`，为空时沿用版本 JSON 的 `type`。
+  `Dacite`，为空时沿用版本 JSON 的 `type`。
 - **实例设置**：同一个 root + 实例名只保留一个标签，再次「管理」时聚焦已有标签；页面关闭
   即销毁。实例覆盖是字段级的：只写本次改动过的 `launch` 字段到实例 `dmcl.json`，未覆盖的
   字段继续继承全局；选「使用全局配置」就删掉对应键。是否覆盖以实例文件里出现的键为准，

@@ -50,7 +50,7 @@ extract.rs    薄 extract_zip（zip 9 的安全解压）
 ### 版本与加载器识别
 
 `detect_version` 回答「这个实例是什么版本、装了哪些加载器」。识别结果只用于展示，字段都
-可以为空：优先读 DMCL 写入的 `dmcl-patches`，没有历史时分析 `libraries` 的 maven 坐标，
+可以为空：优先读 Dacite 写入的 `dmcl-patches`，没有历史时分析 `libraries` 的 maven 坐标，
 再用 FML 启动参数补齐加载器版本，仍拿不到 Minecraft 版本才读主 jar。版本类型直接取版本
 JSON 的 `type` 字段（release / snapshot / old），识别不出时为 `None`。旧版本的显示标签
 （`1.0.0`、`Alpha v1.2.6`、`Classic 0.0.13a`、`Infdev`）保持 jar 里的写法，不映射成官方

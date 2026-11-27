@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# 把 GTK4 版 dmcl 打成自包含的 DMCL.app（在 macOS + Homebrew 环境里运行）。
+# 把 GTK4 版 Dacite Launcher 打成自包含的 Dacite Launcher.app（在 macOS + Homebrew 环境里运行）。
 #
 # 依赖：brew install pkgconf gtk4 libadwaita adwaita-icon-theme gsettings-desktop-schemas dylibbundler
 set -euo pipefail
 
 root="$(pwd)"
-app="$root/dist/DMCL.app"
+app="$root/dist/Dacite Launcher.app"
 res="$app/Contents/Resources"
 frameworks="$app/Contents/Frameworks"
-zipfile="$root/dist/dmcl-gtk4-macos.zip"
+zipfile="$root/dist/dacite-gtk4-macos.zip"
 version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
 
 rm -rf "$app" "$zipfile"
 mkdir -p "$app/Contents/MacOS" "$frameworks" "$res/share" "$res/lib" "$root/dist"
 
-cp target/release/dmcl "$app/Contents/MacOS/dmcl-bin"
+cp target/release/dacite "$app/Contents/MacOS/dacite-bin"
 
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>DMCL</string>
-  <key>CFBundleDisplayName</key><string>DMCL</string>
+  <key>CFBundleName</key><string>Dacite Launcher</string>
+  <key>CFBundleDisplayName</key><string>Dacite Launcher</string>
   <key>CFBundleIdentifier</key><string>dev.dmcl.launcher</string>
   <key>CFBundleVersion</key><string>${version}</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleExecutable</key><string>dmcl</string>
+  <key>CFBundleExecutable</key><string>dacite</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
 </dict>
@@ -91,7 +91,7 @@ fi
 
 # 主程序和模块依赖的 Homebrew dylib 全部收进 Contents/Frameworks。
 dylibbundler -od -b \
-  -x "$app/Contents/MacOS/dmcl-bin" \
+  -x "$app/Contents/MacOS/dacite-bin" \
   -d "$frameworks" \
   -p "@executable_path/../Frameworks/"
 
@@ -137,7 +137,7 @@ if [ -d "$res/lib/gio/modules" ]; then
 fi
 
 # 启动脚本：设置 GTK 的运行时路径并默认启动 GUI。
-cat > "$app/Contents/MacOS/dmcl" <<'EOF'
+cat > "$app/Contents/MacOS/dacite" <<'EOF'
 #!/bin/bash
 set -e
 dir="$(cd "$(dirname "$0")" && pwd)"
@@ -154,9 +154,9 @@ if [ -d "$res/lib/gio/modules" ]; then
 fi
 export DYLD_FALLBACK_LIBRARY_PATH="$dir/../Frameworks:${DYLD_FALLBACK_LIBRARY_PATH:-}"
 cd "$res"
-exec "$dir/dmcl-bin" gui "$@"
+exec "$dir/dacite-bin" gui "$@"
 EOF
-chmod +x "$app/Contents/MacOS/dmcl"
+chmod +x "$app/Contents/MacOS/dacite"
 
 # Ad-hoc 签名；没有开发者证书时至少让 Gatekeeper 少拦一层。
 codesign --force --deep --sign - "$app"

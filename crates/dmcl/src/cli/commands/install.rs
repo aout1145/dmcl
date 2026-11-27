@@ -49,7 +49,7 @@ impl InstallArgs {
     }
 }
 
-/// `dmcl install <mc-version-id> [version-name] [--forge …]`。
+/// `dacite install <mc-version-id> [version-name] [--forge …]`。
 pub(crate) async fn run(args: InstallArgs, config: &Config, root_path: &Path) -> Result<()> {
     let source = config.download_source();
 

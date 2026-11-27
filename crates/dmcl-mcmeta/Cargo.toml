@@ -1,6 +1,6 @@
 [package]
 name = "dmcl-mcmeta"
-description = "Minecraft metadata: version documents, rules, download sources and url templates."
+description = "Minecraft metadata: version documents, rules, download sources and URL templates."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -157,7 +157,7 @@ pub(crate) fn unique_account_name(
     }
 }
 
-/// 默认账户表：空的。账户由 `dmcl login`、图形界面的账户管理页创建，或由用户自己
+/// 默认账户表：空的。账户由 `dacite login`、图形界面的账户管理页创建，或由用户自己
 /// 写进配置。
 pub(super) fn default_accounts() -> IndexMap<String, AccountConfig> {
     IndexMap::new()

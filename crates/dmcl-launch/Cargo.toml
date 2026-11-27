@@ -1,6 +1,6 @@
 [package]
 name = "dmcl-launch"
-description = "Accounts, java selection, command line generation and game monitoring."
+description = "Build the launch chain, generate game arguments, launch and monitor the game process."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

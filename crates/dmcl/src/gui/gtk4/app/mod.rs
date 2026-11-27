@@ -116,7 +116,7 @@ impl SimpleComponent for AppModel {
     view! {
         adw::ApplicationWindow {
             set_application: Some(&relm4::main_adw_application()),
-            set_title: Some("DMCL"),
+            set_title: Some("Dacite — Minecraft Launcher"),
             set_default_width: 960,
             set_default_height: 640,
 
@@ -534,11 +534,11 @@ pub(crate) fn run(loaded: LoadedConfig, startup_root: String) -> anyhow::Result<
     // 配置只读一次，之后所有页面都从全局仓库取；加载警告留给根组件弹窗。
     let LoadedConfig { config, error } = loaded;
     config_store::init(config);
-    // 只把程序名传给 GApplication：`dmcl gui` 里的 `gui` 是给我们自己解析的，
+    // 只把程序名传给 GApplication：`dacite gui` 里的 `gui` 是给我们自己解析的，
     // 别让它被当成要打开的文件（否则 GLib 会警告 "can not open files"）。
     let mut args: Vec<String> = std::env::args().take(1).collect();
     if args.is_empty() {
-        args.push("dmcl".to_string());
+        args.push("dacite".to_string());
     }
     let app = RelmApp::new("io.github.aout1145.DMCL").with_args(args);
     // 各模块自带自己的全局 CSS，这里统一挂上。

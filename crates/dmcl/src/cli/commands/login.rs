@@ -25,7 +25,7 @@ impl DeviceCodePresenter for TerminalPresenter {
     }
 }
 
-/// `dmcl login [name]`。
+/// `dacite login [name]`。
 ///
 /// 省略 `name` 时用登录后的玩家名作为账户键；该键已存在就加后缀，绝不覆盖。
 /// 显式给出 `name` 时才覆盖同名条目。

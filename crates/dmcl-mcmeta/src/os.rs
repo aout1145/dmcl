@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 // 只支持这三个平台；其它平台直接编译失败，而不是运行时报错。
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-compile_error!("dmcl 目前只支持 Windows / macOS / Linux");
+compile_error!("Dacite 目前只支持 Windows / macOS / Linux");
 
 /// 操作系统。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

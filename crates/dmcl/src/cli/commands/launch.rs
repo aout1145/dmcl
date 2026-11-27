@@ -30,7 +30,7 @@ impl JavaResolver for ConfigJavaResolver {
     }
 }
 
-/// `dmcl launch <version-name>`。
+/// `dacite launch <version-name>`。
 pub(crate) async fn run(vername: &str, config: &Config, root_path: &Path) -> Result<()> {
     let loaded = config.load_instance(root_path, vername).await;
     if let Some(error) = &loaded.error {
@@ -160,7 +160,7 @@ mod tests {
                 .await
                 .unwrap_err()
                 .to_string();
-            assert!(err.contains("dmcl search-java"), "{err}");
+            assert!(err.contains("dacite search-java"), "{err}");
         }
 
         let named = ConfigJavaResolver {

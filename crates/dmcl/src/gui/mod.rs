@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 
 use crate::config::LoadedConfig;
 
-/// 不指定前端（`dmcl gui`）时用哪个。
+/// 不指定前端（`dacite gui`）时用哪个。
 pub fn default_frontend() -> &'static str {
     "gtk4"
 }

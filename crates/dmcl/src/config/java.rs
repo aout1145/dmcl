@@ -352,7 +352,7 @@ pub(crate) async fn resolve_from_config(
             }
             if !scan {
                 return Err(anyhow!(
-                    "配置中没有可用的 Java，请先执行 dmcl search-java 扫描本机 Java"
+                    "配置中没有可用的 Java，请先执行 dacite search-java 扫描本机 Java"
                 ));
             }
             let found = scan_configs().await;

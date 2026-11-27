@@ -372,7 +372,7 @@ fn pick_export_path(
     });
 }
 
-/// 默认文件名：`dmcl-crash-<实例名>-<yyyyMMdd-HHmmss>.zip`。
+/// 默认文件名：`dacite-crash-<实例名>-<yyyyMMdd-HHmmss>.zip`。
 fn default_file_name(instance: &str) -> String {
     let stamp = glib::DateTime::now_local()
         .and_then(|date| date.format("%Y%m%d-%H%M%S"))
@@ -392,7 +392,7 @@ fn default_file_name(instance: &str) -> String {
             ch => ch,
         })
         .collect();
-    format!("dmcl-crash-{instance}-{stamp}.zip")
+    format!("dacite-crash-{instance}-{stamp}.zip")
 }
 
 /// 生成崩溃日志 zip；失败时删掉未完成的文件。
@@ -482,7 +482,7 @@ fn recent_crash_reports(dir: &Path) -> Vec<(String, PathBuf)> {
 fn launch_text(report: &CrashReport) -> String {
     let launch = &report.launch;
     let mut text = format!(
-        "实例: {}\n退出状态: {}\n版本目录: {}\n游戏目录: {}\nJava: {}（{}，{}）\nDMCL: {}\n系统: {} / {}\n\n启动参数:\n",
+        "实例: {}\n退出状态: {}\n版本目录: {}\n游戏目录: {}\nJava: {}（{}，{}）\nDacite: {}\n系统: {} / {}\n\n启动参数:\n",
         report.instance,
         report.exit,
         launch.resolved.reference.dir().display(),
@@ -504,7 +504,7 @@ fn launch_text(report: &CrashReport) -> String {
 fn system_text(report: &CrashReport) -> String {
     let java = &report.launch.java;
     format!(
-        "DMCL: {}\nOS: {}\nArch: {}\nJava: {}\nJava 版本: {}\nJava 架构: {}\n",
+        "Dacite: {}\nOS: {}\nArch: {}\nJava: {}\nJava 版本: {}\nJava 架构: {}\n",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,
@@ -524,7 +524,7 @@ mod tests {
     use std::io::Read;
 
     fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("dmcl-crash-{label}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("dacite-crash-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

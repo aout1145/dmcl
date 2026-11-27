@@ -1,10 +1,10 @@
 # dmcl
 
-应用层：唯一知道配置文件存在的一层，同时提供命令行（`cli`）与 GTK4 图形界面（`gui`，
+产品名 **Dacite**。应用层：唯一知道配置文件存在的一层，同时提供命令行（`cli`）与 GTK4 图形界面（`gui`，
 由 cargo feature `gtk4` 门控）。它把全局配置与实例覆盖读成 `Config` / `LaunchConfig`，
 翻译成各业务 crate 的 `*Options`，再分发命令或驱动界面。
 
-它是库（`dmcl`）与可执行文件（`bin/dmcl`）。在 workspace 内依赖全部业务 crate；
+它是库（`dmcl`）与可执行文件（`dacite`）。在 workspace 内依赖全部业务 crate；
 `relm4` / `sysinfo` / `notify` 只在 `gtk4` feature 下编译，`keyring` 只在应用层使用。
 
 ## 模块布局
@@ -54,7 +54,7 @@ gui/           mod.rs 前端分派；gtk4/ GTK4 + libadwaita 前端（见其 REA
 
 CLI 用 `clap` derive 定义命令，命令定义、本地化与分发在 `cli/mod.rs`，各命令实现按文件
 拆在 `cli/commands/` 下。界面语言为中文，命令名、参数名、配置键保持英文。不带子命令时，
-编译了 `gtk4` 就打开 GUI，否则打印帮助并以非零状态退出；显式的 `dmcl gui` 在前端不可用时
+编译了 `gtk4` 就打开 GUI，否则打印帮助并以非零状态退出；显式的 `dacite gui` 在前端不可用时
 直接报错。
 
 ### GUI

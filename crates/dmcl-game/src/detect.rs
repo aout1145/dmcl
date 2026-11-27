@@ -1,6 +1,6 @@
 //! 从版本 JSON 与主 jar 识别实例的 Minecraft 版本和已安装加载器。
 //!
-//! 优先相信 DMCL 写入的 [`VersionJson::dmcl_patches`]；没有 patch 历史时分析 maven 库坐标；
+//! 优先相信 Dacite 写入的 [`VersionJson::dmcl_patches`]；没有 patch 历史时分析 maven 库坐标；
 //! 仍然不知道 Minecraft 版本时才读主 jar。所有字段都允许为空，识别不出就不猜。
 
 use std::collections::BTreeSet;

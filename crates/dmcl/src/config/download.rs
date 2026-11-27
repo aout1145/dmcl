@@ -3,7 +3,6 @@
 use std::time::Duration;
 
 use dmcl_download::{DownloadOptions, DEFAULT_USER_AGENT};
-use dmcl_launch::{LAUNCHER_NAME, LAUNCHER_VERSION};
 use dmcl_mcmeta::source::{DownloadSource, MirrorPolicy};
 use serde::{Deserialize, Serialize};
 
@@ -70,11 +69,10 @@ impl DownloadConfig {
 }
 
 impl Config {
-    /// 按配置造一个下载源（镜像策略 + 重试次数 + 退避 + User-Agent）。
+    /// 按配置造一个下载源（镜像策略 + 重试次数 + 退避），User-Agent 用默认值。
     pub fn download_source(&self) -> DownloadSource {
         let (base, max) = self.download.retry_delays();
         DownloadSource::from_policy(self.download.mirror)
-            .with_user_agent(format!("{LAUNCHER_NAME}/{LAUNCHER_VERSION}"))
             .with_max_retries(self.download.max_retries)
             .with_retry_delay(base, max)
     }

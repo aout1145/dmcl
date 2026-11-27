@@ -1,6 +1,6 @@
 //! 读取实例的加载器 patch，供实例设置页展示与修改。
 //!
-//! 只认 DMCL 写入的 `dmcl-patches`：`[0]` 是原版快照，其后每条带 `name` / `version` 的
+//! 只认 Dacite 写入的 `dmcl-patches`：`[0]` 是原版快照，其后每条带 `name` / `version` 的
 //! patch 对应一个加载器。没有 patch 历史的实例（其它启动器安装的）不支持调整加载器。
 
 use std::path::Path;
@@ -30,7 +30,7 @@ pub(crate) enum LoaderSupport {
     Unsupported(String),
 }
 
-/// 读取实例的加载器信息；读不到或不是 DMCL 安装的实例时返回原因。
+/// 读取实例的加载器信息；读不到或不是 Dacite 安装的实例时返回原因。
 pub(crate) fn read_loader_support(root: &Path, name: &str) -> LoaderSupport {
     match read_support(root, name) {
         Ok(support) => support,
@@ -48,12 +48,12 @@ fn read_support(root: &Path, name: &str) -> anyhow::Result<LoaderSupport> {
     };
     let Some(patches) = document.get("dmcl-patches").and_then(Value::as_array) else {
         return Ok(LoaderSupport::Unsupported(
-            "此实例不是由 DMCL 创建的，无法调整加载器".to_string(),
+            "此实例不是由 Dacite 创建的，无法调整加载器".to_string(),
         ));
     };
     if patches.is_empty() {
         return Ok(LoaderSupport::Unsupported(
-            "此实例不是由 DMCL 创建的，无法调整加载器".to_string(),
+            "此实例不是由 Dacite 创建的，无法调整加载器".to_string(),
         ));
     }
     let Some(mc_version) = patches[0]

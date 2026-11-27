@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 把 GTK4 版 dmcl.exe 和运行时依赖准备成一个自包含目录（CI 再上传为 artifact）。
+# 把 GTK4 版 dacite.exe 和运行时依赖准备成一个自包含目录（CI 再上传为 artifact）。
 set -euo pipefail
 
 root="$(pwd)"
-out="$root/dist/dmcl-gtk4-windows"
-binary="target/release/dmcl.exe"
+out="$root/dist/dacite-gtk4-windows"
+binary="target/release/dacite.exe"
 
 rm -rf "$out"
 mkdir -p "$out" "$root/dist"
 
-cp "$binary" "$out/dmcl.exe"
+cp "$binary" "$out/dacite.exe"
 
 # 递归收集所有 CLANG64 运行库（UCRT 属于系统 DLL，不复制）。
 declare -A copied=()
@@ -77,14 +77,14 @@ if [ -d "$out/lib/gio/modules" ]; then
 fi
 
 cat > "$out/README.txt" <<'EOF'
-DMCL (GTK4)
-===========
+Dacite Launcher (GTK4)
+======================
 
-双击 dmcl.exe 启动图形界面（等价于 dmcl.exe gui）。
+双击 dacite.exe 启动图形界面（等价于 dacite.exe gui）。
 
 本目录已经包含 GTK4 / libadwaita 的运行时 DLL 和数据，不需要另外安装 MSYS2。
 GLib / GIO / gdk-pixbuf 会按 DLL 所在目录查找 share 与 lib 下的运行时数据，
-所以直接运行 dmcl.exe 即可，不需要额外的启动脚本。
+所以直接运行 dacite.exe 即可，不需要额外的启动脚本。
 需要 64 位 Windows 10/11。
 EOF
 

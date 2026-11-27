@@ -57,8 +57,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dmcl-gtk4-linux
-          path: dist/dmcl-gtk4-linux.AppImage
+          name: dacite-gtk4-linux
+          path: dist/dacite-gtk4-linux.AppImage
 
   # Windows 上用 MSYS2 CLANG64（UCRT）的 GTK4。Rust 的 windows-gnu 默认链接
   # MSVCRT，只有 gnullvm target 才真正使用 UCRT。
@@ -114,8 +114,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dmcl-gtk4-windows
-          path: dist/dmcl-gtk4-windows/
+          name: dacite-gtk4-windows
+          path: dist/dacite-gtk4-windows/
 
   # macOS 用 Homebrew 的 GTK4 / libadwaita。
   gui-macos:
@@ -163,5 +163,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dmcl-gtk4-macos
-          path: dist/dmcl-gtk4-macos.zip
+          name: dacite-gtk4-macos
+          path: dist/dacite-gtk4-macos.zip

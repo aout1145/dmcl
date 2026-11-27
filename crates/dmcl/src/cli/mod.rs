@@ -21,7 +21,7 @@ use crate::config::{Config, ConfigError};
 /// 非官方 Minecraft 启动器。
 #[derive(Parser, Debug)]
 #[command(
-    name = "dmcl",
+    name = "dacite",
     version = env!("CARGO_PKG_VERSION"),
     long_about = None,
     disable_help_subcommand = true
@@ -73,7 +73,7 @@ impl Cli {
                         // 认不出来的错误就照原样打印，免得把信息丢掉
                         None => eprint!("{err}"),
                     }
-                    eprintln!("提示：用 dmcl --help 查看用法");
+                    eprintln!("提示：用 dacite --help 查看用法");
                     std::process::exit(2);
                 }
             },
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn list_mc_defaults_to_release() {
-        let cli = Cli::try_parse_from(["dmcl", "list-mc"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "list-mc"]).unwrap();
         match cli.command {
             Some(Commands::ListMc { r#type }) => assert_eq!(r#type, vec!["release"]),
             other => panic!("解析结果不对: {other:?}"),
@@ -385,13 +385,13 @@ mod tests {
 
     #[test]
     fn login_name_is_optional() {
-        let cli = Cli::try_parse_from(["dmcl", "login"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "login"]).unwrap();
         match cli.command {
             Some(Commands::Login { name }) => assert!(name.is_none()),
             other => panic!("解析结果不对: {other:?}"),
         }
 
-        let cli = Cli::try_parse_from(["dmcl", "login", "steve"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "login", "steve"]).unwrap();
         match cli.command {
             Some(Commands::Login { name }) => assert_eq!(name.as_deref(), Some("steve")),
             other => panic!("解析结果不对: {other:?}"),
@@ -400,13 +400,13 @@ mod tests {
 
     #[test]
     fn install_version_name_is_optional() {
-        let cli = Cli::try_parse_from(["dmcl", "install", "1.20.1"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "install", "1.20.1"]).unwrap();
         match cli.command {
             Some(Commands::Install { version_name, .. }) => assert!(version_name.is_none()),
             other => panic!("解析结果不对: {other:?}"),
         }
 
-        let cli = Cli::try_parse_from(["dmcl", "install", "1.20.1", "my-name"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "install", "1.20.1", "my-name"]).unwrap();
         match cli.command {
             Some(Commands::Install { version_name, .. }) => {
                 assert_eq!(version_name.as_deref(), Some("my-name"));
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn install_flags_and_versions_parse() {
         let cli = Cli::try_parse_from([
-            "dmcl",
+            "dacite",
             "install",
             "1.20.1",
             "1.20.1-forge",
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn install_optifine_flags_parse() {
         let cli = Cli::try_parse_from([
-            "dmcl",
+            "dacite",
             "install",
             "1.19",
             "--forge",
@@ -471,17 +471,18 @@ mod tests {
 
     #[test]
     fn search_java_takes_no_arguments() {
-        let cli = Cli::try_parse_from(["dmcl", "search-java"]).unwrap();
+        let cli = Cli::try_parse_from(["dacite", "search-java"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::SearchJava)));
 
-        let err = Cli::try_parse_from(["dmcl", "search-java", "extra"]).unwrap_err();
+        let err = Cli::try_parse_from(["dacite", "search-java", "extra"]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]
     fn minecraft_root_is_a_global_option() {
         let before =
-            Cli::try_parse_from(["dmcl", "--minecraft-root", "test", "launch", "1.20.1"]).unwrap();
+            Cli::try_parse_from(["dacite", "--minecraft-root", "test", "launch", "1.20.1"])
+                .unwrap();
         assert_eq!(before.minecraft_root.as_deref(), Some("test"));
         assert!(matches!(
             before.command,
@@ -489,7 +490,7 @@ mod tests {
         ));
 
         let after =
-            Cli::try_parse_from(["dmcl", "launch", "1.20.1", "--minecraft-root=test"]).unwrap();
+            Cli::try_parse_from(["dacite", "launch", "1.20.1", "--minecraft-root=test"]).unwrap();
         assert_eq!(after.minecraft_root.as_deref(), Some("test"));
         assert!(matches!(
             after.command,
@@ -548,7 +549,7 @@ mod tests {
 
         let err = command
             .clone()
-            .try_get_matches_from(["dmcl", "list-forge"])
+            .try_get_matches_from(["dacite", "list-forge"])
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
         let message = translate_error(&err).expect("应当翻译成中文");
@@ -557,19 +558,19 @@ mod tests {
 
         let err = command
             .clone()
-            .try_get_matches_from(["dmcl", "--nope"])
+            .try_get_matches_from(["dacite", "--nope"])
             .unwrap_err();
         assert!(translate_error(&err).unwrap().contains("不认识的参数"));
 
         let err = command
             .clone()
-            .try_get_matches_from(["dmcl", "bogus"])
+            .try_get_matches_from(["dacite", "bogus"])
             .unwrap_err();
         assert!(translate_error(&err).unwrap().contains("不认识的命令"));
 
         // `--help` 走的是"错误"通道，但绝不能被当成报错翻译
         let err = command
-            .try_get_matches_from(["dmcl", "--help"])
+            .try_get_matches_from(["dacite", "--help"])
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DisplayHelp);
         assert!(translate_error(&err).is_none());

@@ -1,6 +1,6 @@
 [package]
 name = "dmcl"
-description = "An unofficial Minecraft launcher written in Rust (migrated from the original D implementation)."
+description = "Dacite - an unofficial cross-platform Minecraft launcher with a GTK4/libadwaita GUI and a CLI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ name = "dmcl"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dmcl"
+name = "dacite"
 path = "src/main.rs"
 
 [features]

@@ -1,6 +1,6 @@
 # gtk4 前端架构
 
-`crates/dmcl/src/gui/gtk4` —— `dmcl` 的 GTK4 + libadwaita 前端，框架用 [relm4]。
+`crates/dmcl/src/gui/gtk4` —— Dacite 的 GTK4 + libadwaita 前端，框架用 [relm4]。
 面向开发者；整体架构见仓库根 [ARCHITECTURE.md](../../../../../ARCHITECTURE.md)，应用层与配置见
 [crates/dmcl/README.md](../../../README.md)。
 
@@ -8,7 +8,7 @@
 
 ## 概览
 
-- 与 CLI 一样是 `dmcl` 的一个前端：把 `Config` 翻译成各业务 crate 的 `*Options`、把
+- 与 CLI 一样是 Dacite 的一个前端：把 `Config` 翻译成各业务 crate 的 `*Options`、把
   `TaskGraph` 跑起来、把 `TaskEvent` 渲染成界面。业务 crate 一行不改。
 - 页面（主页、新建实例等）是 **relm4 组件**，各自拥有状态、消息与 widget；app 层的共享能力
   收在 `Shell` 服务里；根组件只做组装。
@@ -23,7 +23,7 @@
 
 - cargo feature **`gtk4`，默认关**，用 `--features gtk4` 开启；`relm4` 是可选的依赖。
 - 需要系统 **GTK ≥ 4.22 / libadwaita ≥ 1.9**。
-- 命令：`dmcl gui [frontend]`，前端默认 `gtk4`；显式的 `gui` 命令在前端不可用时直接报错。
+- 命令：`dacite gui [frontend]`，前端默认 `gtk4`；显式的 `gui` 命令在前端不可用时直接报错。
 - GUI 必须占主线程，所以 `main.rs` 先同步读一次配置，再决定启动 GUI 还是创建 tokio runtime
   执行命令行。
 

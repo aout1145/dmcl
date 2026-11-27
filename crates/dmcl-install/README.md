@@ -50,7 +50,7 @@ OptiFine 是叠加在原版或 Forge 上的 tweaker，拆成「下载」与「�
 
 ### 调整已安装实例的加载器
 
-`update_loaders_task` 只支持由 DMCL 安装的实例：版本 JSON 的 `dmcl-patches[0]` 是原版快照，
+`update_loaders_task` 只支持由 Dacite 安装的实例：版本 JSON 的 `dmcl-patches[0]` 是原版快照，
 其后是加载器 patch。任务以该快照为基底重建整组加载器：未变化的加载器复用已存 patch，
 新增或换版本的重新安装；自定义（非加载器）patch 原样保留，先于加载器应用。加载器统一按
 Forge、Fabric、NeoForge、OptiFine 的顺序重排，OptiFine 在 Forge 是否存在变化时也会重新生成。

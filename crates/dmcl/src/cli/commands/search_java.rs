@@ -5,7 +5,7 @@ use dmcl_java::{default_java_roots, find_java};
 
 use crate::config::{configs_from_details, merge_javas, Config};
 
-/// `dmcl search-java`。
+/// `dacite search-java`。
 pub(crate) async fn run(config: &mut Config) -> Result<()> {
     let found = configs_from_details(find_java(&default_java_roots()).await);
     let added = merge_javas(&mut config.javas, &found);

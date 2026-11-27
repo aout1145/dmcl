@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 GTK4 版 dmcl 打成自包含的 AppImage。
+# 把 GTK4 版 Dacite 打成自包含的 AppImage。
 #
 # 依赖（Ubuntu）：libgtk-4-dev libadwaita-1-dev libgtk-4-bin libglib2.0-bin
 #                 libgdk-pixbuf-2.0-0 adwaita-icon-theme gsettings-desktop-schemas
@@ -11,26 +11,26 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 appdir="$work/AppDir"
 tools="$work/tools"
-output="$root/dist/dmcl-gtk4-linux.AppImage"
+output="$root/dist/dacite-gtk4-linux.AppImage"
 
 rm -rf "$output"
 mkdir -p "$appdir/usr/bin" "$tools" "$root/dist"
 
-cp target/release/dmcl "$appdir/usr/bin/dmcl"
+cp target/release/dacite "$appdir/usr/bin/dacite"
 
-cat > "$appdir/dmcl.desktop" <<'EOF'
+cat > "$appdir/dacite.desktop" <<'EOF'
 [Desktop Entry]
-Name=DMCL
-Comment=Minecraft launcher
-Exec=dmcl
-Icon=dmcl
+Name=Dacite Launcher
+Comment=Minecraft Launcher
+Exec=dacite
+Icon=dacite
 Type=Application
 Categories=Game;
 Terminal=false
 EOF
 
 # 临时图标，之后可以换成正式美术资源。
-cat > "$appdir/dmcl.svg" <<'EOF'
+cat > "$appdir/dacite.svg" <<'EOF'
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="56" fill="#3584e4"/>
   <text x="128" y="168" font-family="sans-serif" font-size="120" font-weight="bold"
@@ -59,8 +59,8 @@ export ARCH=x86_64
 
 "$tools/linuxdeploy" --appdir "$appdir" \
   --plugin gtk \
-  --desktop-file "$appdir/dmcl.desktop" \
-  --icon-file "$appdir/dmcl.svg"
+  --desktop-file "$appdir/dacite.desktop" \
+  --icon-file "$appdir/dacite.svg"
 
 "$tools/appimagetool" "$appdir" "$output"
 

@@ -1,6 +1,6 @@
 //! 调整已安装实例的加载器。
 //!
-//! 只处理由 DMCL 安装的实例：版本 JSON 的 `dmcl-patches[0]` 是未修改的原版快照，
+//! 只处理由 Dacite 安装的实例：版本 JSON 的 `dmcl-patches[0]` 是未修改的原版快照，
 //! 其后的 patch 描述加载器。更新时以该快照为基底重新应用一组加载器 patch，未变化的
 //! 加载器直接复用已存 patch，新增或换版本的加载器重新安装；自定义（非加载器）patch 原样
 //! 保留并先于加载器应用。
@@ -259,7 +259,7 @@ fn plan_update(root: &Path, update: &LoaderUpdate) -> Result<UpdatePlan> {
 
     if json.dmcl_patches.is_empty() {
         bail!(
-            "实例「{}」不是由 DMCL 创建的，无法调整加载器",
+            "实例「{}」不是由 Dacite 创建的，无法调整加载器",
             update.version_name
         );
     }

@@ -6,7 +6,7 @@
 改 GTK4 前端时**必须遵循** [gtk4/README.md](crates/dmcl/src/gui/gtk4/README.md) 的 relm4 /
 `view!` 约定，尤其是「状态驱动：状态放模型，界面用 `view!` 刷新」一节。
 
-`dmcl`：非官方 Minecraft 启动器，Rust workspace。edition 2021，MSRV **1.95**，
+Dacite（应用 crate 名仍为 `dmcl`）：非官方 Minecraft 启动器，Rust workspace。edition 2021，MSRV **1.95**，
 GPL-3.0-or-later（新增文件沿用同一许可）。
 
 ## 汇报与确认（最重要）

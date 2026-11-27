@@ -1,7 +1,8 @@
-# DMCL
+# Dacite
 
-非官方 Minecraft 启动器，使用 Rust 编写，提供基于 GTK4 + libadwaita 的图形界面，支持
-Linux、Windows 和 macOS。图形界面与命令行共用同一套安装、下载和启动功能。
+Dacite（Minecraft Launcher）是一个非官方的 Minecraft 启动器，使用 Rust 编写，提供基于
+GTK4 + libadwaita 的图形界面，支持 Linux、Windows 和 macOS。图形界面与命令行共用同一套
+安装、下载和启动功能。
 
 ## 功能
 
@@ -51,33 +52,33 @@ Forge 与 OptiFine 可以组合，Fabric、NeoForge 与二者互斥。实例名�
 ### 任务与设置
 
 安装和启动都以任务形式运行。任务列表同时展示全部步骤的计数、整体进度和日志，并支持取消；
-关闭任务列表不会中断任务。退出 DMCL 时若有未完成任务，会先要求确认。
+关闭任务列表不会中断任务。退出 Dacite 时若有未完成任务，会先要求确认。
 
 首选项集中管理账户、Minecraft 目录、Java、全局启动选项和下载设置。修改会自动保存，并在下次
 启动实例时生效。`Ctrl+,` 可打开首选项；外观支持跟随系统、浅色和深色三种主题。
 
 ## 命令行
 
-不启用图形界面时，`dmcl` 是一个普通命令行工具；启用图形界面后也可以继续使用这些子命令。
+不启用图形界面时，`dacite` 是一个普通命令行工具；启用图形界面后也可以继续使用这些子命令。
 常用操作：
 
 ```bash
-dmcl search-java                       # 扫描本机 Java 并写入全局配置
-dmcl login                             # 微软设备代码登录
-dmcl install 1.20.1                    # 安装原版
-dmcl install 1.20.1 --fabric           # 安装 Fabric
-dmcl install 1.20.1 --forge --forge-version 47.3.0 --optifine
-dmcl launch 1.20.1                     # 启动
-dmcl list                              # 查看已安装版本
+dacite search-java                     # 扫描本机 Java 并写入全局配置
+dacite login                           # 微软设备代码登录
+dacite install 1.20.1                  # 安装原版
+dacite install 1.20.1 --fabric         # 安装 Fabric
+dacite install 1.20.1 --forge --forge-version 47.3.0 --optifine
+dacite launch 1.20.1                   # 启动
+dacite list                            # 查看已安装版本
 ```
 
-`dmcl install 1.20.1 --neoforge` 安装 NeoForge，`--optifine` 单独安装 OptiFine，
+`dacite install 1.20.1 --neoforge` 安装 NeoForge，`--optifine` 单独安装 OptiFine，
 `--fabric-version` / `--neoforge-version` / `--optifine-version` 指定加载器版本。
 `--minecraft-root=<名字>` 可以在本次运行中切换根目录，不写回全局配置。完整命令和参数用
-`dmcl --help` 查看。
+`dacite --help` 查看。
 
 命令行启动只使用全局配置 `javas` 里已有的 Java，不会自动扫描本机，也不会自动下载；第一次
-使用或配置里的路径都失效时，先执行 `dmcl search-java`。
+使用或配置里的路径都失效时，先执行 `dacite search-java`。
 
 安装流程用 `download.java` 指定安装器 processor 使用的 Java，默认 `autoselect`：先从
 `javas` 里选择，没有匹配版本时扫描本机，仍然没有就下载 Mojang 的 JRE 到官方启动器的
@@ -92,7 +93,7 @@ runtime 目录。它不影响启动使用的 Java。图形界面启动实例时�
 
 ```bash
 cargo build --release --features gtk4
-./target/release/dmcl
+./target/release/dacite
 ```
 
 需要 GTK ≥ 4.22、libadwaita ≥ 1.9：
@@ -108,7 +109,7 @@ cargo build --release --features gtk4
 
 ```bash
 cargo build --release
-./target/release/dmcl --help
+./target/release/dacite --help
 ```
 
 微软登录需要一份 Azure 公共客户端应用的 client id，编译时传入：
@@ -125,7 +126,8 @@ GTK4 构建，GTK4 任务会产出带运行时的包。
 
 全局配置位于 `<系统配置目录>/dmcl/dmcl.json`（Linux `$XDG_CONFIG_HOME` 或 `~/.config`；
 Windows `%APPDATA%`；macOS `~/Library/Application Support`）。图形界面的修改会立即写回，
-命令行和手动编辑也维护同一份文件。保存时先写临时文件再改名覆盖。
+命令行和手动编辑也维护同一份文件。保存时先写临时文件再改名覆盖。目录名沿用 `dmcl`，
+以兼容已有配置。
 
 图形界面启动时发现坏掉或不认识的配置项会回退默认值，把原文件备份为同目录的
 `dmcl.old.json`，再写入修复后的配置并弹窗说明。

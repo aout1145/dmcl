@@ -26,7 +26,7 @@ use crate::memory::{resolve_memory, MemoryOptions, MemorySize};
 use dmcl_account::Account;
 
 /// 启动器名字（替换 `${launcher_name}`）。
-pub const LAUNCHER_NAME: &str = "dmcl";
+pub const LAUNCHER_NAME: &str = "Dacite";
 
 /// 启动器版本（替换 `${launcher_version}`）。
 pub const LAUNCHER_VERSION: &str = env!("CARGO_PKG_VERSION");

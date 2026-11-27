@@ -1,6 +1,6 @@
 [package]
 name = "dmcl-install"
-description = "Install Minecraft versions (vanilla, Fabric, Forge, NeoForge) on disk."
+description = "Install Minecraft versions and loaders (vanilla, Fabric, Forge, NeoForge, OptiFine)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
