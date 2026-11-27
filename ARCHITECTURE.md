@@ -6,11 +6,11 @@
 
 ## 概览
 
-一个 cargo workspace，按职责拆成九个 crate：**通用任务**（`dmcl-task`）、
+一个 cargo workspace，按职责拆成十个 crate：**通用任务**（`dmcl-task`）、
 **Minecraft 元数据**（`dmcl-mcmeta`）、**下载**（`dmcl-download`）、
 **版本文件物化**（`dmcl-game`）、**Java 运行时**（`dmcl-java`）、
-**安装**（`dmcl-install`）、**账户**（`dmcl-account`）、**启动**（`dmcl-launch`），以及
-**应用层**（`dmcl`）。
+**安装**（`dmcl-install`）、**账户**（`dmcl-account`）、**启动**（`dmcl-launch`）、
+**崩溃分析**（`dmcl-crash-analysis`），以及**应用层**（`dmcl`）。
 
 ```text
 dmcl-rs/
@@ -24,6 +24,7 @@ dmcl-rs/
     ├── dmcl-install/          # 原版 + Fabric/Forge/NeoForge/OptiFine 安装
     ├── dmcl-account/          # 账户快照、离线账户、微软登录
     ├── dmcl-launch/           # Java 选择、命令行生成、启动
+    ├── dmcl-crash-analysis/   # 从游戏日志分析异常退出的可能原因
     └── dmcl/                  # 应用：config + cli + gui（GTK4）
 ```
 
@@ -42,6 +43,7 @@ dmcl-account ───► 无业务 crate 依赖
 
 dmcl-install ───► dmcl-game / dmcl-java / dmcl-mcmeta / dmcl-download / dmcl-task
 dmcl-launch ────► dmcl-account / dmcl-game / dmcl-java / dmcl-mcmeta / dmcl-task
+dmcl-crash-analysis ──► 无业务 crate 依赖
 
 dmcl ───────────► 全部
 ```
@@ -51,6 +53,7 @@ dmcl ───────────► 全部
 - `dmcl-game` 负责「一个版本在磁盘上是什么、该有哪些文件、缺了什么、怎么补齐」；
 - `dmcl-java` 负责 Java 探测 / 选择与 JRE 安装，不认识游戏文件；
 - `dmcl-account` 负责账户快照、离线账户与微软登录，不认识启动链、任务系统或配置文件；
+- `dmcl-crash-analysis` 只做日志文本分析，不读文件、不认识启动链，调用方把日志拼好传进来；
 - `dmcl-install` 与 `dmcl-launch` 是**平级能力**：都通过 `dmcl-game` 使用同一套规划 /
   完整性 / natives，通过 `dmcl-java` 使用同一套 Java 解析；`dmcl-launch` **不依赖**
   `dmcl-install`，只通过 `dmcl-account` 取用账户；
@@ -73,6 +76,7 @@ dmcl ───────────► 全部
 | `dmcl-install`  | `InstallOptions`（根目录、游戏文件选项、Java 解析器、JRE 安装位置）                   |
 | `dmcl-account`  | `RefreshTokenStore`（凭据存取）、`DeviceCodePresenter`（登录提示展示）                |
 | `dmcl-launch`   | `LaunchChainOptions`（账户登录源、`VersionRef`、`JavaResolver`、JVM 兼容性、文件完整性、内存偏好）、`GameLaunchOptions`、`ProcessOptions`、`GameFilesOptions` |
+| `dmcl-crash-analysis` | 日志文本、`Exit`（退出码 / 信号）                                                 |
 | `dmcl`          | `dmcl.json`（唯一读写配置的地方）                                                     |
 
 这样每个业务 crate 都能被 GUI / TUI / 测试用自定义选项直接调用。
@@ -91,6 +95,7 @@ dmcl ───────────► 全部
 | `dmcl-install` | 原版元数据、加载器 / OptiFine 安装、版本目录原子性 | [crates/dmcl-install/README.md](crates/dmcl-install/README.md) |
 | `dmcl-account` | 账户快照、离线账户、微软设备代码登录与静默刷新 | [crates/dmcl-account/README.md](crates/dmcl-account/README.md) |
 | `dmcl-launch` | Java 选择、命令行生成、启动与监控 | [crates/dmcl-launch/README.md](crates/dmcl-launch/README.md) |
+| `dmcl-crash-analysis` | 从游戏日志判断崩溃原因，给出结论与建议 | [crates/dmcl-crash-analysis/README.md](crates/dmcl-crash-analysis/README.md) |
 | `dmcl` | 配置、CLI 与 GTK4 前端 | [crates/dmcl/README.md](crates/dmcl/README.md) |
 
 GTK4 前端文档按目录拆分，入口是

@@ -6,6 +6,7 @@
 #   dmcl-install   materialise a version on disk (vanilla + Fabric/Forge/NeoForge/OptiFine)
 #   dmcl-account   account snapshots, offline accounts and Microsoft login
 #   dmcl-launch    java selection, command line generation, game monitor
+#   dmcl-crash-analysis  crash cause analysis from game logs (no MC knowledge)
 #   dmcl           the application: config + cli + gui (GTK4, feature-gated)
 #
 # Nothing but `dmcl` itself knows about the config file: every other crate is
@@ -22,6 +23,7 @@ members = [
     "crates/dmcl-java",
     "crates/dmcl-account",
     "crates/dmcl-launch",
+    "crates/dmcl-crash-analysis",
 ]
 
 [workspace.lints.clippy]
@@ -47,6 +49,7 @@ dmcl-install = { path = "crates/dmcl-install", version = "0.0.1" }
 dmcl-java = { path = "crates/dmcl-java", version = "0.0.1" }
 dmcl-account = { path = "crates/dmcl-account", version = "0.0.1" }
 dmcl-launch = { path = "crates/dmcl-launch", version = "0.0.1" }
+dmcl-crash-analysis = { path = "crates/dmcl-crash-analysis", version = "0.0.1" }
 
 # external
 tokio = { version = "1", features = ["full"] }

@@ -21,7 +21,13 @@ path = "src/main.rs"
 default = []
 # GTK4 + libadwaita 图形前端（relm4）。默认关，用 `--features gtk4` 开启；
 # 需要系统装有 GTK4 / libadwaita 开发库。
-gtk4 = ["dep:relm4", "dep:sysinfo", "dep:notify", "dep:zip"]
+gtk4 = [
+    "dep:relm4",
+    "dep:sysinfo",
+    "dep:notify",
+    "dep:zip",
+    "dep:dmcl-crash-analysis",
+]
 
 [dependencies]
 dmcl-task.workspace = true
@@ -51,6 +57,7 @@ relm4 = { workspace = true, optional = true }
 sysinfo = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
+dmcl-crash-analysis = { workspace = true, optional = true }
 
 [lints]
 workspace = true

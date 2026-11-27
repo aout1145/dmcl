@@ -398,7 +398,7 @@ impl SimpleComponent for HomePage {
                 } else {
                     let report = crash_report::CrashReport {
                         instance: name,
-                        exit: crash_report::format_exit_status(&status),
+                        exit: dmcl_crash_analysis::Exit::from_status(&status),
                         launch,
                         log_path,
                     };

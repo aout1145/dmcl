@@ -63,7 +63,8 @@ GTK4 + libadwaita 前端在 `src/gui/gtk4`，用 relm4，由 cargo feature `gtk4
 共用业务 crate：把 `Config` 翻译成 `*Options`、用 `Shell` 跑 `TaskGraph`、把 `TaskEvent`
 渲染成页面与任务窗口；业务 crate 不读配置。每个根目录一个常驻主页，关闭标签只影响显示，
 运行状态、启动链与游戏监视继续保留。游戏异常退出时由主页的 `crash_report` 显示完整会话
-日志并支持导出崩溃日志 zip，不另设顶层诊断模块。整个前端共用一份 `ConfigStore`。
+日志，并用 `dmcl-crash-analysis` 给出可能原因；对话框还支持导出崩溃日志 zip，不另设顶层
+诊断模块。整个前端共用一份 `ConfigStore`。
 
 前端的整体分层、relm4 约定与组件文档见
 [crates/dmcl/src/gui/gtk4/README.md](src/gui/gtk4/README.md)。

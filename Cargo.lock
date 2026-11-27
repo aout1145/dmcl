@@ -699,6 +699,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "dmcl-account",
+ "dmcl-crash-analysis",
  "dmcl-download",
  "dmcl-game",
  "dmcl-install",
@@ -731,6 +732,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "dmcl-crash-analysis"
+version = "0.0.1"
+dependencies = [
+ "regex",
 ]
 
 [[package]]

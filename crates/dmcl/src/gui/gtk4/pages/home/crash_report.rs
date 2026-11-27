@@ -17,6 +17,7 @@ use relm4::gtk::gio;
 use relm4::gtk::glib;
 use zip::write::SimpleFileOptions;
 
+use dmcl_crash_analysis::{Exit, Finding};
 use dmcl_launch::PreparedLaunch;
 
 /// 没有捕获到日志时显示在日志区里的文字。
@@ -28,31 +29,11 @@ const MAX_CRASH_REPORTS: usize = 5;
 #[derive(Debug, Clone)]
 pub(crate) struct CrashReport {
     pub instance: String,
-    /// 已经格式化好的退出状态。
-    pub exit: String,
+    /// 原始退出方式：`launch.txt` 与分析结论都用它。
+    pub exit: Exit,
     pub launch: Arc<PreparedLaunch>,
     /// 会话日志文件；没有重定向或创建失败时为 `None`。
     pub log_path: Option<PathBuf>,
-}
-
-/// 把退出结果格式化成对话框和 `launch.txt` 里的一行文字。
-pub(crate) fn format_exit_status(status: &Result<std::process::ExitStatus, String>) -> String {
-    match status {
-        Ok(status) => match status.code() {
-            Some(code) => format!("退出码 {code}"),
-            None => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::ExitStatusExt;
-                    if let Some(signal) = status.signal() {
-                        return format!("被信号 {signal} 终止");
-                    }
-                }
-                "异常终止".to_string()
-            }
-        },
-        Err(err) => format!("无法获取退出状态：{err}"),
-    }
 }
 
 /// 弹出崩溃日志对话框。
@@ -123,14 +104,24 @@ pub(crate) fn show(
 
     // 日志可能很大：放到阻塞线程里整份读取，读完再回 GTK 主线程设置文本。
     let log_path = report.log_path.clone();
+    let game_dir = report.launch.game_dir.clone();
+    let exit = report.exit.clone();
     let buffer = log_view.buffer();
     let scrolled_for_log = scrolled;
     glib::spawn_future_local(async move {
-        let loaded = tokio::task::spawn_blocking(move || read_log(log_path.as_deref())).await;
-        let text = loaded.ok().flatten();
-        buffer.set_text(text.as_deref().unwrap_or(NO_LOG));
-        if let Some(text) = &text {
-            apply_log_highlight(&buffer, text);
+        let loaded =
+            tokio::task::spawn_blocking(move || analyze_log(log_path.as_deref(), &game_dir, &exit))
+                .await;
+        let (text, findings) = loaded.unwrap_or_default();
+        match &text {
+            Some(text) => {
+                buffer.set_text(text);
+                apply_log_highlight(&buffer, text);
+                if let Some(card) = analysis_card(&findings) {
+                    log_area.prepend(&card);
+                }
+            }
+            None => buffer.set_text(NO_LOG),
         }
         // 等这一轮布局完成后再滚到最后，保证停在最新的一行。
         let scroll_buffer = buffer.clone();
@@ -151,9 +142,79 @@ pub(crate) fn show(
     dialog.present(Some(parent));
 }
 
+/// 日志上方的原因提示卡片；没有分析结论时返回 `None`。
+fn analysis_card(findings: &[Finding]) -> Option<gtk::Box> {
+    let main = findings.first()?;
+
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("card");
+    card.set_margin_bottom(12);
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    card.append(&content);
+
+    content.append(&hint_label(&format!("可能原因：{}", main.cause), false));
+    content.append(&hint_label(&format!("建议：{}", main.advice), true));
+    if findings.len() > 1 {
+        content.append(&hint_label(
+            &format!("另有 {} 条可能原因", findings.len() - 1),
+            true,
+        ));
+    }
+
+    Some(card)
+}
+
+fn hint_label(text: &str, dim: bool) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_wrap(true);
+    label.set_xalign(0.0);
+    label.set_selectable(true);
+    if dim {
+        label.add_css_class("dim-label");
+    }
+    label
+}
+
+/// 读取会话日志，并把它末尾指出的崩溃报告一起交给分析。
+fn analyze_log(
+    log_path: Option<&Path>,
+    game_dir: &Path,
+    exit: &Exit,
+) -> (Option<String>, Vec<Finding>) {
+    let Some(text) = read_log(log_path) else {
+        return (None, Vec::new());
+    };
+    let mut input = text.clone();
+    if let Some(report) = crash_report_text(&text, game_dir) {
+        input.push('\n');
+        input.push_str(&report);
+    }
+    (Some(text), dmcl_crash_analysis::analyze(&input, exit))
+}
+
+/// 日志末尾标记的崩溃报告；相对路径按游戏目录解析。
+fn crash_report_text(log: &str, game_dir: &Path) -> Option<String> {
+    let path = Path::new(dmcl_crash_analysis::crash_report_path(log)?);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        game_dir.join(path)
+    };
+    read_text(&path)
+}
+
 /// 读取完整日志；文件不存在、不可读或为空时返回 `None`。
 fn read_log(path: Option<&Path>) -> Option<String> {
-    let bytes = std::fs::read(path?).ok()?;
+    read_text(path?)
+}
+
+fn read_text(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
     if bytes.is_empty() {
         return None;
     }
@@ -462,24 +523,6 @@ mod tests {
     use dmcl_mcmeta::vanilla::VersionJson;
     use std::io::Read;
 
-    #[cfg(unix)]
-    fn exit_code(code: i32) -> std::process::ExitStatus {
-        use std::os::unix::process::ExitStatusExt;
-        std::process::ExitStatus::from_raw(code << 8)
-    }
-
-    #[cfg(windows)]
-    fn exit_code(code: i32) -> std::process::ExitStatus {
-        use std::os::windows::process::ExitStatusExt;
-        std::process::ExitStatus::from_raw(code as u32)
-    }
-
-    #[cfg(unix)]
-    fn exit_signal(signal: i32) -> std::process::ExitStatus {
-        use std::os::unix::process::ExitStatusExt;
-        std::process::ExitStatus::from_raw(signal)
-    }
-
     fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dmcl-crash-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -509,7 +552,7 @@ mod tests {
         };
         CrashReport {
             instance: "1.0".to_string(),
-            exit: "退出码 1".to_string(),
+            exit: Exit::Code(1),
             launch: Arc::new(launch),
             log_path: None,
         }
@@ -550,16 +593,6 @@ mod tests {
             classify_log_line("Caused by: java.lang.RuntimeException"),
             Some(LogLevel::Error)
         );
-    }
-
-    #[test]
-    fn exit_status_is_formatted_for_the_dialog() {
-        assert_eq!(format_exit_status(&Ok(exit_code(0))), "退出码 0");
-        assert_eq!(format_exit_status(&Ok(exit_code(1))), "退出码 1");
-        assert!(format_exit_status(&Err("等待失败".to_string())).contains("等待失败"));
-
-        #[cfg(unix)]
-        assert_eq!(format_exit_status(&Ok(exit_signal(9))), "被信号 9 终止");
     }
 
     #[test]
