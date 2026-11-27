@@ -716,6 +716,7 @@ dependencies = [
  "shell-words",
  "sysinfo",
  "tokio",
+ "zip",
 ]
 
 [[package]]

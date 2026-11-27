@@ -1,11 +1,12 @@
 //! 主页：一个 Minecraft 根目录下的已安装实例。
 //!
 //! 每个主页固定绑定一个根目录，并从程序启动起常驻。关闭标签只影响显示，
-//! 不会结束游戏进程，也不会丢失运行状态；运行状态由本页持有的 [`GameMonitor`] 监视。
+//! 不会结束游戏进程，也不会丢失运行状态；运行状态由本页持有的 [`dmcl_launch::GameMonitor`] 监视。
 //!
 //! 版本目录用 `notify` watch，出现变更事件后再重新读取列表，不做固定轮询。
 
 mod category_section;
+mod crash_report;
 mod create_instance;
 mod instance_card;
 mod instance_warning;
@@ -26,7 +27,7 @@ use relm4::gtk::prelude::*;
 use relm4::prelude::*;
 
 use dmcl_game::{detect_version, VersionRef};
-use dmcl_launch::GameMonitor;
+use dmcl_launch::GameSession;
 use dmcl_mcmeta::layout::{installed_versions, version_dir};
 use dmcl_task::CancelHandle;
 
@@ -78,7 +79,7 @@ struct InstanceRuntime {
 enum RuntimeSource {
     /// 本页启动链还在跑。
     Starting { cancel: Option<CancelHandle> },
-    /// 本页拿到的 GameMonitor 正在监视。
+    /// 本页拿到的 GameSession 正在监视。
     Monitor {
         /// 先于 stop 声明：drop 时先 abort monitor task，再丢掉 stop sender，
         /// 避免 oneshot 变成 Err 后误触发停止分支。
@@ -358,8 +359,8 @@ impl SimpleComponent for HomePage {
             HomeMsg::LaunchConfirmed { name, launch } => {
                 self.begin_start(name, launch, &sender);
             }
-            HomeMsg::Launched { name, monitor } => {
-                self.on_launched(name, monitor, &sender);
+            HomeMsg::Launched { name, session } => {
+                self.on_launched(name, session, &sender);
             }
             HomeMsg::LaunchFailed { name } => {
                 if self
@@ -374,7 +375,9 @@ impl SimpleComponent for HomePage {
             HomeMsg::MonitorExited {
                 name,
                 stopped,
-                abnormal,
+                status,
+                launch,
+                log_path,
             } => {
                 let accept = self.runtimes.get(&name).is_some_and(|runtime| {
                     matches!(runtime.source, RuntimeSource::Monitor { .. })
@@ -388,14 +391,29 @@ impl SimpleComponent for HomePage {
                 }
                 self.runtimes.remove(&name);
                 self.sync_sections();
-                self.shell.global_toast(&if stopped {
-                    format!("{name} 已停止")
-                } else if abnormal {
-                    format!("{name} 异常退出")
+                if stopped {
+                    self.shell.global_toast(&format!("{name} 已停止"));
+                } else if matches!(&status, Ok(status) if status.success()) {
+                    self.shell.global_toast(&format!("{name} 已退出"));
                 } else {
-                    format!("{name} 已退出")
-                });
+                    let report = crash_report::CrashReport {
+                        instance: name,
+                        exit: crash_report::format_exit_status(&status),
+                        launch,
+                        log_path,
+                    };
+                    let sender = sender.clone();
+                    crash_report::show(&self.window, &report, move |result| {
+                        let _ = sender.input_sender().send(HomeMsg::ExportFinished(result));
+                    });
+                }
             }
+            HomeMsg::ExportFinished(result) => match result {
+                Ok(path) => self
+                    .shell
+                    .global_toast(&format!("已导出崩溃日志：{}", path.display())),
+                Err(err) => self.shell.global_toast(&format!("导出崩溃日志失败：{err}")),
+            },
             HomeMsg::WatchFailed(err) => {
                 self.shell.global_toast(&format!("监听版本目录失败：{err}"));
             }
@@ -420,7 +438,7 @@ impl HomePage {
         &self,
         name: &str,
         launch: &LaunchConfig,
-    ) -> anyhow::Result<dmcl_task::TaskGraph<GameMonitor>> {
+    ) -> anyhow::Result<dmcl_task::TaskGraph<GameSession>> {
         let version = dmcl_game::VersionRef::new(self.root_path.clone(), name);
         let java = Arc::new(java::GuiJavaResolver {
             choice: launch.java.clone(),
@@ -428,8 +446,10 @@ impl HomePage {
         });
         let config = self.config.read();
         let hook = Arc::new(java::GuiJavaInstalledHook::new(self.config.clone()));
-        let (chain, game, game_dir, process) =
+        let (chain, game, game_dir, mut process) =
             config.launch_options(launch, version, java, Some(hook))?;
+        // GUI 捕获本次会话的输出，异常退出时用它显示完整日志并导出。
+        process.log_path = Some(dmcl_launch::session_log_path(name));
         let files = Arc::new(config.game_files_options(config.download_source()));
         let jre = config.launch_jre_auto_install(launch);
         Ok(dmcl_launch::launch_chain(
@@ -485,15 +505,15 @@ impl HomePage {
         let sender = sender.clone();
         let task_name = name;
         // 这个任务不挂在 HomePage 的 TaskGuard 上：关闭标签后启动链继续跑，结果仍会
-        // 回到常驻的组件。只有程序退出时发送失败，GameMonitor 随消息一起丢弃，
+        // 回到常驻的组件。只有程序退出时发送失败，GameSession 随消息一起丢弃，
         // 游戏进程继续独立运行。
         relm4::spawn(async move {
             match handle.finished().await {
-                Ok(monitor) => match std::sync::Arc::try_unwrap(monitor) {
-                    Ok(monitor) => {
+                Ok(session) => match std::sync::Arc::try_unwrap(session) {
+                    Ok(session) => {
                         let _ = sender.input_sender().send(HomeMsg::Launched {
                             name: task_name,
-                            monitor,
+                            session,
                         });
                     }
                     Err(_) => {
@@ -511,7 +531,7 @@ impl HomePage {
         });
     }
 
-    fn on_launched(&mut self, name: String, monitor: GameMonitor, sender: &ComponentSender<Self>) {
+    fn on_launched(&mut self, name: String, session: GameSession, sender: &ComponentSender<Self>) {
         let Some(runtime) = self.runtimes.get_mut(&name) else {
             return;
         };
@@ -529,7 +549,7 @@ impl HomePage {
         };
         runtime.source = RuntimeSource::Monitor {
             _task: TaskGuard(spawn_monitor(
-                monitor,
+                session,
                 stop_rx,
                 name.clone(),
                 sender.clone(),
@@ -715,14 +735,18 @@ fn visible_versions(installed: &[String], mut active: Vec<String>) -> Vec<String
     names
 }
 
-/// 等 GameMonitor 退出；用户停止时先 kill 再 wait。
+/// 等游戏退出；用户停止时先 kill 再 wait。
 fn spawn_monitor(
-    mut monitor: GameMonitor,
+    session: GameSession,
     stop_rx: tokio::sync::oneshot::Receiver<()>,
     name: String,
     sender: ComponentSender<HomePage>,
 ) -> relm4::JoinHandle<()> {
     relm4::spawn(async move {
+        let GameSession {
+            mut monitor,
+            launch,
+        } = session;
         let (stopped, status) = tokio::select! {
             status = monitor.wait() => (false, status),
             signal = stop_rx => {
@@ -735,11 +759,14 @@ fn spawn_monitor(
                 }
             }
         };
-        let abnormal = !matches!(status, Ok(status) if status.success()) && !stopped;
+        let status = status.map_err(|err| format!("{err:#}"));
+        let log_path = monitor.log_path().map(Path::to_path_buf);
         let _ = sender.input_sender().send(HomeMsg::MonitorExited {
             name,
             stopped,
-            abnormal,
+            status,
+            launch,
+            log_path,
         });
     })
 }

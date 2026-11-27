@@ -1,6 +1,9 @@
 //! 主页的消息。
 
-use dmcl_launch::GameMonitor;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use dmcl_launch::{GameSession, PreparedLaunch};
 
 use crate::config::LaunchConfig;
 use crate::gui::gtk4::widgets::instance_icon::InstanceIcon;
@@ -30,16 +33,20 @@ pub(crate) enum HomeMsg {
     Toggle,
     /// 用户在实例配置警告框里点了「继续启动」。
     LaunchConfirmed { name: String, launch: LaunchConfig },
-    /// 启动链成功拿到了游戏进程。
-    Launched { name: String, monitor: GameMonitor },
+    /// 启动链成功拿到了游戏会话。
+    Launched { name: String, session: GameSession },
     /// 启动链失败或被取消。
     LaunchFailed { name: String },
     /// 本页启动的进程已经退出。
     MonitorExited {
         name: String,
         stopped: bool,
-        abnormal: bool,
+        status: Result<std::process::ExitStatus, String>,
+        launch: Arc<PreparedLaunch>,
+        log_path: Option<PathBuf>,
     },
+    /// 崩溃日志导出完成。
+    ExportFinished(Result<PathBuf, String>),
     /// 版本目录监听失败。
     WatchFailed(String),
     /// 打开选中实例的「管理」页。
